@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en" class="settings-root">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>multivoice Settings</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <script type="module" src="/src/settings.ts" defer></script>
+</head>
+<body class="settings-body">
+  <main class="settings-window" id="settingsWindow">
+    <header class="settings-titlebar">
+      <div class="settings-heading">
+        <span class="settings-product">multivoice</span>
+        <span class="settings-subtitle">Settings</span>
+      </div>
+      <button class="icon-btn" id="settingsClose" aria-label="Close settings" title="Close">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </header>
+
+    <nav class="settings-tabs" aria-label="Settings sections">
+      <button class="settings-tab" id="settingsTabGeneral" type="button" data-tab="general" aria-selected="true">Settings</button>
+      <button class="settings-tab" id="settingsTabEvents" type="button" data-tab="events" aria-selected="false">
+        Events
+        <span class="event-count" id="eventCount">0</span>
+      </button>
+    </nav>
+
+    <form class="settings-form" id="settingsForm">
+      <div class="settings-tab-panel active" id="generalPanel" data-panel="general">
+        <section class="settings-section" aria-labelledby="captureTitle">
+        <div class="section-head">
+          <h2 id="captureTitle">Capture</h2>
+          <button class="icon-btn" id="refreshDevices" type="button" aria-label="Refresh microphones" title="Refresh microphones">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12A8 8 0 0 1 17.7 6.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              <path d="M20 5v5h-5M4 19v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <label class="field">
+          <span>Microphone</span>
+          <select id="audioDeviceSelect" class="setting-select">
+            <option value="">Default microphone</option>
+          </select>
+        </label>
+
+        <div class="meter-row" aria-hidden="true">
+          <span class="meter-dot"></span>
+          <div class="meter-track">
+            <span class="meter-bar" id="inputMeter"></span>
+          </div>
+        </div>
+
+        <label class="field compact-field">
+          <span>Input gain</span>
+          <select id="inputGain" class="setting-select">
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+            <option value="6">6x</option>
+          </select>
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Noise suppression</strong>
+          </span>
+          <input id="noiseSuppression" type="checkbox" />
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Echo cancellation</strong>
+          </span>
+          <input id="echoCancellation" type="checkbox" />
+        </label>
+        </section>
+
+        <section class="settings-section" aria-labelledby="transcriptionTitle">
+        <div class="section-head">
+          <h2 id="transcriptionTitle">Transcription</h2>
+        </div>
+
+        <label class="field">
+          <span>Model</span>
+          <div class="model-select-row">
+            <select id="modelSelect" class="setting-select">
+              <option value="tiny">Tiny</option>
+              <option value="base">Base</option>
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large-v2">Large v2</option>
+              <option value="large-v3">Large v3</option>
+            </select>
+            <span class="model-size" id="modelSize">~80 MB</span>
+          </div>
+        </label>
+
+        <div class="model-download" id="modelDownload" aria-live="polite">
+          <span class="model-download-status" id="modelDownloadStatus">Model not loaded</span>
+          <div class="model-download-track">
+            <span class="model-download-bar" id="modelDownloadBar"></span>
+          </div>
+          <button class="model-prepare-btn" id="modelPrepare" type="button">Prepare</button>
+        </div>
+
+        <label class="field">
+          <span>Language</span>
+          <select id="langSelect" class="setting-select">
+            <option value="auto">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Clean up text</strong>
+          </span>
+          <input id="postProcess" type="checkbox" />
+        </label>
+        </section>
+
+        <section class="settings-section" aria-labelledby="windowTitle">
+        <div class="section-head">
+          <h2 id="windowTitle">Window</h2>
+        </div>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Always on top</strong>
+          </span>
+          <input id="alwaysOnTop" type="checkbox" />
+        </label>
+
+        <label class="field compact-field">
+          <span>Max recording</span>
+          <input id="maxRecordingSeconds" class="setting-input" type="number" min="10" max="300" step="5" />
+        </label>
+        </section>
+      </div>
+
+      <section class="settings-tab-panel event-panel" id="eventsPanel" data-panel="events" aria-labelledby="settingsTabEvents">
+        <div class="event-toolbar">
+          <div>
+            <h2>Events</h2>
+            <p id="eventSummary">No warnings or errors</p>
+          </div>
+          <button class="model-prepare-btn" id="clearEventsButton" type="button">Clear</button>
+        </div>
+        <div class="event-log" id="eventLog" aria-live="polite"></div>
+      </section>
+    </form>
+  </main>
+</body>
+</html>
