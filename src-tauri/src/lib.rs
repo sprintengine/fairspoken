@@ -93,7 +93,7 @@ fn close_settings_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start_recording(services: State<'_, AppServices>) -> Result<(), String> {
+fn start_recording(services: State<'_, AppServices>) -> Result<u16, String> {
     let settings = services
         .settings
         .lock()
@@ -104,7 +104,9 @@ fn start_recording(services: State<'_, AppServices>) -> Result<(), String> {
         .audio
         .lock()
         .map_err(|_| "Audio service lock failed".to_string())?
-        .start(settings.max_recording_seconds)
+        .start(settings.max_recording_seconds)?;
+
+    Ok(settings.max_recording_seconds)
 }
 
 #[tauri::command]

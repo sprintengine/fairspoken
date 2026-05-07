@@ -22,10 +22,12 @@ const timerEl = required<HTMLElement>("timer");
 
 let appState: AppState = "idle";
 let timerInterval: ReturnType<typeof setInterval> | null = null;
+let maxRecordingTimer: ReturnType<typeof setTimeout> | null = null;
 let copyIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
 let copiedStatusTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingSeconds = 0;
 let startRecordingRequestPending = false;
+let stopRecordingRequestPending = false;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -55,6 +57,7 @@ function setState(state: AppState, message?: string): void {
     startTimer();
   } else {
     stopTimer();
+    clearMaxRecordingTimer();
   }
 }
 
@@ -81,6 +84,23 @@ function stopTimer(): void {
     timerInterval = null;
   }
   timerEl.textContent = "";
+}
+
+function scheduleMaxRecordingStop(maxSeconds: number): void {
+  clearMaxRecordingTimer();
+  maxRecordingTimer = setTimeout(() => {
+    if (appState === "recording") {
+      addEvent("info", `Max recording time reached (${formatTime(maxSeconds)}); transcribing`);
+      void stopAndTranscribe();
+    }
+  }, maxSeconds * 1000);
+}
+
+function clearMaxRecordingTimer(): void {
+  if (maxRecordingTimer !== null) {
+    clearTimeout(maxRecordingTimer);
+    maxRecordingTimer = null;
+  }
 }
 
 function formatTime(seconds: number): string {
@@ -145,28 +165,45 @@ async function toggleRecording(): Promise<void> {
 
   try {
     if (appState === "recording") {
-      setState("transcribing");
-      await waitForPaint();
-      const transcript = await invoke<string>("stop_and_transcribe");
-      if (transcript) {
-        addEvent("info", "Transcript copied to clipboard");
-        showCopiedStatus();
-        showCopyIndicator();
-      } else {
-        addEvent("warning", "No transcript returned");
-        setState("idle", "Ready");
-      }
+      await stopAndTranscribe();
       return;
     }
 
     startRecordingRequestPending = true;
-    await invoke("start_recording");
+    const maxRecordingSeconds = await invoke<number>("start_recording");
     startRecordingRequestPending = false;
     setState("recording");
+    scheduleMaxRecordingStop(maxRecordingSeconds);
   } catch (error) {
     startRecordingRequestPending = false;
+    stopRecordingRequestPending = false;
     addEvent("error", error instanceof Error ? error.message : String(error));
     setState("error", "Error");
+  }
+}
+
+async function stopAndTranscribe(): Promise<void> {
+  if (stopRecordingRequestPending) return;
+  stopRecordingRequestPending = true;
+  clearMaxRecordingTimer();
+  setState("transcribing");
+  await waitForPaint();
+
+  try {
+    const transcript = await invoke<string>("stop_and_transcribe");
+    if (transcript) {
+      addEvent("info", "Transcript copied to clipboard");
+      showCopiedStatus();
+      showCopyIndicator();
+    } else {
+      addEvent("warning", "No transcript returned");
+      setState("idle", "Ready");
+    }
+  } catch (error) {
+    addEvent("error", error instanceof Error ? error.message : String(error));
+    setState("error", "Error");
+  } finally {
+    stopRecordingRequestPending = false;
   }
 }
 
