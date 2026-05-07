@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { register } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, eventSeverity } from "./events";
 
 type AppState = "idle" | "recording" | "transcribing" | "error";
@@ -7,6 +8,9 @@ interface BackendStatus {
   state: AppState;
   message: string;
 }
+
+const RECORD_SHORTCUT_MACOS = "Command+Shift+1";
+const RECORD_SHORTCUT_DEFAULT = "Ctrl+Alt+1";
 
 const app = required<HTMLElement>("app");
 const recordBtn = required<HTMLButtonElement>("recordBtn");
@@ -21,6 +25,7 @@ let timerInterval: ReturnType<typeof setInterval> | null = null;
 let copyIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
 let copiedStatusTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingSeconds = 0;
+let startRecordingRequestPending = false;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -136,6 +141,7 @@ async function loadBackendStatus(): Promise<void> {
 
 async function toggleRecording(): Promise<void> {
   if (appState === "transcribing") return;
+  if (appState === "idle" && startRecordingRequestPending) return;
 
   try {
     if (appState === "recording") {
@@ -153,11 +159,33 @@ async function toggleRecording(): Promise<void> {
       return;
     }
 
+    startRecordingRequestPending = true;
     await invoke("start_recording");
+    startRecordingRequestPending = false;
     setState("recording");
   } catch (error) {
+    startRecordingRequestPending = false;
     addEvent("error", error instanceof Error ? error.message : String(error));
     setState("error", "Error");
+  }
+}
+
+function isMacOS(): boolean {
+  return navigator.platform.toLowerCase().includes("mac");
+}
+
+async function registerRecordingShortcut(): Promise<void> {
+  const shortcut = isMacOS() ? RECORD_SHORTCUT_MACOS : RECORD_SHORTCUT_DEFAULT;
+
+  try {
+    await register(shortcut, (event) => {
+      if (event.state === "Pressed") {
+        void toggleRecording();
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addEvent("warning", `Recording shortcut ${shortcut} is unavailable: ${message}`);
   }
 }
 
@@ -180,4 +208,5 @@ void loadBackendStatus().catch((error) => {
   addEvent("error", error instanceof Error ? error.message : String(error));
   setState("error", "Error");
 });
+void registerRecordingShortcut();
 updateSettingsEventBadge();

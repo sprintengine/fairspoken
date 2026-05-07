@@ -5,6 +5,7 @@
   "windows": ["main", "settings"],
   "permissions": [
     "core:default",
+    "global-shortcut:allow-register",
     "opener:default"
   ]
 }
