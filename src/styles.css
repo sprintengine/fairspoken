@@ -15,8 +15,8 @@
   --warning:        #ffa600;
   --warning-glow:   rgba(255,166,0,0.45);
   --warning-halo:   rgba(255,200,80,0.25);
-  --gold-border:    rgba(255,206,92,0.28);
-  --gold-glow:      rgba(255,206,92,0.18);
+  --gold-border:    rgba(255,206,92,0.24);
+  --gold-glow:      rgba(255,206,92,0.14);
   --success:        #30d158;
   --idle-dot:       #30d158;
   --recording-dot:  #ff1a3d;
@@ -64,18 +64,24 @@ html, body {
   background: var(--bg);
   border-radius: var(--radius);
   border: 0;
-  box-shadow: inset 0 0 0 1px var(--gold-border), 0 0 8px var(--gold-glow);
-  animation: window-gold-pulse 3.2s ease-in-out infinite;
+  box-shadow:
+    inset 0 0 0 3px var(--gold-border),
+    inset 0 0 12px var(--gold-glow);
+  animation: window-gold-breathe 3.8s ease-in-out infinite;
   overflow: hidden;
   position: relative;
 }
 
-@keyframes window-gold-pulse {
+@keyframes window-gold-breathe {
   0%, 100% {
-    box-shadow: inset 0 0 0 1px rgba(255,206,92,0.22), 0 0 5px rgba(255,206,92,0.12);
+    box-shadow:
+      inset 0 0 0 3px rgba(255,206,92,0.18),
+      inset 0 0 8px rgba(255,206,92,0.1);
   }
   50% {
-    box-shadow: inset 0 0 0 1px rgba(255,206,92,0.38), 0 0 10px rgba(255,206,92,0.2);
+    box-shadow:
+      inset 0 0 0 3px rgba(255,206,92,0.42),
+      inset 0 0 18px rgba(255,206,92,0.22);
   }
 }
 
