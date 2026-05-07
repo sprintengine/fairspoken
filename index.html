@@ -8,8 +8,8 @@
   <script type="module" src="/src/main.ts" defer></script>
 </head>
 <body>
-  <div class="window" id="app">
-    <div class="bar" id="titlebar">
+  <div class="window" id="app" data-tauri-drag-region>
+    <div class="bar" id="titlebar" data-tauri-drag-region>
       <button
         class="logo-btn"
         id="recordBtn"
@@ -27,8 +27,8 @@
       </button>
 
       <div class="info">
-        <span class="brand">multivoice</span>
-        <span class="status-line">
+        <span class="brand" data-tauri-drag-region>multivoice</span>
+        <span class="status-line" data-tauri-drag-region>
           <span class="status-dot" id="statusDot" aria-hidden="true"></span>
           <span class="status-label" id="statusLabel" role="status" aria-live="polite">Ready</span>
           <span class="timer" id="timer" aria-label="Recording duration" aria-live="polite"></span>
