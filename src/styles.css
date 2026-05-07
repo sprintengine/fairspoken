@@ -35,6 +35,13 @@
 
   /* Pulse scale is driven by the mic analyser from JS (1 = idle). */
   --pulse-scale:    1;
+  --gold-angle:     0deg;
+}
+
+@property --gold-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
 }
 
 /* ─── Reset ──────────────────────────────────────────────────── */
@@ -67,26 +74,40 @@ html, body {
   box-shadow:
     inset 0 0 0 3px var(--gold-border),
     inset 0 0 12px var(--gold-glow);
-  animation: window-gold-breathe 3.8s ease-in-out infinite;
   overflow: hidden;
   position: relative;
 }
 
-@keyframes window-gold-breathe {
-  0%, 100% {
-    box-shadow:
-      inset 0 0 0 3px rgba(255,206,92,0.18),
-      inset 0 0 8px rgba(255,206,92,0.1);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 0 3px rgba(255,206,92,0.42),
-      inset 0 0 18px rgba(255,206,92,0.22);
+.window::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 3px;
+  background: conic-gradient(
+    from var(--gold-angle),
+    rgba(255,206,92,0.08) 0deg,
+    rgba(255,206,92,0.08) 245deg,
+    rgba(255,226,140,0.56) 282deg,
+    rgba(255,206,92,0.2) 322deg,
+    rgba(255,206,92,0.08) 360deg
+  );
+  pointer-events: none;
+  animation: window-gold-flow 30s linear infinite;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+}
+
+@keyframes window-gold-flow {
+  to {
+    --gold-angle: 360deg;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .window {
+  .window::before {
     animation: none;
   }
 }
