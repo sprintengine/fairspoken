@@ -84,6 +84,14 @@ function formatTime(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
 function hideCopyIndicator(): void {
   if (copyIndicatorTimer !== null) {
     clearTimeout(copyIndicatorTimer);
@@ -132,6 +140,7 @@ async function toggleRecording(): Promise<void> {
   try {
     if (appState === "recording") {
       setState("transcribing");
+      await waitForPaint();
       const transcript = await invoke<string>("stop_and_transcribe");
       if (transcript) {
         addEvent("info", "Transcript copied to clipboard");
