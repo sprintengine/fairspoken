@@ -53,6 +53,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-win-x64-shared-MT-Release-lib/lib/sherpa-onnx-c-api.dll",
+      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-win-x64-shared-MT-Release-lib/lib/sherpa-onnx-cxx-api.dll"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

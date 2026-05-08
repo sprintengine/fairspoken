@@ -2,9 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { addEvent, clearEvents, eventSeverity, readEvents, type AppEvent } from "./events";
 
 type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3";
+type TranscriptionBackend = "whisper" | "sherpa-streaming";
+type SherpaModel = "streaming-zipformer-en-2023-06-26-int8";
 
 interface Settings {
+  transcriptionBackend: TranscriptionBackend;
   model: WhisperModel;
+  sherpaModel: SherpaModel;
   language: string;
   alwaysOnTop: boolean;
   maxRecordingSeconds: number;
@@ -16,14 +20,17 @@ interface Settings {
 }
 
 interface ModelStatus {
-  model: WhisperModel;
+  backend?: TranscriptionBackend;
+  model: WhisperModel | SherpaModel;
   cached: boolean;
   message: string;
   modelPath: string;
 }
 
 const DEFAULTS: Settings = {
+  transcriptionBackend: "whisper",
   model: "base",
+  sherpaModel: "streaming-zipformer-en-2023-06-26-int8",
   language: "en",
   alwaysOnTop: true,
   maxRecordingSeconds: 120,
@@ -36,6 +43,7 @@ const DEFAULTS: Settings = {
 
 const closeBtn = required<HTMLButtonElement>("settingsClose");
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
+const engineSelect = required<HTMLSelectElement>("engineSelect");
 const modelSelect = required<HTMLSelectElement>("modelSelect");
 const langSelect = required<HTMLSelectElement>("langSelect");
 const audioDeviceSelect = required<HTMLSelectElement>("audioDeviceSelect");
@@ -67,6 +75,23 @@ const MODEL_MEMORY_FOOTPRINTS: Record<WhisperModel, string> = {
   "large-v3": "RAM ~16G",
 };
 
+const SHERPA_MODEL_FOOTPRINTS: Record<SherpaModel, string> = {
+  "streaming-zipformer-en-2023-06-26-int8": "RAM ~0.8G",
+};
+
+const WHISPER_MODEL_OPTIONS: Array<[WhisperModel, string]> = [
+  ["tiny", "Tiny"],
+  ["base", "Base"],
+  ["small", "Small"],
+  ["medium", "Medium"],
+  ["large-v2", "Large v2"],
+  ["large-v3", "Large v3"],
+];
+
+const SHERPA_MODEL_OPTIONS: Array<[SherpaModel, string]> = [
+  ["streaming-zipformer-en-2023-06-26-int8", "Zipformer English int8"],
+];
+
 let currentSettings: Settings = { ...DEFAULTS };
 let meterStream: MediaStream | null = null;
 let meterContext: AudioContext | null = null;
@@ -90,8 +115,10 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
 }
 
 function applyToForm(settings: Settings): void {
-  modelSelect.value = settings.model;
-  updateModelSize(settings.model);
+  engineSelect.value = settings.transcriptionBackend;
+  renderModelOptions(settings.transcriptionBackend);
+  modelSelect.value = selectedModel(settings);
+  updateModelSize(settings.transcriptionBackend, selectedModel(settings));
   langSelect.value = settings.language;
   audioDeviceSelect.value = settings.audioDevice ?? "";
   noiseSuppression.checked = settings.noiseSuppression ?? true;
@@ -103,8 +130,11 @@ function applyToForm(settings: Settings): void {
 }
 
 function readFromForm(): Settings {
+  const backend = engineSelect.value as TranscriptionBackend;
   return normalizeSettings({
-    model: modelSelect.value as WhisperModel,
+    transcriptionBackend: backend,
+    model: backend === "whisper" ? (modelSelect.value as WhisperModel) : currentSettings.model,
+    sherpaModel: backend === "sherpa-streaming" ? (modelSelect.value as SherpaModel) : currentSettings.sherpaModel,
     language: langSelect.value,
     audioDevice: audioDeviceSelect.value,
     noiseSuppression: noiseSuppression.checked,
@@ -116,10 +146,23 @@ function readFromForm(): Settings {
   });
 }
 
-async function persistSettings(): Promise<void> {
-  currentSettings = readFromForm();
-  await invoke("save_settings", { settings: currentSettings });
-  addEvent("info", "Settings saved");
+async function persistSettings(): Promise<boolean> {
+  const nextSettings = readFromForm();
+  try {
+    await invoke("save_settings", { settings: nextSettings });
+    currentSettings = nextSettings;
+    addEvent("info", "Settings saved");
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addEvent("error", message);
+    applyToForm(currentSettings);
+    return false;
+  }
+}
+
+function reportAsyncError(error: unknown): void {
+  addEvent("error", error instanceof Error ? error.message : String(error));
 }
 
 function setModelDownloadStatus(status: string, percentage: number): void {
@@ -146,25 +189,33 @@ function formatModelStatus(status: ModelStatus): string {
   return "Not downloaded";
 }
 
-async function requestModelStatus(model: WhisperModel): Promise<void> {
-  updateModelSize(model);
+async function requestModelStatus(): Promise<void> {
+  const backend = engineSelect.value as TranscriptionBackend;
+  const model = modelSelect.value as WhisperModel | SherpaModel;
+  updateModelSize(backend, model);
   modelPrepare.textContent = "Checking";
   modelPrepare.disabled = true;
   modelDownload.dataset.state = "loading";
   modelDownloadStatus.textContent = "Checking model...";
   modelDownloadBar.style.transform = "scaleX(0.01)";
-  const status = await invoke<ModelStatus>("get_model_status", { model });
+  const status = await invoke<ModelStatus>("get_transcription_model_status", {
+    request: modelRequest(backend, model),
+  });
   addEvent(status.cached ? "info" : "warning", status.message);
   setModelCacheStatus(status);
 }
 
-async function beginModelPreload(model: WhisperModel): Promise<void> {
-  updateModelSize(model);
+async function beginModelPreload(): Promise<void> {
+  const backend = engineSelect.value as TranscriptionBackend;
+  const model = modelSelect.value as WhisperModel | SherpaModel;
+  updateModelSize(backend, model);
   setModelDownloadStatus("Downloading model...", 1);
   modelPrepare.textContent = "Preparing";
   modelPrepare.disabled = true;
   try {
-    const status = await invoke<ModelStatus>("prepare_model", { model });
+    const status = await invoke<ModelStatus>("prepare_transcription_model", {
+      request: modelRequest(backend, model),
+    });
     addEvent("info", status.message);
     setModelCacheStatus(status);
   } catch (error) {
@@ -178,8 +229,26 @@ async function beginModelPreload(model: WhisperModel): Promise<void> {
   }
 }
 
-function updateModelSize(model: WhisperModel): void {
-  modelSize.textContent = MODEL_MEMORY_FOOTPRINTS[model];
+function updateModelSize(backend: TranscriptionBackend, model: WhisperModel | SherpaModel): void {
+  modelSize.textContent =
+    backend === "whisper" ? MODEL_MEMORY_FOOTPRINTS[model as WhisperModel] : SHERPA_MODEL_FOOTPRINTS[model as SherpaModel];
+}
+
+function renderModelOptions(backend: TranscriptionBackend): void {
+  const options = backend === "whisper" ? WHISPER_MODEL_OPTIONS : SHERPA_MODEL_OPTIONS;
+  modelSelect.replaceChildren(...options.map(([value, label]) => new Option(label, value)));
+}
+
+function selectedModel(settings: Settings): WhisperModel | SherpaModel {
+  return settings.transcriptionBackend === "whisper" ? settings.model : settings.sherpaModel;
+}
+
+function modelRequest(backend: TranscriptionBackend, model: WhisperModel | SherpaModel): Record<string, unknown> {
+  return {
+    backend,
+    model: backend === "whisper" ? model : null,
+    sherpaModel: backend === "sherpa-streaming" ? model : null,
+  };
 }
 
 async function loadAudioDevices(): Promise<void> {
@@ -269,7 +338,7 @@ async function loadSettings(): Promise<void> {
   applyToForm(currentSettings);
   await loadAudioDevices();
   await startMeter();
-  await requestModelStatus(currentSettings.model);
+  await requestModelStatus();
   renderEventLog();
 }
 
@@ -338,32 +407,64 @@ refreshBtn.addEventListener("click", () => {
   void startMeter();
 });
 
+engineSelect.addEventListener("change", () => {
+  const backend = engineSelect.value as TranscriptionBackend;
+  renderModelOptions(backend);
+  modelSelect.value = backend === "whisper" ? currentSettings.model : currentSettings.sherpaModel;
+  void persistSettings()
+    .then((saved) => {
+      if (!saved) return;
+      addEvent("info", `Transcription engine changed to ${backend === "whisper" ? "Whisper" : "Sherpa streaming"}`);
+      return requestModelStatus();
+    })
+    .catch((error) => addEvent("error", error instanceof Error ? error.message : String(error)));
+});
+
 modelSelect.addEventListener("change", () => {
-  const model = modelSelect.value as WhisperModel;
-  void persistSettings().then(() => requestModelStatus(model));
+  void persistSettings()
+    .then((saved) => {
+      if (saved) return requestModelStatus();
+    })
+    .catch(reportAsyncError);
 });
 
 modelPrepare.addEventListener("click", () => {
-  void beginModelPreload(modelSelect.value as WhisperModel);
+  void beginModelPreload();
 });
 
 audioDeviceSelect.addEventListener("change", () => {
-  void persistSettings().then(startMeter);
+  void persistSettings()
+    .then((saved) => {
+      if (saved) return startMeter();
+    })
+    .catch(reportAsyncError);
 });
 noiseSuppression.addEventListener("change", () => {
-  void persistSettings().then(startMeter);
+  void persistSettings()
+    .then((saved) => {
+      if (saved) return startMeter();
+    })
+    .catch(reportAsyncError);
 });
 echoCancellation.addEventListener("change", () => {
-  void persistSettings().then(startMeter);
+  void persistSettings()
+    .then((saved) => {
+      if (saved) return startMeter();
+    })
+    .catch(reportAsyncError);
 });
 inputGain.addEventListener("change", () => {
-  void persistSettings().then(startMeter);
+  void persistSettings()
+    .then((saved) => {
+      if (saved) return startMeter();
+    })
+    .catch(reportAsyncError);
 });
-langSelect.addEventListener("change", () => void persistSettings());
-postProcess.addEventListener("change", () => void persistSettings());
-alwaysOnTop.addEventListener("change", () => void persistSettings());
-maxRecordingSeconds.addEventListener("change", () => void persistSettings());
-maxRecordingSeconds.addEventListener("input", () => void persistSettings());
+langSelect.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+postProcess.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+alwaysOnTop.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+maxRecordingSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {

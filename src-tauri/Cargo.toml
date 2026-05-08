@@ -28,3 +28,6 @@ arboard = "3.6.1"
 sha1 = "0.11.0"
 reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "rustls"] }
 tauri-plugin-global-shortcut = "2"
+sherpa-onnx = { version = "1.13.0", default-features = false, features = ["shared"] }
+tar = "0.4.44"
+bzip2 = "0.6.0"

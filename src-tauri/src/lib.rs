@@ -6,9 +6,9 @@ mod transcription;
 
 use audio::AudioService;
 use clipboard::ClipboardService;
-use models::{ModelService, ModelStatus, WhisperModel};
-use serde::Serialize;
-use settings::{Settings, SettingsService};
+use models::{ModelService, ModelStatus, SherpaModel, TranscriptionModelStatus, WhisperModel};
+use serde::{Deserialize, Serialize};
+use settings::{Settings, SettingsService, TranscriptionBackend};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use transcription::TranscriptionService;
@@ -50,11 +50,42 @@ fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
 
 #[tauri::command]
 fn save_settings(settings: Settings, services: State<'_, AppServices>) -> Result<(), String> {
+    let current_settings = services
+        .settings
+        .lock()
+        .map_err(|_| "Settings service lock failed".to_string())?
+        .current();
+
+    if services
+        .audio
+        .lock()
+        .map_err(|_| "Audio service lock failed".to_string())?
+        .is_recording()
+    {
+        return Err("Settings cannot be changed while recording is active".to_string());
+    }
+
+    if current_settings.requires_transcription_unload(&settings) {
+        services
+            .transcription
+            .lock()
+            .map_err(|_| "Transcription service lock failed".to_string())?
+            .unload();
+    }
+
     services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .save(settings)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptionModelRequest {
+    backend: TranscriptionBackend,
+    model: Option<WhisperModel>,
+    sherpa_model: Option<SherpaModel>,
 }
 
 #[tauri::command]
@@ -71,6 +102,40 @@ fn prepare_model(
     services: State<'_, AppServices>,
 ) -> Result<ModelStatus, String> {
     services.models.prepare(model)
+}
+
+#[tauri::command]
+fn get_transcription_model_status(
+    request: TranscriptionModelRequest,
+    services: State<'_, AppServices>,
+) -> Result<TranscriptionModelStatus, String> {
+    let settings = services
+        .settings
+        .lock()
+        .map_err(|_| "Settings service lock failed".to_string())?
+        .current();
+    Ok(services.models.transcription_status(
+        request.backend,
+        request.model.unwrap_or(settings.model),
+        request.sherpa_model.unwrap_or(settings.sherpa_model),
+    ))
+}
+
+#[tauri::command]
+fn prepare_transcription_model(
+    request: TranscriptionModelRequest,
+    services: State<'_, AppServices>,
+) -> Result<TranscriptionModelStatus, String> {
+    let settings = services
+        .settings
+        .lock()
+        .map_err(|_| "Settings service lock failed".to_string())?
+        .current();
+    services.models.prepare_transcription_model(
+        request.backend,
+        request.model.unwrap_or(settings.model),
+        request.sherpa_model.unwrap_or(settings.sherpa_model),
+    )
 }
 
 #[tauri::command]
@@ -100,11 +165,25 @@ fn start_recording(services: State<'_, AppServices>) -> Result<u16, String> {
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
 
-    services
+    let stream_sink = services
+        .transcription
+        .lock()
+        .map_err(|_| "Transcription service lock failed".to_string())?
+        .start_session(&settings, &services.models)?;
+
+    if let Err(err) = services
         .audio
         .lock()
         .map_err(|_| "Audio service lock failed".to_string())?
-        .start(settings.max_recording_seconds)?;
+        .start(settings.max_recording_seconds, stream_sink)
+    {
+        services
+            .transcription
+            .lock()
+            .map_err(|_| "Transcription service lock failed".to_string())?
+            .cancel_session();
+        return Err(err);
+    }
 
     Ok(settings.max_recording_seconds)
 }
@@ -119,10 +198,20 @@ fn stop_and_transcribe(services: State<'_, AppServices>) -> Result<String, Strin
     let stats = recording.stats();
 
     if stats.duration_seconds < MIN_RECORDING_SECONDS {
+        services
+            .transcription
+            .lock()
+            .map_err(|_| "Transcription service lock failed".to_string())?
+            .cancel_session();
         return Err("Recording was too short".to_string());
     }
 
     if stats.rms < SILENCE_RMS_THRESHOLD && stats.peak < SILENCE_PEAK_THRESHOLD {
+        services
+            .transcription
+            .lock()
+            .map_err(|_| "Transcription service lock failed".to_string())?
+            .cancel_session();
         return Err("No speech detected - raise input gain or change microphone".to_string());
     }
 
@@ -136,11 +225,7 @@ fn stop_and_transcribe(services: State<'_, AppServices>) -> Result<String, Strin
         .transcription
         .lock()
         .map_err(|_| "Transcription service lock failed".to_string())?
-        .transcribe(
-            &recording,
-            &settings,
-            &services.models.path_for(settings.model),
-        )?;
+        .finish_session(&recording, &settings, &services.models)?;
 
     services.clipboard.write_text(&transcript)?;
     Ok(transcript)
@@ -164,6 +249,8 @@ pub fn run() {
             save_settings,
             get_model_status,
             prepare_model,
+            get_transcription_model_status,
+            prepare_transcription_model,
             open_settings_window,
             close_settings_window,
             start_recording,

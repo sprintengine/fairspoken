@@ -1,5 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
+use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_MAX_RECORDING_SECONDS: u16 = 120;
@@ -14,6 +15,12 @@ pub struct AudioService {
 
 #[derive(Clone, Debug)]
 pub struct Recording {
+    pub pcm_i16: Vec<i16>,
+    pub sample_rate: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioFrame {
     pub pcm_i16: Vec<i16>,
     pub sample_rate: u32,
 }
@@ -47,7 +54,15 @@ impl Recording {
 }
 
 impl AudioService {
-    pub fn start(&mut self, max_recording_seconds: u16) -> Result<(), String> {
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+
+    pub fn start(
+        &mut self,
+        max_recording_seconds: u16,
+        stream_sink: Option<SyncSender<AudioFrame>>,
+    ) -> Result<(), String> {
         if self.is_recording {
             return Err("Recording already in progress".to_string());
         }
@@ -69,30 +84,70 @@ impl AudioService {
         )));
 
         let stream = match supported_config.sample_format() {
-            SampleFormat::F32 => {
-                build_input_stream::<f32>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::F64 => {
-                build_input_stream::<f64>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::I8 => {
-                build_input_stream::<i8>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::I16 => {
-                build_input_stream::<i16>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::I32 => {
-                build_input_stream::<i32>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::U8 => {
-                build_input_stream::<u8>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::U16 => {
-                build_input_stream::<u16>(&device, &config, channels, max_samples, &buffer)
-            }
-            SampleFormat::U32 => {
-                build_input_stream::<u32>(&device, &config, channels, max_samples, &buffer)
-            }
+            SampleFormat::F32 => build_input_stream::<f32>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::F64 => build_input_stream::<f64>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::I8 => build_input_stream::<i8>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::I16 => build_input_stream::<i16>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::I32 => build_input_stream::<i32>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::U8 => build_input_stream::<u8>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::U16 => build_input_stream::<u16>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
+            SampleFormat::U32 => build_input_stream::<u32>(
+                &device,
+                &config,
+                channels,
+                max_samples,
+                &buffer,
+                stream_sink,
+            ),
             other => Err(format!("Unsupported input sample format: {other:?}")),
         }?;
 
@@ -197,19 +252,35 @@ fn build_input_stream<T>(
     channels: usize,
     max_samples: usize,
     buffer: &Arc<Mutex<Vec<i16>>>,
+    stream_sink: Option<SyncSender<AudioFrame>>,
 ) -> Result<Stream, String>
 where
     T: ToI16Sample + cpal::SizedSample + Copy + Send + 'static,
 {
     let buffer = Arc::clone(buffer);
     let err_fn = |err| eprintln!("Audio input stream error: {err}");
+    let sink = stream_sink;
+    let sample_rate = config.sample_rate;
 
     device
         .build_input_stream(
             config,
             move |data: &[T], _| {
                 if let Ok(mut target) = buffer.lock() {
+                    let start = target.len();
                     append_mono_samples(data, channels, max_samples, &mut target);
+                    if let Some(sink) = &sink {
+                        if target.len() > start {
+                            let chunk = AudioFrame {
+                                pcm_i16: target[start..].to_vec(),
+                                sample_rate,
+                            };
+                            match sink.try_send(chunk) {
+                                Ok(()) | Err(TrySendError::Full(_)) => {}
+                                Err(TrySendError::Disconnected(_)) => {}
+                            }
+                        }
+                    }
                 }
             },
             err_fn,

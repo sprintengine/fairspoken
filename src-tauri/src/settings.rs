@@ -1,13 +1,24 @@
-use crate::models::WhisperModel;
+use crate::models::{SherpaModel, WhisperModel};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranscriptionBackend {
+    Whisper,
+    SherpaStreaming,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(default)]
+    pub transcription_backend: TranscriptionBackend,
     pub model: WhisperModel,
+    #[serde(default)]
+    pub sherpa_model: SherpaModel,
     pub language: String,
     pub audio_device: String,
     pub noise_suppression: bool,
@@ -21,7 +32,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            transcription_backend: TranscriptionBackend::Whisper,
             model: WhisperModel::Base,
+            sherpa_model: SherpaModel::StreamingZipformerEn20230626Int8,
             language: "en".to_string(),
             audio_device: String::new(),
             noise_suppression: true,
@@ -31,6 +44,18 @@ impl Default for Settings {
             always_on_top: true,
             max_recording_seconds: 120,
         }
+    }
+}
+
+impl Default for TranscriptionBackend {
+    fn default() -> Self {
+        Self::Whisper
+    }
+}
+
+impl Default for SherpaModel {
+    fn default() -> Self {
+        Self::StreamingZipformerEn20230626Int8
     }
 }
 
@@ -68,6 +93,14 @@ impl SettingsService {
             .map_err(|err| format!("Failed to serialize settings: {err}"))?;
         fs::write(&self.path, payload).map_err(|err| format!("Failed to write settings: {err}"))?;
         Ok(())
+    }
+}
+
+impl Settings {
+    pub fn requires_transcription_unload(&self, next: &Self) -> bool {
+        self.transcription_backend != next.transcription_backend
+            || self.model != next.model
+            || self.sherpa_model != next.sherpa_model
     }
 }
 
