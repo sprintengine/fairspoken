@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
@@ -26,6 +26,8 @@ pub enum WhisperModel {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SherpaModel {
+    #[serde(rename = "streaming-zipformer-en-2023-06-26-int8")]
+    #[serde(alias = "streaming-zipformer-en20230626-int8")]
     StreamingZipformerEn20230626Int8,
 }
 
@@ -48,8 +50,16 @@ pub struct TranscriptionModelStatus {
     pub model_path: String,
 }
 
+#[derive(Clone)]
 pub struct ModelService {
     base_dir: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelPrepareProgress {
+    pub stage: &'static str,
+    pub message: String,
+    pub percentage: u8,
 }
 
 impl Default for ModelService {
@@ -114,9 +124,19 @@ impl ModelService {
         whisper_model: WhisperModel,
         sherpa_model: SherpaModel,
     ) -> Result<TranscriptionModelStatus, String> {
+        self.prepare_transcription_model_with_progress(backend, whisper_model, sherpa_model, |_| {})
+    }
+
+    pub fn prepare_transcription_model_with_progress(
+        &self,
+        backend: TranscriptionBackend,
+        whisper_model: WhisperModel,
+        sherpa_model: SherpaModel,
+        mut progress: impl FnMut(ModelPrepareProgress),
+    ) -> Result<TranscriptionModelStatus, String> {
         match backend {
             TranscriptionBackend::Whisper => {
-                let status = self.prepare(whisper_model)?;
+                let status = self.prepare_with_progress(whisper_model, |event| progress(event))?;
                 Ok(TranscriptionModelStatus {
                     backend,
                     model: whisper_model.model_id().to_string(),
@@ -126,7 +146,8 @@ impl ModelService {
                 })
             }
             TranscriptionBackend::SherpaStreaming => {
-                let status = self.prepare_sherpa(sherpa_model)?;
+                let status =
+                    self.prepare_sherpa_with_progress(sherpa_model, |event| progress(event))?;
                 Ok(TranscriptionModelStatus {
                     backend,
                     model: sherpa_model.model_id().to_string(),
@@ -139,8 +160,21 @@ impl ModelService {
     }
 
     pub fn prepare(&self, model: WhisperModel) -> Result<ModelStatus, String> {
+        self.prepare_with_progress(model, |_| {})
+    }
+
+    fn prepare_with_progress(
+        &self,
+        model: WhisperModel,
+        mut progress: impl FnMut(ModelPrepareProgress),
+    ) -> Result<ModelStatus, String> {
         let status = self.status(model);
         if status.cached {
+            progress(ModelPrepareProgress {
+                stage: "ready",
+                message: status.message.clone(),
+                percentage: 100,
+            });
             return Ok(status);
         }
 
@@ -150,15 +184,32 @@ impl ModelService {
         let url = format!("{MODEL_BASE_URL}/{}", model.file_name());
         let target = self.path_for(model);
         let tmp = target.with_extension("download");
-        download_to_file(&url, &tmp)?;
+        download_to_file_with_progress(&url, &tmp, |percentage| {
+            progress(ModelPrepareProgress {
+                stage: "downloading",
+                message: format!("Downloading {}", model.model_id()),
+                percentage,
+            })
+        })?;
 
+        progress(ModelPrepareProgress {
+            stage: "validating",
+            message: "Validating model checksum".to_string(),
+            percentage: 95,
+        });
         if !file_sha1_matches(&tmp, model.sha1())? {
             let _ = fs::remove_file(&tmp);
             return Err("Downloaded model failed checksum validation".to_string());
         }
 
         fs::rename(&tmp, &target).map_err(|err| format!("Failed to install model file: {err}"))?;
-        Ok(self.status(model))
+        let status = self.status(model);
+        progress(ModelPrepareProgress {
+            stage: "ready",
+            message: status.message.clone(),
+            percentage: 100,
+        });
+        Ok(status)
     }
 
     pub fn path_for(&self, model: WhisperModel) -> PathBuf {
@@ -183,9 +234,18 @@ impl ModelService {
         self.sherpa_status_for_dir(model, self.base_dir.join(model.directory_name()))
     }
 
-    fn prepare_sherpa(&self, model: SherpaModel) -> Result<ModelStatusLike, String> {
+    fn prepare_sherpa_with_progress(
+        &self,
+        model: SherpaModel,
+        mut progress: impl FnMut(ModelPrepareProgress),
+    ) -> Result<ModelStatusLike, String> {
         let status = self.sherpa_status(model);
         if status.cached {
+            progress(ModelPrepareProgress {
+                stage: "ready",
+                message: status.message.clone(),
+                percentage: 100,
+            });
             return Ok(status);
         }
 
@@ -200,11 +260,41 @@ impl ModelService {
         let final_dir = self.base_dir.join(model.directory_name());
 
         let _ = fs::remove_dir_all(&temp_dir);
-        download_to_file(&url, &archive_path)?;
-        unpack_tar_bz2(&archive_path, &temp_dir)?;
+        fs::create_dir_all(&temp_dir)
+            .map_err(|err| format!("Failed to create Sherpa model unpack directory: {err}"))?;
+        if !archive_path.is_file() {
+            download_to_file_with_progress(&url, &archive_path, |percentage| {
+                progress(ModelPrepareProgress {
+                    stage: "downloading",
+                    message: "Downloading Sherpa model archive".to_string(),
+                    percentage,
+                })
+            })?;
+        } else {
+            progress(ModelPrepareProgress {
+                stage: "downloading",
+                message: "Using existing Sherpa model archive".to_string(),
+                percentage: 70,
+            });
+        }
+        progress(ModelPrepareProgress {
+            stage: "unpacking",
+            message: "Unpacking Sherpa model archive".to_string(),
+            percentage: 75,
+        });
+        if let Err(err) = unpack_tar_bz2(&archive_path, &temp_dir) {
+            let _ = fs::remove_file(&archive_path);
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(err);
+        }
         let _ = fs::remove_file(&archive_path);
 
         let unpacked_dir = temp_dir.join(model.directory_name());
+        progress(ModelPrepareProgress {
+            stage: "validating",
+            message: "Validating Sherpa model files".to_string(),
+            percentage: 90,
+        });
         let temp_status = self.sherpa_status_for_dir(model, unpacked_dir.clone());
         if !temp_status.cached {
             let _ = fs::remove_dir_all(&temp_dir);
@@ -216,7 +306,13 @@ impl ModelService {
             .map_err(|err| format!("Failed to install Sherpa model files: {err}"))?;
         let _ = fs::remove_dir_all(&temp_dir);
 
-        Ok(self.sherpa_status(model))
+        let status = self.sherpa_status(model);
+        progress(ModelPrepareProgress {
+            stage: "ready",
+            message: status.message.clone(),
+            percentage: 100,
+        });
+        Ok(status)
     }
 }
 
@@ -271,6 +367,18 @@ fn validate_sherpa_model_dir(model: SherpaModel, dir: &Path) -> Result<String, S
 }
 
 impl WhisperModel {
+    pub fn from_model_id(model_id: &str) -> Option<Self> {
+        match model_id {
+            "tiny" => Some(Self::Tiny),
+            "base" => Some(Self::Base),
+            "small" => Some(Self::Small),
+            "medium" => Some(Self::Medium),
+            "large-v2" => Some(Self::LargeV2),
+            "large-v3" => Some(Self::LargeV3),
+            _ => None,
+        }
+    }
+
     pub fn model_id(self) -> &'static str {
         match self {
             Self::Tiny => "tiny",
@@ -306,6 +414,15 @@ impl WhisperModel {
 }
 
 impl SherpaModel {
+    pub fn from_model_id(model_id: &str) -> Option<Self> {
+        match model_id {
+            "streaming-zipformer-en-2023-06-26-int8" | "streaming-zipformer-en20230626-int8" => {
+                Some(Self::StreamingZipformerEn20230626Int8)
+            }
+            _ => None,
+        }
+    }
+
     pub fn model_id(self) -> &'static str {
         "streaming-zipformer-en-2023-06-26-int8"
     }
@@ -374,7 +491,11 @@ fn default_model_dir() -> PathBuf {
     PathBuf::from("models")
 }
 
-fn download_to_file(url: &str, target: &Path) -> Result<(), String> {
+fn download_to_file_with_progress(
+    url: &str,
+    target: &Path,
+    mut progress: impl FnMut(u8),
+) -> Result<(), String> {
     let mut response = reqwest::blocking::get(url)
         .map_err(|err| format!("Model download failed: {err}"))?
         .error_for_status()
@@ -382,12 +503,36 @@ fn download_to_file(url: &str, target: &Path) -> Result<(), String> {
     let mut file = File::create(target)
         .map_err(|err| format!("Failed to create model download file: {err}"))?;
 
-    io::copy(&mut response, &mut file)
-        .map_err(|err| format!("Failed to write model download: {err}"))?;
+    let total = response.content_length();
+    let mut downloaded = 0_u64;
+    let mut last_percentage = 0_u8;
+    let mut chunk = [0_u8; 1024 * 64];
+    progress(1);
+    loop {
+        let read = response
+            .read(&mut chunk)
+            .map_err(|err| format!("Failed to read model download: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        file.write_all(&chunk[..read])
+            .map_err(|err| format!("Failed to write model download: {err}"))?;
+        downloaded += read as u64;
+        if let Some(total) = total.filter(|value| *value > 0) {
+            let percentage = ((downloaded.saturating_mul(70) / total).min(70)) as u8;
+            if percentage > last_percentage {
+                last_percentage = percentage;
+                progress(percentage.max(1));
+            }
+        }
+    }
+    progress(70);
     Ok(())
 }
 
 fn unpack_tar_bz2(archive_path: &Path, target_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(target_dir)
+        .map_err(|err| format!("Failed to create archive unpack directory: {err}"))?;
     let file = File::open(archive_path)
         .map_err(|err| format!("Failed to open Sherpa model archive: {err}"))?;
     let decoder = BzDecoder::new(file);

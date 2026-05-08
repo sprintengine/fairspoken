@@ -11,12 +11,18 @@ const EVENT_LOG_KEY = "multivoice-tauri-events";
 const MAX_EVENTS = 80;
 
 export function addEvent(level: EventLevel, message: string): void {
+  addEventWithId(`${Date.now()}-${Math.random().toString(36).slice(2)}`, level, message);
+}
+
+export function addEventWithId(id: string, level: EventLevel, message: string): void {
   const normalized = message.replace(/\s+/g, " ").trim();
   if (!normalized) return;
 
   const events = readEvents();
+  if (events.some((event) => event.id === id)) return;
+
   events.unshift({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id,
     timestamp: new Date().toISOString(),
     level,
     message: normalized,

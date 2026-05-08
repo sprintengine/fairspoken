@@ -11,14 +11,29 @@ pub enum TranscriptionBackend {
     SherpaStreaming,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranscriptionLocation {
+    Local,
+    RemoteHost,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(default)]
+    pub transcription_location: TranscriptionLocation,
     #[serde(default)]
     pub transcription_backend: TranscriptionBackend,
     pub model: WhisperModel,
     #[serde(default)]
     pub sherpa_model: SherpaModel,
+    #[serde(default)]
+    pub remote_url: String,
+    #[serde(default)]
+    pub remote_auth_token: String,
+    #[serde(default = "default_remote_timeout_seconds")]
+    pub remote_timeout_seconds: u16,
     pub language: String,
     pub audio_device: String,
     pub noise_suppression: bool,
@@ -32,9 +47,13 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            transcription_location: TranscriptionLocation::Local,
             transcription_backend: TranscriptionBackend::Whisper,
             model: WhisperModel::Base,
             sherpa_model: SherpaModel::StreamingZipformerEn20230626Int8,
+            remote_url: String::new(),
+            remote_auth_token: String::new(),
+            remote_timeout_seconds: default_remote_timeout_seconds(),
             language: "en".to_string(),
             audio_device: String::new(),
             noise_suppression: true,
@@ -50,6 +69,12 @@ impl Default for Settings {
 impl Default for TranscriptionBackend {
     fn default() -> Self {
         Self::Whisper
+    }
+}
+
+impl Default for TranscriptionLocation {
+    fn default() -> Self {
+        Self::Local
     }
 }
 
@@ -98,7 +123,8 @@ impl SettingsService {
 
 impl Settings {
     pub fn requires_transcription_unload(&self, next: &Self) -> bool {
-        self.transcription_backend != next.transcription_backend
+        self.transcription_location != next.transcription_location
+            || self.transcription_backend != next.transcription_backend
             || self.model != next.model
             || self.sherpa_model != next.sherpa_model
     }
@@ -108,8 +134,18 @@ fn normalize(settings: Settings) -> Settings {
     Settings {
         input_gain: settings.input_gain.clamp(1, 6),
         max_recording_seconds: settings.max_recording_seconds.clamp(10, 300),
+        remote_url: normalize_remote_url(&settings.remote_url),
+        remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
         ..settings
     }
+}
+
+fn default_remote_timeout_seconds() -> u16 {
+    60
+}
+
+fn normalize_remote_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_string()
 }
 
 fn default_settings_path() -> PathBuf {

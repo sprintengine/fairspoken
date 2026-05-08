@@ -61,6 +61,7 @@ impl AudioService {
     pub fn start(
         &mut self,
         max_recording_seconds: u16,
+        input_gain: u8,
         stream_sink: Option<SyncSender<AudioFrame>>,
     ) -> Result<(), String> {
         if self.is_recording {
@@ -77,6 +78,7 @@ impl AudioService {
         let sample_rate = supported_config.sample_rate();
         let channels = supported_config.channels() as usize;
         let config: StreamConfig = supported_config.clone().into();
+        let input_gain = input_gain.clamp(1, 6) as f32;
         let max_samples = sample_rate as usize * usize::from(max_recording_seconds.max(1).min(300));
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(
             sample_rate as usize
@@ -88,6 +90,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -96,6 +99,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -104,6 +108,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -112,6 +117,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -120,6 +126,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -128,6 +135,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -136,6 +144,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -144,6 +153,7 @@ impl AudioService {
                 &device,
                 &config,
                 channels,
+                input_gain,
                 max_samples,
                 &buffer,
                 stream_sink,
@@ -250,6 +260,7 @@ fn build_input_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     channels: usize,
+    input_gain: f32,
     max_samples: usize,
     buffer: &Arc<Mutex<Vec<i16>>>,
     stream_sink: Option<SyncSender<AudioFrame>>,
@@ -268,7 +279,7 @@ where
             move |data: &[T], _| {
                 if let Ok(mut target) = buffer.lock() {
                     let start = target.len();
-                    append_mono_samples(data, channels, max_samples, &mut target);
+                    append_mono_samples(data, channels, input_gain, max_samples, &mut target);
                     if let Some(sink) = &sink {
                         if target.len() > start {
                             let chunk = AudioFrame {
@@ -289,8 +300,13 @@ where
         .map_err(|err| format!("Failed to build audio input stream: {err}"))
 }
 
-fn append_mono_samples<T>(data: &[T], channels: usize, max_samples: usize, target: &mut Vec<i16>)
-where
+fn append_mono_samples<T>(
+    data: &[T],
+    channels: usize,
+    input_gain: f32,
+    max_samples: usize,
+    target: &mut Vec<i16>,
+) where
     T: ToI16Sample + Copy,
 {
     if target.len() >= max_samples {
@@ -307,7 +323,8 @@ where
             .iter()
             .map(|sample| i32::from(sample.to_i16_sample()))
             .sum();
-        target.push((sum / frame.len() as i32) as i16);
+        let mono = sum as f32 / frame.len() as f32;
+        target.push((mono * input_gain).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
     }
 }
 
@@ -325,7 +342,13 @@ mod tests {
     #[test]
     fn averages_interleaved_channels_to_mono() {
         let mut target = Vec::new();
-        append_mono_samples(&[100_i16, 300_i16, -100_i16, 100_i16], 2, 8, &mut target);
+        append_mono_samples(
+            &[100_i16, 300_i16, -100_i16, 100_i16],
+            2,
+            1.0,
+            8,
+            &mut target,
+        );
 
         assert_eq!(target, vec![200, 0]);
     }
@@ -333,9 +356,17 @@ mod tests {
     #[test]
     fn respects_max_sample_limit() {
         let mut target = vec![1_i16];
-        append_mono_samples(&[2_i16, 3_i16, 4_i16], 1, 2, &mut target);
+        append_mono_samples(&[2_i16, 3_i16, 4_i16], 1, 1.0, 2, &mut target);
 
         assert_eq!(target, vec![1, 2]);
+    }
+
+    #[test]
+    fn applies_input_gain_to_mono_samples() {
+        let mut target = Vec::new();
+        append_mono_samples(&[1000_i16, -1000_i16], 1, 3.0, 8, &mut target);
+
+        assert_eq!(target, vec![3000, -3000]);
     }
 
     #[test]

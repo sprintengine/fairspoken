@@ -88,6 +88,14 @@
         </div>
 
         <label class="field">
+          <span>Location</span>
+          <select id="locationSelect" class="setting-select">
+            <option value="local">Local</option>
+            <option value="remote-host">Remote host</option>
+          </select>
+        </label>
+
+        <label class="field">
           <span>Engine</span>
           <select id="engineSelect" class="setting-select">
             <option value="whisper">Whisper</option>
@@ -116,6 +124,25 @@
             <span class="model-download-bar" id="modelDownloadBar"></span>
           </div>
           <button class="model-prepare-btn" id="modelPrepare" type="button">Prepare</button>
+        </div>
+
+        <div class="remote-host-panel" id="remoteHostPanel" aria-live="polite" hidden>
+          <label class="field">
+            <span>Host URL</span>
+            <input id="remoteUrl" class="setting-input" type="url" placeholder="https://host.example.com" />
+          </label>
+          <label class="field">
+            <span>Token</span>
+            <input id="remoteAuthToken" class="setting-input" type="password" autocomplete="off" />
+          </label>
+          <label class="field compact-field">
+            <span>Timeout</span>
+            <input id="remoteTimeoutSeconds" class="setting-input" type="number" min="5" max="300" step="5" />
+          </label>
+          <div class="remote-host-actions">
+            <span class="model-download-status" id="remoteStatus">Remote host not checked</span>
+            <button class="model-prepare-btn" id="remoteTest" type="button">Test</button>
+          </div>
         </div>
 
         <label class="field">

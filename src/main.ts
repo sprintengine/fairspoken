@@ -1,11 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { register } from "@tauri-apps/plugin-global-shortcut";
-import { addEvent, eventSeverity } from "./events";
+import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
 
 type AppState = "idle" | "recording" | "transcribing" | "error";
 
 interface BackendStatus {
   state: AppState;
+  message: string;
+}
+
+interface BackendLogEvent {
+  id: string;
+  level: EventLevel;
   message: string;
 }
 
@@ -240,6 +247,10 @@ window.addEventListener("storage", (event) => {
     updateSettingsEventBadge();
   }
 });
+
+void listen<BackendLogEvent>("backend-event", (event) => {
+  addEventWithId(event.payload.id, event.payload.level, event.payload.message);
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
 void loadBackendStatus().catch((error) => {
   addEvent("error", error instanceof Error ? error.message : String(error));

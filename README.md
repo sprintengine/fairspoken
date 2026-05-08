@@ -14,6 +14,7 @@ This app is intentionally separate from the Electron app. The goal is a lighter 
 - Model preparation downloads ggml models from the whisper.cpp Hugging Face repository and verifies SHA1 checksums.
 - Settings persist to the OS app data directory.
 - Clipboard writes are verified after transcription.
+- Remote transcription can stream microphone audio to a standalone Rust host.
 - Windows release build succeeds and produces MSI and NSIS installers.
 
 ## Development
@@ -45,6 +46,22 @@ cargo test
 cargo test downloads_tiny_model -- --ignored
 npm run tauri build
 ```
+
+## Remote Transcription Host
+
+Start the standalone host from `src-tauri`:
+
+```bash
+cargo run --bin transcription-host
+```
+
+By default it listens on `127.0.0.1:48173`. Override the bind address or require a bearer token with:
+
+```bash
+MULTIVOICE_HOST_ADDR=0.0.0.0:48173 MULTIVOICE_HOST_TOKEN=secret cargo run --bin transcription-host
+```
+
+In the desktop settings, set `Transcription` location to `Remote host`, enter the host URL, and choose either `Whisper` or `Sherpa streaming`. The client streams mono PCM frames while recording; the host uses the requested backend/model and returns the final transcript for clipboard copy.
 
 ## Plan
 

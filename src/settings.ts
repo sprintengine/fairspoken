@@ -1,14 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
-import { addEvent, clearEvents, eventSeverity, readEvents, type AppEvent } from "./events";
+import { listen } from "@tauri-apps/api/event";
+import { addEvent, addEventWithId, clearEvents, eventSeverity, readEvents, type AppEvent, type EventLevel } from "./events";
 
 type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3";
 type TranscriptionBackend = "whisper" | "sherpa-streaming";
+type TranscriptionLocation = "local" | "remote-host";
 type SherpaModel = "streaming-zipformer-en-2023-06-26-int8";
 
 interface Settings {
+  transcriptionLocation: TranscriptionLocation;
   transcriptionBackend: TranscriptionBackend;
   model: WhisperModel;
   sherpaModel: SherpaModel;
+  remoteUrl: string;
+  remoteAuthToken: string;
+  remoteTimeoutSeconds: number;
   language: string;
   alwaysOnTop: boolean;
   maxRecordingSeconds: number;
@@ -27,10 +33,38 @@ interface ModelStatus {
   modelPath: string;
 }
 
+interface RemoteHealth {
+  ok: boolean;
+  mode: string;
+  backend: string;
+  serverVersion?: string;
+}
+
+interface ModelPrepareProgressEvent {
+  backend: TranscriptionBackend;
+  model: string;
+  stage: string;
+  message: string;
+  percentage: number;
+  done: boolean;
+  error?: string | null;
+  status?: ModelStatus | null;
+}
+
+interface BackendLogEvent {
+  id: string;
+  level: EventLevel;
+  message: string;
+}
+
 const DEFAULTS: Settings = {
+  transcriptionLocation: "local",
   transcriptionBackend: "whisper",
   model: "base",
   sherpaModel: "streaming-zipformer-en-2023-06-26-int8",
+  remoteUrl: "",
+  remoteAuthToken: "",
+  remoteTimeoutSeconds: 60,
   language: "en",
   alwaysOnTop: true,
   maxRecordingSeconds: 120,
@@ -43,6 +77,7 @@ const DEFAULTS: Settings = {
 
 const closeBtn = required<HTMLButtonElement>("settingsClose");
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
+const locationSelect = required<HTMLSelectElement>("locationSelect");
 const engineSelect = required<HTMLSelectElement>("engineSelect");
 const modelSelect = required<HTMLSelectElement>("modelSelect");
 const langSelect = required<HTMLSelectElement>("langSelect");
@@ -59,6 +94,12 @@ const modelDownloadStatus = required<HTMLElement>("modelDownloadStatus");
 const modelDownloadBar = required<HTMLElement>("modelDownloadBar");
 const modelSize = required<HTMLElement>("modelSize");
 const modelPrepare = required<HTMLButtonElement>("modelPrepare");
+const remoteHostPanel = required<HTMLElement>("remoteHostPanel");
+const remoteUrl = required<HTMLInputElement>("remoteUrl");
+const remoteAuthToken = required<HTMLInputElement>("remoteAuthToken");
+const remoteTimeoutSeconds = required<HTMLInputElement>("remoteTimeoutSeconds");
+const remoteStatus = required<HTMLElement>("remoteStatus");
+const remoteTest = required<HTMLButtonElement>("remoteTest");
 const eventLog = required<HTMLElement>("eventLog");
 const eventCount = required<HTMLElement>("eventCount");
 const eventSummary = required<HTMLElement>("eventSummary");
@@ -111,14 +152,20 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     ...settings,
     inputGain: Math.max(1, Math.min(6, Number(settings.inputGain ?? DEFAULTS.inputGain))),
     maxRecordingSeconds: Math.max(10, Math.min(300, Math.round(seconds || DEFAULTS.maxRecordingSeconds))),
+    remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
+    remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
   };
 }
 
 function applyToForm(settings: Settings): void {
+  locationSelect.value = settings.transcriptionLocation;
   engineSelect.value = settings.transcriptionBackend;
   renderModelOptions(settings.transcriptionBackend);
   modelSelect.value = selectedModel(settings);
   updateModelSize(settings.transcriptionBackend, selectedModel(settings));
+  remoteUrl.value = settings.remoteUrl;
+  remoteAuthToken.value = settings.remoteAuthToken;
+  remoteTimeoutSeconds.value = String(settings.remoteTimeoutSeconds);
   langSelect.value = settings.language;
   audioDeviceSelect.value = settings.audioDevice ?? "";
   noiseSuppression.checked = settings.noiseSuppression ?? true;
@@ -127,14 +174,19 @@ function applyToForm(settings: Settings): void {
   postProcess.checked = settings.postProcess ?? true;
   alwaysOnTop.checked = settings.alwaysOnTop;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
+  updateTranscriptionLocationUi(settings.transcriptionLocation);
 }
 
 function readFromForm(): Settings {
   const backend = engineSelect.value as TranscriptionBackend;
   return normalizeSettings({
+    transcriptionLocation: locationSelect.value as TranscriptionLocation,
     transcriptionBackend: backend,
     model: backend === "whisper" ? (modelSelect.value as WhisperModel) : currentSettings.model,
     sherpaModel: backend === "sherpa-streaming" ? (modelSelect.value as SherpaModel) : currentSettings.sherpaModel,
+    remoteUrl: remoteUrl.value,
+    remoteAuthToken: remoteAuthToken.value,
+    remoteTimeoutSeconds: Number(remoteTimeoutSeconds.value),
     language: langSelect.value,
     audioDevice: audioDeviceSelect.value,
     noiseSuppression: noiseSuppression.checked,
@@ -190,6 +242,10 @@ function formatModelStatus(status: ModelStatus): string {
 }
 
 async function requestModelStatus(): Promise<void> {
+  if (locationSelect.value === "remote-host") {
+    updateModelSize(engineSelect.value as TranscriptionBackend, modelSelect.value as WhisperModel | SherpaModel);
+    return;
+  }
   const backend = engineSelect.value as TranscriptionBackend;
   const model = modelSelect.value as WhisperModel | SherpaModel;
   updateModelSize(backend, model);
@@ -206,18 +262,17 @@ async function requestModelStatus(): Promise<void> {
 }
 
 async function beginModelPreload(): Promise<void> {
+  if (locationSelect.value === "remote-host") return;
   const backend = engineSelect.value as TranscriptionBackend;
   const model = modelSelect.value as WhisperModel | SherpaModel;
   updateModelSize(backend, model);
-  setModelDownloadStatus("Downloading model...", 1);
+  setModelDownloadStatus("Preparing model...", 1);
   modelPrepare.textContent = "Preparing";
   modelPrepare.disabled = true;
   try {
-    const status = await invoke<ModelStatus>("prepare_transcription_model", {
+    await invoke("begin_prepare_transcription_model", {
       request: modelRequest(backend, model),
     });
-    addEvent("info", status.message);
-    setModelCacheStatus(status);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addEvent("error", error instanceof Error ? error.message : String(error));
@@ -227,6 +282,41 @@ async function beginModelPreload(): Promise<void> {
     modelPrepare.textContent = "Retry";
     modelPrepare.disabled = false;
   }
+}
+
+function handleModelPrepareProgress(event: ModelPrepareProgressEvent): void {
+  const backend = engineSelect.value as TranscriptionBackend;
+  const model = modelSelect.value as WhisperModel | SherpaModel;
+  if (event.backend !== backend || event.model !== model) return;
+
+  if (event.error) {
+    addEvent("error", event.error);
+    modelDownload.dataset.state = "error";
+    modelDownloadStatus.textContent = "Preparation failed";
+    modelDownloadStatus.title = event.error;
+    modelDownloadBar.style.transform = "scaleX(0)";
+    modelPrepare.textContent = "Retry";
+    modelPrepare.disabled = false;
+    return;
+  }
+
+  if (event.status && event.done) {
+    addEvent("info", event.status.message);
+    setModelCacheStatus(event.status);
+    return;
+  }
+
+  setModelDownloadStatus(formatPrepareStage(event.stage, event.message), event.percentage);
+  modelPrepare.textContent = event.done ? "Ready" : "Preparing";
+  modelPrepare.disabled = !event.done;
+}
+
+function formatPrepareStage(stage: string, message: string): string {
+  if (stage === "downloading") return message || "Downloading model";
+  if (stage === "unpacking") return "Unpacking model";
+  if (stage === "validating") return "Validating model";
+  if (stage === "ready") return "Model ready";
+  return message || "Preparing model";
 }
 
 function updateModelSize(backend: TranscriptionBackend, model: WhisperModel | SherpaModel): void {
@@ -241,6 +331,33 @@ function renderModelOptions(backend: TranscriptionBackend): void {
 
 function selectedModel(settings: Settings): WhisperModel | SherpaModel {
   return settings.transcriptionBackend === "whisper" ? settings.model : settings.sherpaModel;
+}
+
+function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
+  const remote = location === "remote-host";
+  modelDownload.hidden = remote;
+  remoteHostPanel.hidden = !remote;
+  if (remote) {
+    remoteStatus.textContent = currentSettings.remoteUrl ? "Remote host not checked" : "Remote host not configured";
+  }
+}
+
+async function testRemoteHost(): Promise<void> {
+  const saved = await persistSettings();
+  if (!saved) return;
+  remoteTest.disabled = true;
+  remoteStatus.textContent = "Checking remote host...";
+  try {
+    const health = await invoke<RemoteHealth>("test_remote_transcription_host");
+    remoteStatus.textContent = health.ok ? `Reachable (${health.mode})` : "Unavailable";
+    addEvent(health.ok ? "info" : "warning", `Remote host ${health.ok ? "reachable" : "unavailable"}: ${health.backend}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    remoteStatus.textContent = "Remote host unavailable";
+    addEvent("error", message);
+  } finally {
+    remoteTest.disabled = false;
+  }
 }
 
 function modelRequest(backend: TranscriptionBackend, model: WhisperModel | SherpaModel): Record<string, unknown> {
@@ -338,7 +455,9 @@ async function loadSettings(): Promise<void> {
   applyToForm(currentSettings);
   await loadAudioDevices();
   await startMeter();
-  await requestModelStatus();
+  if (currentSettings.transcriptionLocation === "local") {
+    await requestModelStatus();
+  }
   renderEventLog();
 }
 
@@ -407,6 +526,17 @@ refreshBtn.addEventListener("click", () => {
   void startMeter();
 });
 
+locationSelect.addEventListener("change", () => {
+  updateTranscriptionLocationUi(locationSelect.value as TranscriptionLocation);
+  void persistSettings()
+    .then((saved) => {
+      if (!saved) return;
+      addEvent("info", `Transcription location changed to ${locationSelect.value === "local" ? "local" : "remote host"}`);
+      return requestModelStatus();
+    })
+    .catch(reportAsyncError);
+});
+
 engineSelect.addEventListener("change", () => {
   const backend = engineSelect.value as TranscriptionBackend;
   renderModelOptions(backend);
@@ -431,6 +561,12 @@ modelSelect.addEventListener("change", () => {
 modelPrepare.addEventListener("click", () => {
   void beginModelPreload();
 });
+remoteTest.addEventListener("click", () => {
+  void testRemoteHost();
+});
+remoteUrl.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+remoteAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {
   void persistSettings()
@@ -486,6 +622,13 @@ clearEventsButton.addEventListener("click", () => {
 tabButtons.forEach((button) => {
   button.addEventListener("click", () => selectTab(button.dataset.tab ?? "general"));
 });
+
+void listen<ModelPrepareProgressEvent>("model-prepare-progress", (event) => {
+  handleModelPrepareProgress(event.payload);
+}).catch(reportAsyncError);
+void listen<BackendLogEvent>("backend-event", (event) => {
+  addEventWithId(event.payload.id, event.payload.level, event.payload.message);
+}).catch(reportAsyncError);
 
 void loadSettings().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);

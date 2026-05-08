@@ -878,6 +878,28 @@ html, body {
   gap: 10px;
 }
 
+.model-download[hidden],
+.remote-host-panel[hidden] {
+  display: none !important;
+}
+
+.remote-host-panel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.remote-host-panel .field {
+  grid-template-columns: 108px minmax(0, 1fr);
+}
+
+.remote-host-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  align-items: center;
+  gap: 10px;
+}
+
 .model-download-status {
   color: var(--text-muted);
   font-size: 11px;

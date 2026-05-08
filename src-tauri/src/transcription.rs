@@ -368,11 +368,8 @@ fn feed_sherpa_samples(
     sample_rate: u32,
     latest: &mut String,
 ) {
-    let audio: Vec<f32> = samples
-        .iter()
-        .map(|sample| f32::from(*sample) / 32768.0)
-        .collect();
-    stream.accept_waveform(sample_rate as i32, &audio);
+    let audio = resample_i16_to_16khz_f32(samples, sample_rate);
+    stream.accept_waveform(16_000, &audio);
     while recognizer.is_ready(stream) {
         recognizer.decode(stream);
         if let Some(result) = recognizer.get_result(stream) {
