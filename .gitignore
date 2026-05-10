@@ -20,9 +20,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Switchboard runtime state
+.multi-code/switchboard/
+
 # OS and editor files
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-
