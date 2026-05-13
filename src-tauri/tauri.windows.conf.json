@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": [
+      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-win-x64-shared-MT-Release-lib/lib/sherpa-onnx-c-api.dll",
+      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-win-x64-shared-MT-Release-lib/lib/sherpa-onnx-cxx-api.dll"
+    ]
+  }
+}

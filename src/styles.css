@@ -116,12 +116,14 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
+  app-region: drag;
   -webkit-app-region: drag;
   cursor: default;
 }
 
 /* ─── Logo record button ─────────────────────────────────────── */
 .logo-btn {
+  app-region: no-drag;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
   width: 32px;
@@ -329,6 +331,7 @@ html, body {
 
 /* ─── Settings button ────────────────────────────────────────── */
 .settings-btn {
+  app-region: no-drag;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
   display: flex;
@@ -642,6 +645,7 @@ html, body {
   padding: 0 14px 0 16px;
   border-bottom: 1px solid rgba(255,255,255,0.08);
   background: #0d0e11;
+  app-region: drag;
   -webkit-app-region: drag;
 }
 
@@ -666,6 +670,7 @@ html, body {
 }
 
 .icon-btn {
+  app-region: no-drag;
   -webkit-app-region: no-drag;
   width: 28px;
   height: 28px;

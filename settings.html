@@ -9,10 +9,10 @@
 </head>
 <body class="settings-body">
   <main class="settings-window" id="settingsWindow">
-    <header class="settings-titlebar">
-      <div class="settings-heading">
-        <span class="settings-product">multivoice</span>
-        <span class="settings-subtitle">Settings</span>
+    <header class="settings-titlebar" data-tauri-drag-region>
+      <div class="settings-heading" data-tauri-drag-region>
+        <span class="settings-product" data-tauri-drag-region>multivoice</span>
+        <span class="settings-subtitle" data-tauri-drag-region>Settings</span>
       </div>
       <button class="icon-btn" id="settingsClose" aria-label="Close settings" title="Close">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -158,6 +158,11 @@
             <option value="zh">Chinese</option>
             <option value="ja">Japanese</option>
           </select>
+        </label>
+
+        <label class="field compact-field" id="whisperChunkField">
+          <span>Whisper chunk</span>
+          <input id="whisperChunkSeconds" class="setting-input" type="number" min="5" max="60" step="5" />
         </label>
 
         <label class="toggle-row">

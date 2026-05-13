@@ -42,6 +42,8 @@ pub struct Settings {
     pub post_process: bool,
     pub always_on_top: bool,
     pub max_recording_seconds: u16,
+    #[serde(default = "default_whisper_chunk_seconds")]
+    pub whisper_chunk_seconds: u16,
 }
 
 impl Default for Settings {
@@ -62,6 +64,7 @@ impl Default for Settings {
             post_process: true,
             always_on_top: true,
             max_recording_seconds: 120,
+            whisper_chunk_seconds: default_whisper_chunk_seconds(),
         }
     }
 }
@@ -134,10 +137,15 @@ fn normalize(settings: Settings) -> Settings {
     Settings {
         input_gain: settings.input_gain.clamp(1, 6),
         max_recording_seconds: settings.max_recording_seconds.clamp(10, 300),
+        whisper_chunk_seconds: settings.whisper_chunk_seconds.clamp(5, 60),
         remote_url: normalize_remote_url(&settings.remote_url),
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
         ..settings
     }
+}
+
+fn default_whisper_chunk_seconds() -> u16 {
+    20
 }
 
 fn default_remote_timeout_seconds() -> u16 {

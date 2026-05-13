@@ -203,9 +203,13 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
     let language = header_value(request, "x-multivoice-language")
         .unwrap_or("en")
         .to_string();
+    let whisper_chunk_seconds = header_value(request, "x-multivoice-whisper-chunk-seconds")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(Settings::default().whisper_chunk_seconds);
 
     let mut settings = Settings::default();
     settings.language = language;
+    settings.whisper_chunk_seconds = whisper_chunk_seconds.clamp(5, 60);
     settings.transcription_backend = match backend {
         "whisper" => {
             settings.model = WhisperModel::from_model_id(model)

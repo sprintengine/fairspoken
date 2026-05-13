@@ -371,6 +371,11 @@ fn transcription_headers(settings: &Settings) -> Result<HeaderMap, String> {
         HeaderValue::from_str(&settings.language)
             .map_err(|err| format!("Invalid language header: {err}"))?,
     );
+    headers.insert(
+        "x-multivoice-whisper-chunk-seconds",
+        HeaderValue::from_str(&settings.whisper_chunk_seconds.to_string())
+            .map_err(|err| format!("Invalid Whisper chunk seconds header: {err}"))?,
+    );
     Ok(headers)
 }
 

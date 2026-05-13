@@ -18,6 +18,7 @@ interface Settings {
   language: string;
   alwaysOnTop: boolean;
   maxRecordingSeconds: number;
+  whisperChunkSeconds: number;
   audioDevice?: string;
   noiseSuppression?: boolean;
   echoCancellation?: boolean;
@@ -68,6 +69,7 @@ const DEFAULTS: Settings = {
   language: "en",
   alwaysOnTop: true,
   maxRecordingSeconds: 120,
+  whisperChunkSeconds: 20,
   audioDevice: "",
   noiseSuppression: true,
   echoCancellation: true,
@@ -88,6 +90,8 @@ const inputGain = required<HTMLSelectElement>("inputGain");
 const postProcess = required<HTMLInputElement>("postProcess");
 const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
 const maxRecordingSeconds = required<HTMLInputElement>("maxRecordingSeconds");
+const whisperChunkField = required<HTMLElement>("whisperChunkField");
+const whisperChunkSeconds = required<HTMLInputElement>("whisperChunkSeconds");
 const inputMeter = required<HTMLElement>("inputMeter");
 const modelDownload = required<HTMLElement>("modelDownload");
 const modelDownloadStatus = required<HTMLElement>("modelDownloadStatus");
@@ -147,11 +151,13 @@ function required<T extends HTMLElement>(id: string): T {
 
 function normalizeSettings(settings: Partial<Settings>): Settings {
   const seconds = Number(settings.maxRecordingSeconds ?? DEFAULTS.maxRecordingSeconds);
+  const chunkSeconds = Number(settings.whisperChunkSeconds ?? DEFAULTS.whisperChunkSeconds);
   return {
     ...DEFAULTS,
     ...settings,
     inputGain: Math.max(1, Math.min(6, Number(settings.inputGain ?? DEFAULTS.inputGain))),
     maxRecordingSeconds: Math.max(10, Math.min(300, Math.round(seconds || DEFAULTS.maxRecordingSeconds))),
+    whisperChunkSeconds: Math.max(5, Math.min(60, Math.round(chunkSeconds || DEFAULTS.whisperChunkSeconds))),
     remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
   };
@@ -174,6 +180,8 @@ function applyToForm(settings: Settings): void {
   postProcess.checked = settings.postProcess ?? true;
   alwaysOnTop.checked = settings.alwaysOnTop;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
+  whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
+  updateWhisperChunkUi(settings.transcriptionBackend);
   updateTranscriptionLocationUi(settings.transcriptionLocation);
 }
 
@@ -195,6 +203,7 @@ function readFromForm(): Settings {
     postProcess: postProcess.checked,
     alwaysOnTop: alwaysOnTop.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
+    whisperChunkSeconds: Number(whisperChunkSeconds.value),
   });
 }
 
@@ -331,6 +340,12 @@ function renderModelOptions(backend: TranscriptionBackend): void {
 
 function selectedModel(settings: Settings): WhisperModel | SherpaModel {
   return settings.transcriptionBackend === "whisper" ? settings.model : settings.sherpaModel;
+}
+
+function updateWhisperChunkUi(backend: TranscriptionBackend): void {
+  const whisper = backend === "whisper";
+  whisperChunkField.hidden = !whisper;
+  whisperChunkSeconds.disabled = !whisper;
 }
 
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
@@ -540,6 +555,7 @@ locationSelect.addEventListener("change", () => {
 engineSelect.addEventListener("change", () => {
   const backend = engineSelect.value as TranscriptionBackend;
   renderModelOptions(backend);
+  updateWhisperChunkUi(backend);
   modelSelect.value = backend === "whisper" ? currentSettings.model : currentSettings.sherpaModel;
   void persistSettings()
     .then((saved) => {
@@ -601,6 +617,8 @@ postProcess.addEventListener("change", () => void persistSettings().catch(report
 alwaysOnTop.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
+whisperChunkSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+whisperChunkSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
