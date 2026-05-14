@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { register } from "@tauri-apps/plugin-global-shortcut";
+import { isRegistered, register } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
 
 type AppState = "idle" | "recording" | "transcribing" | "error";
@@ -16,8 +16,8 @@ interface BackendLogEvent {
   message: string;
 }
 
-const RECORD_SHORTCUT_MACOS = "Command+Shift+1";
-const RECORD_SHORTCUT_DEFAULT = "Ctrl+Alt+1";
+const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
+const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
 
 const app = required<HTMLElement>("app");
 const recordBtn = required<HTMLButtonElement>("recordBtn");
@@ -35,6 +35,7 @@ let copiedStatusTimer: ReturnType<typeof setTimeout> | null = null;
 let recordingSeconds = 0;
 let startRecordingRequestPending = false;
 let stopRecordingRequestPending = false;
+let cancelTranscriptionRequestPending = false;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -52,7 +53,11 @@ function setState(state: AppState, message?: string): void {
   app.dataset.appState = state;
   recordBtn.dataset.state = state;
   recordBtn.setAttribute("aria-pressed", String(state === "recording"));
-  recordBtn.setAttribute("aria-label", state === "recording" ? "Stop recording" : "Start recording");
+  recordBtn.setAttribute(
+    "aria-label",
+    state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : "Start recording",
+  );
+  recordBtn.title = state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : "Click to record";
   recordBtn.disabled = false;
   statusLabel.textContent = message ?? stateLabel(state);
 
@@ -167,8 +172,12 @@ async function loadBackendStatus(): Promise<void> {
 }
 
 async function toggleRecording(): Promise<void> {
-  if (appState === "transcribing") return;
+  if (appState === "transcribing") {
+    await cancelTranscription();
+    return;
+  }
   if (appState === "idle" && startRecordingRequestPending) return;
+  if (stopRecordingRequestPending) return;
 
   try {
     if (appState === "recording") {
@@ -179,6 +188,7 @@ async function toggleRecording(): Promise<void> {
     startRecordingRequestPending = true;
     const maxRecordingSeconds = await invoke<number>("start_recording");
     startRecordingRequestPending = false;
+    cancelTranscriptionRequestPending = false;
     setState("recording");
     scheduleMaxRecordingStop(maxRecordingSeconds);
   } catch (error) {
@@ -192,12 +202,17 @@ async function toggleRecording(): Promise<void> {
 async function stopAndTranscribe(): Promise<void> {
   if (stopRecordingRequestPending) return;
   stopRecordingRequestPending = true;
+  cancelTranscriptionRequestPending = false;
   clearMaxRecordingTimer();
   setState("transcribing");
   await waitForPaint();
 
   try {
     const transcript = await invoke<string>("stop_and_transcribe");
+    if (cancelTranscriptionRequestPending) {
+      setState("idle", "Ready");
+      return;
+    }
     if (transcript) {
       addEvent("info", "Transcript copied to clipboard");
       showCopiedStatus();
@@ -207,10 +222,29 @@ async function stopAndTranscribe(): Promise<void> {
       setState("idle", "Ready");
     }
   } catch (error) {
-    addEvent("error", error instanceof Error ? error.message : String(error));
-    setState("error", "Error");
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "Transcription was cancelled") {
+      addEvent("info", "Transcription cancelled");
+      setState("idle", "Ready");
+    } else {
+      addEvent("error", message);
+      setState("error", "Error");
+    }
   } finally {
     stopRecordingRequestPending = false;
+    cancelTranscriptionRequestPending = false;
+  }
+}
+
+async function cancelTranscription(): Promise<void> {
+  if (cancelTranscriptionRequestPending || !stopRecordingRequestPending) return;
+  cancelTranscriptionRequestPending = true;
+  setState("transcribing", "Canceling");
+
+  try {
+    await invoke("cancel_transcription");
+  } catch (error) {
+    addEvent("warning", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -219,18 +253,30 @@ function isMacOS(): boolean {
 }
 
 async function registerRecordingShortcut(): Promise<void> {
-  const shortcut = isMacOS() ? RECORD_SHORTCUT_MACOS : RECORD_SHORTCUT_DEFAULT;
+  const shortcuts = isMacOS() ? RECORD_SHORTCUT_MACOS_CANDIDATES : RECORD_SHORTCUT_DEFAULT_CANDIDATES;
+  const failures: string[] = [];
 
-  try {
-    await register(shortcut, (event) => {
-      if (event.state === "Pressed") {
-        void toggleRecording();
+  for (const shortcut of shortcuts) {
+    try {
+      await register(shortcut, (event) => {
+        if (event.state === "Pressed") {
+          void toggleRecording();
+        }
+      });
+
+      const registered = await isRegistered(shortcut);
+      if (registered) {
+        addEvent("info", `Recording shortcut registered: ${shortcut}`);
+        return;
       }
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    addEvent("warning", `Recording shortcut ${shortcut} is unavailable: ${message}`);
+
+      failures.push(`${shortcut}: registration was not confirmed`);
+    } catch (error) {
+      failures.push(`${shortcut}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+
+  addEvent("warning", `Recording shortcut is unavailable: ${failures.join("; ")}`);
 }
 
 recordBtn.addEventListener("click", () => {

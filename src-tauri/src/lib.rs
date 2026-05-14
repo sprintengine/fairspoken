@@ -28,7 +28,7 @@ use std::sync::{
 };
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
-use transcription::TranscriptionService;
+use transcription::{TranscriptionCancelHandle, TranscriptionService};
 
 const MIN_RECORDING_SECONDS: f32 = 0.35;
 const SILENCE_RMS_THRESHOLD: f32 = 0.001;
@@ -40,6 +40,8 @@ struct AppServices {
     clipboard: ClipboardService,
     models: ModelService,
     model_prepare_running: Arc<AtomicBool>,
+    transcription_cancel_requested: Arc<AtomicBool>,
+    local_transcription_cancel: Mutex<Option<TranscriptionCancelHandle>>,
     settings: Mutex<SettingsService>,
     transcription: Mutex<TranscriptionService>,
     remote_transcription: Mutex<Option<RemoteStreamingSession>>,
@@ -340,6 +342,10 @@ fn close_settings_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u16, String> {
+    services
+        .transcription_cancel_requested
+        .store(false, Ordering::SeqCst);
+
     let settings = services
         .settings
         .lock()
@@ -347,11 +353,19 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         .current();
 
     let stream_sink = match settings.transcription_location {
-        TranscriptionLocation::Local => services
-            .transcription
-            .lock()
-            .map_err(|_| "Transcription service lock failed".to_string())?
-            .start_session(&settings, &services.models)?,
+        TranscriptionLocation::Local => {
+            let start = services
+                .transcription
+                .lock()
+                .map_err(|_| "Transcription service lock failed".to_string())?
+                .start_session_with_cancel(&settings, &services.models)?;
+            *services
+                .local_transcription_cancel
+                .lock()
+                .map_err(|_| "Transcription cancellation lock failed".to_string())? =
+                Some(start.cancel_handle);
+            start.audio_tx
+        }
         TranscriptionLocation::RemoteHost => {
             emit_backend_event(
                 &app,
@@ -388,6 +402,7 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
                 .lock()
                 .map_err(|_| "Transcription service lock failed".to_string())?
                 .cancel_session();
+            clear_local_transcription_cancel(&services)?;
         } else {
             cancel_remote_transcription_if_needed(&services)?;
         }
@@ -407,17 +422,28 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
 
 #[tauri::command]
 fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Result<String, String> {
-    let recording = services
-        .audio
-        .lock()
-        .map_err(|_| "Audio service lock failed".to_string())?
-        .stop()?;
-    let stats = recording.stats();
+    services
+        .transcription_cancel_requested
+        .store(false, Ordering::SeqCst);
+
     let settings = services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
+    let recording = match services
+        .audio
+        .lock()
+        .map_err(|_| "Audio service lock failed".to_string())?
+        .stop()
+    {
+        Ok(recording) => recording,
+        Err(err) => {
+            cancel_transcription_for_location(&services, settings.transcription_location)?;
+            return Err(err);
+        }
+    };
+    let stats = recording.stats();
     emit_backend_event(
         &app,
         "info",
@@ -455,11 +481,26 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         ),
     );
     let transcript = match settings.transcription_location {
-        TranscriptionLocation::Local => services
-            .transcription
-            .lock()
-            .map_err(|_| "Transcription service lock failed".to_string())?
-            .finish_session(&recording, &settings, &services.models)?,
+        TranscriptionLocation::Local => {
+            let result = services
+                .transcription
+                .lock()
+                .map_err(|_| "Transcription service lock failed".to_string())?
+                .finish_session(&recording, &settings, &services.models);
+            clear_local_transcription_cancel(&services)?;
+            match result {
+                Ok(transcript) => transcript,
+                Err(_)
+                    if services
+                        .transcription_cancel_requested
+                        .load(Ordering::SeqCst) =>
+                {
+                    emit_backend_event(&app, "info", "Transcription cancelled");
+                    return Err("Transcription was cancelled".to_string());
+                }
+                Err(err) => return Err(err),
+            }
+        }
         TranscriptionLocation::RemoteHost => {
             services
                 .remote_transcription
@@ -472,9 +513,35 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         }
     };
 
+    if services
+        .transcription_cancel_requested
+        .load(Ordering::SeqCst)
+    {
+        emit_backend_event(&app, "info", "Transcription cancelled");
+        return Err("Transcription was cancelled".to_string());
+    }
+
     services.clipboard.write_text(&transcript)?;
     emit_backend_event(&app, "info", "Transcript copied to clipboard");
     Ok(transcript)
+}
+
+#[tauri::command]
+fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Result<(), String> {
+    services
+        .transcription_cancel_requested
+        .store(true, Ordering::SeqCst);
+    if let Some(handle) = services
+        .local_transcription_cancel
+        .lock()
+        .map_err(|_| "Transcription cancellation lock failed".to_string())?
+        .as_ref()
+        .cloned()
+    {
+        handle.cancel();
+    }
+    emit_backend_event(&app, "info", "Transcription cancellation requested");
+    Ok(())
 }
 
 fn emit_backend_event(app: &AppHandle, level: &'static str, message: impl Into<String>) {
@@ -505,6 +572,15 @@ fn cancel_local_transcription_if_needed(services: &State<'_, AppServices>) -> Re
         .lock()
         .map_err(|_| "Transcription service lock failed".to_string())?
         .cancel_session();
+    clear_local_transcription_cancel(services)?;
+    Ok(())
+}
+
+fn clear_local_transcription_cancel(services: &State<'_, AppServices>) -> Result<(), String> {
+    *services
+        .local_transcription_cancel
+        .lock()
+        .map_err(|_| "Transcription cancellation lock failed".to_string())? = None;
     Ok(())
 }
 
@@ -530,6 +606,8 @@ pub fn run() {
             clipboard: ClipboardService::default(),
             models: ModelService::default(),
             model_prepare_running: Arc::new(AtomicBool::new(false)),
+            transcription_cancel_requested: Arc::new(AtomicBool::new(false)),
+            local_transcription_cancel: Mutex::new(None),
             settings: Mutex::new(SettingsService::default()),
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
@@ -548,6 +626,7 @@ pub fn run() {
             close_settings_window,
             start_recording,
             stop_and_transcribe,
+            cancel_transcription,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

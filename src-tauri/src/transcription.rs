@@ -17,6 +17,22 @@ pub struct TranscriptionService {
     session: Option<ActiveTranscriptionSession>,
 }
 
+pub struct TranscriptionSessionStart {
+    pub audio_tx: Option<SyncSender<AudioFrame>>,
+    pub cancel_handle: TranscriptionCancelHandle,
+}
+
+#[derive(Clone)]
+pub struct TranscriptionCancelHandle {
+    sender: TranscriptionCancelSender,
+}
+
+#[derive(Clone)]
+enum TranscriptionCancelSender {
+    Whisper(mpsc::Sender<WhisperControl>),
+    Sherpa(mpsc::Sender<SherpaControl>),
+}
+
 enum ActiveTranscriptionBackend {
     Whisper(WhisperTranscriber),
     Sherpa(SherpaBackend),
@@ -66,6 +82,15 @@ impl TranscriptionService {
         settings: &Settings,
         models: &ModelService,
     ) -> Result<Option<SyncSender<AudioFrame>>, String> {
+        self.start_session_with_cancel(settings, models)
+            .map(|start| start.audio_tx)
+    }
+
+    pub fn start_session_with_cancel(
+        &mut self,
+        settings: &Settings,
+        models: &ModelService,
+    ) -> Result<TranscriptionSessionStart, String> {
         if self.session.is_some() {
             return Err("Transcription session already in progress".to_string());
         }
@@ -79,8 +104,12 @@ impl TranscriptionService {
                     transcriber.ensure_context(settings.model, &model_path)?;
                     let handle = transcriber.start_chunked_session(settings)?;
                     let audio_tx = handle.audio_tx.clone();
+                    let cancel_handle = handle.cancel_handle();
                     self.session = Some(ActiveTranscriptionSession::Whisper(handle));
-                    Ok(Some(audio_tx))
+                    Ok(TranscriptionSessionStart {
+                        audio_tx: Some(audio_tx),
+                        cancel_handle,
+                    })
                 } else {
                     Err("Whisper backend is unavailable".to_string())
                 }
@@ -98,8 +127,12 @@ impl TranscriptionService {
 
                 let handle = SherpaSessionHandle::start(settings.sherpa_model, paths)?;
                 let audio_tx = handle.audio_tx.clone();
+                let cancel_handle = handle.cancel_handle();
                 self.session = Some(ActiveTranscriptionSession::Sherpa(handle));
-                Ok(Some(audio_tx))
+                Ok(TranscriptionSessionStart {
+                    audio_tx: Some(audio_tx),
+                    cancel_handle,
+                })
             }
         }
     }
@@ -175,6 +208,19 @@ impl TranscriptionService {
             }
         });
         Ok(())
+    }
+}
+
+impl TranscriptionCancelHandle {
+    pub fn cancel(&self) {
+        match &self.sender {
+            TranscriptionCancelSender::Whisper(sender) => {
+                let _ = sender.send(WhisperControl::Cancel);
+            }
+            TranscriptionCancelSender::Sherpa(sender) => {
+                let _ = sender.send(SherpaControl::Cancel);
+            }
+        }
     }
 }
 
@@ -296,6 +342,12 @@ impl WhisperSessionHandle {
         drop(self.audio_tx);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
+        }
+    }
+
+    fn cancel_handle(&self) -> TranscriptionCancelHandle {
+        TranscriptionCancelHandle {
+            sender: TranscriptionCancelSender::Whisper(self.control_tx.clone()),
         }
     }
 }
@@ -640,6 +692,12 @@ impl SherpaSessionHandle {
         drop(self.audio_tx);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
+        }
+    }
+
+    fn cancel_handle(&self) -> TranscriptionCancelHandle {
+        TranscriptionCancelHandle {
+            sender: TranscriptionCancelSender::Sherpa(self.control_tx.clone()),
         }
     }
 }
