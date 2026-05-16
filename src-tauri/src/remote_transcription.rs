@@ -5,6 +5,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
+use std::net::IpAddr;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -393,17 +394,34 @@ fn validate_remote_base_url(raw_url: &str) -> Result<Url, String> {
     let host = url
         .host_str()
         .ok_or_else(|| "Remote host URL must include a host".to_string())?;
-    let local_host = matches!(host, "localhost" | "127.0.0.1" | "::1");
-    if scheme != "https" && !(scheme == "http" && local_host) {
-        return Err("Remote host URL must use HTTPS unless it is localhost".to_string());
+    if scheme != "https" && !(scheme == "http" && host_allows_plain_http(host)) {
+        return Err(
+            "Remote host URL must use HTTPS unless it is localhost or a private network address"
+                .to_string(),
+        );
     }
 
     Ok(url)
 }
 
+fn host_allows_plain_http(host: &str) -> bool {
+    if matches!(host, "localhost" | "localhost.") {
+        return true;
+    }
+
+    host.parse::<IpAddr>().is_ok_and(|ip| match ip {
+        IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.octets()[0] == 169
+        }
+        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decode_wav, encode_wav, read_stream_frame, write_stream_frame};
+    use super::{
+        decode_wav, encode_wav, read_stream_frame, validate_remote_base_url, write_stream_frame,
+    };
     use crate::audio::{AudioFrame, Recording};
 
     #[test]
@@ -435,5 +453,21 @@ mod tests {
 
         assert_eq!(decoded.sample_rate, frame.sample_rate);
         assert_eq!(decoded.pcm_i16, frame.pcm_i16);
+    }
+
+    #[test]
+    fn remote_url_allows_http_for_private_home_network_hosts() {
+        assert!(validate_remote_base_url("http://192.168.0.35:48173").is_ok());
+        assert!(validate_remote_base_url("http://10.0.0.2:48173").is_ok());
+        assert!(validate_remote_base_url("http://172.16.0.2:48173").is_ok());
+        assert!(validate_remote_base_url("http://localhost:48173").is_ok());
+    }
+
+    #[test]
+    fn remote_url_still_requires_https_for_public_hosts() {
+        let err = validate_remote_base_url("http://example.com:48173")
+            .expect_err("public HTTP host should be rejected");
+
+        assert!(err.contains("HTTPS"));
     }
 }
