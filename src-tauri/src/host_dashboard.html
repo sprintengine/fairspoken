@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Multivoice host</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:             #08080a;
+    --bg-card:        #0e0e10;
+    --bg-row:         rgba(255,255,255,0.025);
+    --border:         rgba(255,255,255,0.06);
+    --border-strong:  rgba(255,255,255,0.09);
+    --text-primary:   #ececee;
+    --text-secondary: #9a9aa2;
+    --text-muted:     #5a5a63;
+    --accent:         #ff1a3d;
+    --accent-glow:    rgba(255,26,61,0.45);
+    --warning:        #ffa600;
+    --success:        #30d158;
+    --gold-border:    rgba(255,206,92,0.24);
+    --gold-glow:      rgba(255,206,92,0.14);
+    --radius-card:    8px;
+    --mono:           ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans:           -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.4;
+    font-feature-settings: "ss01", "cv11", "zero";
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    padding: 48px 24px 80px;
+  }
+
+  .shell {
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* Header — the gold-halo signature surface (brand object). */
+  .header {
+    position: relative;
+    background: var(--bg-card);
+    border-radius: var(--radius-card);
+    padding: 16px 18px;
+    box-shadow:
+      inset 0 0 0 1px var(--gold-border),
+      inset 0 0 12px var(--gold-glow);
+  }
+
+  .header-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+  }
+
+  .brand-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 4px rgba(48,209,88,0.45);
+    flex-shrink: 0;
+  }
+
+  .header-version {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .header-meta {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .header-meta code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-primary);
+  }
+
+  .header-meta .sep {
+    color: var(--text-muted);
+  }
+
+  /* Stat tiles. */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  @media (max-width: 560px) {
+    .tiles { grid-template-columns: 1fr; }
+  }
+
+  .tile {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 84px;
+  }
+
+  .tile-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  .tile-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 3px rgba(48,209,88,0.4);
+    flex-shrink: 0;
+    transition: background 160ms ease, box-shadow 160ms ease;
+  }
+
+  .tile-dot[data-active="true"] {
+    background: var(--accent);
+    box-shadow: 0 0 4px var(--accent-glow);
+  }
+
+  .tile-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+
+  .tile-value[data-accent="true"] {
+    color: var(--accent);
+  }
+
+  .tile-value .unit {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-left: 2px;
+  }
+
+  /* Recent list. */
+  .recent {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: 14px 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .recent-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .recent-head h2 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.01em;
+  }
+
+  .recent-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .recent-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 78px 56px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .row:first-child {
+    border-top: 0;
+  }
+
+  .row.fresh {
+    animation: fresh-fade 1.2s ease-out 1;
+  }
+
+  @keyframes fresh-fade {
+    0%   { background: rgba(48,209,88,0.06); }
+    100% { background: transparent; }
+  }
+
+  .row-time {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .row-source {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .row-model {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row-model .sep {
+    color: var(--text-muted);
+    margin: 0 4px;
+  }
+
+  .row-duration {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .empty {
+    padding: 14px 0 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .error {
+    padding: 12px 14px;
+    margin-top: 4px;
+    border-radius: 6px;
+    background: rgba(255,26,61,0.07);
+    border: 1px solid rgba(255,26,61,0.18);
+    color: var(--text-primary);
+    font-size: 12px;
+    display: none;
+  }
+
+  .error[data-visible="true"] {
+    display: block;
+  }
+
+  .error code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .footnote {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    padding-top: 6px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row.fresh { animation: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="shell" data-state="idle">
+    <section class="header" aria-label="Host status">
+      <div class="header-row">
+        <div class="brand">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <span>Multivoice host</span>
+        </div>
+        <span class="header-version" id="version">—</span>
+      </div>
+      <div class="header-meta">
+        <code id="bindAddr">—</code>
+        <span class="sep">·</span>
+        <span>up <span id="uptime">—</span></span>
+      </div>
+    </section>
+
+    <section class="tiles" aria-label="Live metrics">
+      <div class="tile" role="group" aria-labelledby="activeLabel">
+        <div class="tile-label" id="activeLabel">
+          <span class="tile-dot" id="activeDot" aria-hidden="true"></span>
+          <span>Active sessions</span>
+        </div>
+        <div class="tile-value" id="activeValue">0</div>
+      </div>
+      <div class="tile" role="group" aria-labelledby="totalLabel">
+        <div class="tile-label" id="totalLabel">
+          <span>Transcriptions</span>
+        </div>
+        <div class="tile-value" id="totalValue">0</div>
+      </div>
+      <div class="tile" role="group" aria-labelledby="audioLabel">
+        <div class="tile-label" id="audioLabel">
+          <span>Audio processed</span>
+        </div>
+        <div class="tile-value" id="audioValue">0<span class="unit">s</span></div>
+      </div>
+    </section>
+
+    <section class="recent" aria-label="Recent transcriptions">
+      <div class="recent-head">
+        <h2>Recent transcriptions</h2>
+        <span class="recent-count" id="recentCount">0</span>
+      </div>
+      <div class="recent-list" id="recentList" role="list">
+        <p class="empty" id="emptyState">No transcriptions yet.</p>
+      </div>
+    </section>
+
+    <div class="error" id="errorPanel" role="status" aria-live="polite">
+      <span id="errorMessage">Unable to read host stats.</span>
+    </div>
+
+    <p class="footnote">Updates every 2 s.</p>
+  </main>
+
+<script>
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token") || "";
+
+  const el = {
+    shell:        document.querySelector(".shell"),
+    version:      document.getElementById("version"),
+    bindAddr:     document.getElementById("bindAddr"),
+    uptime:       document.getElementById("uptime"),
+    activeDot:    document.getElementById("activeDot"),
+    activeValue:  document.getElementById("activeValue"),
+    totalValue:   document.getElementById("totalValue"),
+    audioValue:   document.getElementById("audioValue"),
+    recentCount:  document.getElementById("recentCount"),
+    recentList:   document.getElementById("recentList"),
+    emptyState:   document.getElementById("emptyState"),
+    errorPanel:   document.getElementById("errorPanel"),
+    errorMessage: document.getElementById("errorMessage"),
+  };
+
+  let seenIds = new Set();
+  let firstLoad = true;
+
+  const pad2 = n => String(n).padStart(2, "0");
+
+  const formatUptime = (totalSeconds) => {
+    const s = Math.max(0, Math.floor(totalSeconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}h ${pad2(m)}m`;
+    if (m > 0) return `${m}m ${pad2(sec)}s`;
+    return `${sec}s`;
+  };
+
+  const formatTotalAudio = (totalSeconds) => {
+    const s = Math.max(0, totalSeconds);
+    if (s >= 3600) {
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return { value: `${h}h ${pad2(m)}m`, unit: "" };
+    }
+    if (s >= 60) {
+      const m = Math.floor(s / 60);
+      const sec = Math.round(s % 60);
+      return { value: `${m}m ${pad2(sec)}s`, unit: "" };
+    }
+    return { value: s.toFixed(1), unit: "s" };
+  };
+
+  const formatDuration = (sec) => {
+    const s = Math.max(0, sec);
+    if (s >= 60) {
+      const m = Math.floor(s / 60);
+      const r = (s - m * 60).toFixed(1);
+      return `${m}m ${r}s`;
+    }
+    return `${s.toFixed(1)}s`;
+  };
+
+  const formatClock = (ms) => {
+    if (!ms) return "—";
+    const d = new Date(ms);
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  };
+
+  const formatSource = (s) => {
+    if (s === "stream") return "stream";
+    if (s === "batch") return "batch";
+    return s || "—";
+  };
+
+  const renderRecent = (records) => {
+    if (!records || records.length === 0) {
+      el.recentList.innerHTML = "";
+      el.recentList.appendChild(el.emptyState);
+      el.emptyState.hidden = false;
+      el.recentCount.textContent = "0";
+      seenIds = new Set();
+      return;
+    }
+    el.emptyState.hidden = true;
+    el.recentCount.textContent = String(records.length);
+
+    const frag = document.createDocumentFragment();
+    const nextSeen = new Set();
+    for (const r of records) {
+      nextSeen.add(r.id);
+      const isFresh = !firstLoad && !seenIds.has(r.id);
+      const row = document.createElement("div");
+      row.className = "row" + (isFresh ? " fresh" : "");
+      row.setAttribute("role", "listitem");
+
+      const time = document.createElement("span");
+      time.className = "row-time";
+      time.textContent = formatClock(r.completedAtMs);
+
+      const source = document.createElement("span");
+      source.className = "row-source";
+      source.textContent = formatSource(r.source);
+
+      const model = document.createElement("span");
+      model.className = "row-model";
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = " · ";
+      const backendText = document.createTextNode(r.backend || "—");
+      const modelText = document.createTextNode(r.model || "—");
+      model.appendChild(backendText);
+      model.appendChild(sep);
+      model.appendChild(modelText);
+
+      const duration = document.createElement("span");
+      duration.className = "row-duration";
+      duration.textContent = formatDuration(r.durationSeconds || 0);
+
+      row.appendChild(time);
+      row.appendChild(source);
+      row.appendChild(model);
+      row.appendChild(duration);
+      frag.appendChild(row);
+    }
+
+    el.recentList.innerHTML = "";
+    el.recentList.appendChild(frag);
+    seenIds = nextSeen;
+    firstLoad = false;
+  };
+
+  const showError = (message) => {
+    el.errorMessage.textContent = message;
+    el.errorPanel.setAttribute("data-visible", "true");
+  };
+
+  const clearError = () => {
+    el.errorPanel.setAttribute("data-visible", "false");
+  };
+
+  const apply = (stats) => {
+    el.version.textContent = stats.serverVersion ? `v${stats.serverVersion}` : "";
+    el.bindAddr.textContent = stats.bindAddr || "—";
+    el.uptime.textContent = formatUptime(stats.uptimeSeconds || 0);
+
+    const active = stats.activeSessions || 0;
+    el.activeValue.textContent = String(active);
+    el.activeValue.setAttribute("data-accent", active > 0 ? "true" : "false");
+    el.activeDot.setAttribute("data-active", active > 0 ? "true" : "false");
+
+    el.totalValue.textContent = String(stats.totalTranscriptions || 0);
+
+    const audio = formatTotalAudio(stats.totalAudioSeconds || 0);
+    el.audioValue.innerHTML = "";
+    el.audioValue.appendChild(document.createTextNode(audio.value));
+    if (audio.unit) {
+      const u = document.createElement("span");
+      u.className = "unit";
+      u.textContent = audio.unit;
+      el.audioValue.appendChild(u);
+    }
+
+    renderRecent(stats.recent || []);
+  };
+
+  const fetchStats = async () => {
+    try {
+      const headers = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/v1/stats", { headers, cache: "no-store" });
+      if (res.status === 401) {
+        showError("Unauthorized. Append ?token=… to the URL with the host token.");
+        return;
+      }
+      if (!res.ok) {
+        showError(`Host returned ${res.status}.`);
+        return;
+      }
+      const data = await res.json();
+      clearError();
+      apply(data);
+    } catch (err) {
+      showError("Lost connection to host. Retrying…");
+    }
+  };
+
+  fetchStats();
+  setInterval(fetchStats, 2000);
+})();
+</script>
+</body>
+</html>

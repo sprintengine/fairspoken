@@ -4,6 +4,7 @@ mod host;
 mod models;
 mod remote_transcription;
 mod settings;
+mod transcript_history;
 mod transcription;
 
 pub use host::run_transcription_host;
@@ -24,11 +25,16 @@ use settings::{Settings, SettingsService, TranscriptionBackend, TranscriptionLoc
 use std::sync::atomic::AtomicU64;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    mpsc, Arc, Mutex,
 };
 use std::thread;
-use tauri::{AppHandle, Emitter, Manager, State};
-use transcription::{TranscriptionCancelHandle, TranscriptionService};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State};
+use transcript_history::{
+    NewTranscriptHistoryItem, TranscriptHistoryItem, TranscriptHistoryService,
+};
+use transcription::{
+    TranscriptPreview, TranscriptionCancelHandle, TranscriptionPreviewSender, TranscriptionService,
+};
 
 const MIN_RECORDING_SECONDS: f32 = 0.35;
 const SILENCE_RMS_THRESHOLD: f32 = 0.001;
@@ -43,8 +49,10 @@ struct AppServices {
     transcription_cancel_requested: Arc<AtomicBool>,
     local_transcription_cancel: Mutex<Option<TranscriptionCancelHandle>>,
     settings: Mutex<SettingsService>,
+    transcript_history: Mutex<TranscriptHistoryService>,
     transcription: Mutex<TranscriptionService>,
     remote_transcription: Mutex<Option<RemoteStreamingSession>>,
+    transcript_shelf_positioned: AtomicBool,
 }
 
 #[derive(Serialize)]
@@ -54,7 +62,19 @@ struct BackendStatus {
 }
 
 #[tauri::command]
-fn get_app_status() -> BackendStatus {
+fn get_app_status(services: State<'_, AppServices>) -> BackendStatus {
+    if services
+        .audio
+        .lock()
+        .map(|audio| audio.is_recording())
+        .unwrap_or(false)
+    {
+        return BackendStatus {
+            state: "recording",
+            message: "Recording",
+        };
+    }
+
     BackendStatus {
         state: "idle",
         message: "Ready",
@@ -129,6 +149,20 @@ struct BackendLogEvent {
     id: String,
     level: &'static str,
     message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptPreviewEvent {
+    index: usize,
+    text: String,
+    final_preview: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptHistoryUpdatedEvent {
+    item: TranscriptHistoryItem,
 }
 
 #[tauri::command]
@@ -341,10 +375,112 @@ fn close_settings_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn show_transcript_shelf_window(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("transcript-shelf")
+        .ok_or_else(|| "Transcript shelf window is not configured".to_string())?;
+
+    if !services.transcript_shelf_positioned.load(Ordering::SeqCst) {
+        if let Some(monitor) = window.current_monitor().map_err(|err| err.to_string())? {
+            let position = monitor.position();
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            let x = f64::from(position.x) / scale + 18.0;
+            let y = (f64::from(position.y) + f64::from(size.height)) / scale - 320.0 - 56.0;
+            window
+                .set_position(Position::Logical(LogicalPosition { x, y: y.max(18.0) }))
+                .map_err(|err| err.to_string())?;
+            services
+                .transcript_shelf_positioned
+                .store(true, Ordering::SeqCst);
+        }
+    }
+
+    window.show().map_err(|err| err.to_string())?;
+    window.set_focus().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_transcript_shelf_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("transcript-shelf") {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_transcript_history(
+    services: State<'_, AppServices>,
+) -> Result<Vec<TranscriptHistoryItem>, String> {
+    services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())
+        .map(|history| history.list())
+}
+
+#[tauri::command]
+fn clear_transcript_history(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())?
+        .clear()?;
+    emit_backend_event(&app, "info", "Transcript history cleared");
+    Ok(())
+}
+
+#[tauri::command]
+fn copy_transcript_history_item(
+    app: AppHandle,
+    id: String,
+    services: State<'_, AppServices>,
+) -> Result<TranscriptHistoryItem, String> {
+    let item = services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())?
+        .find(&id)
+        .ok_or_else(|| "Transcript history item was not found".to_string())?;
+
+    services.clipboard.write_text(&item.text)?;
+    let _ = app.emit("transcript-copied", &item);
+    Ok(item)
+}
+
+#[tauri::command]
+fn delete_transcript_history_item(
+    id: String,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())?
+        .delete(&id)
+}
+
+#[tauri::command]
 fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u16, String> {
     services
         .transcription_cancel_requested
         .store(false, Ordering::SeqCst);
+
+    let recording_active = services
+        .audio
+        .lock()
+        .map_err(|_| "Audio service lock failed".to_string())?
+        .is_recording();
+    if recording_active {
+        return Err("Recording already in progress".to_string());
+    }
 
     let settings = services
         .settings
@@ -352,13 +488,18 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
 
+    // If a previous start failed after opening the transcription worker but before
+    // audio capture became active, clear that stale worker before the next attempt.
+    cancel_transcription_for_location(&services, settings.transcription_location)?;
+
     let stream_sink = match settings.transcription_location {
         TranscriptionLocation::Local => {
+            let preview_tx = start_transcript_preview_forwarder(app.clone());
             let start = services
                 .transcription
                 .lock()
                 .map_err(|_| "Transcription service lock failed".to_string())?
-                .start_session_with_cancel(&settings, &services.models)?;
+                .start_session_with_cancel(&settings, &services.models, Some(preview_tx))?;
             *services
                 .local_transcription_cancel
                 .lock()
@@ -521,7 +662,24 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         return Err("Transcription was cancelled".to_string());
     }
 
+    let stored_item = services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())?
+        .add(NewTranscriptHistoryItem {
+            text: transcript.clone(),
+            backend: backend_id(settings.transcription_backend).to_string(),
+            location: location_id(settings.transcription_location).to_string(),
+            duration_seconds: stats.duration_seconds,
+        })?;
+
     services.clipboard.write_text(&transcript)?;
+    let _ = app.emit(
+        "transcript-history-updated",
+        TranscriptHistoryUpdatedEvent {
+            item: stored_item.clone(),
+        },
+    );
     emit_backend_event(&app, "info", "Transcript copied to clipboard");
     Ok(transcript)
 }
@@ -554,6 +712,40 @@ fn emit_backend_event(app: &AppHandle, level: &'static str, message: impl Into<S
             message: message.into(),
         },
     );
+}
+
+fn start_transcript_preview_forwarder(app: AppHandle) -> TranscriptionPreviewSender {
+    let (tx, rx) = mpsc::channel::<TranscriptPreview>();
+    thread::Builder::new()
+        .name("transcript-preview-forwarder".to_string())
+        .spawn(move || {
+            for preview in rx {
+                let _ = app.emit(
+                    "transcript-preview",
+                    TranscriptPreviewEvent {
+                        index: preview.index,
+                        text: preview.text,
+                        final_preview: preview.final_preview,
+                    },
+                );
+            }
+        })
+        .ok();
+    tx
+}
+
+fn backend_id(backend: TranscriptionBackend) -> &'static str {
+    match backend {
+        TranscriptionBackend::Whisper => "whisper",
+        TranscriptionBackend::SherpaStreaming => "sherpa-streaming",
+    }
+}
+
+fn location_id(location: TranscriptionLocation) -> &'static str {
+    match location {
+        TranscriptionLocation::Local => "local",
+        TranscriptionLocation::RemoteHost => "remote-host",
+    }
 }
 
 fn cancel_transcription_for_location(
@@ -609,8 +801,10 @@ pub fn run() {
             transcription_cancel_requested: Arc::new(AtomicBool::new(false)),
             local_transcription_cancel: Mutex::new(None),
             settings: Mutex::new(SettingsService::default()),
+            transcript_history: Mutex::new(TranscriptHistoryService::default()),
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
+            transcript_shelf_positioned: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             get_app_status,
@@ -624,6 +818,12 @@ pub fn run() {
             test_remote_transcription_host,
             open_settings_window,
             close_settings_window,
+            show_transcript_shelf_window,
+            hide_transcript_shelf_window,
+            get_transcript_history,
+            clear_transcript_history,
+            copy_transcript_history_item,
+            delete_transcript_history_item,
             start_recording,
             stop_and_transcribe,
             cancel_transcription,

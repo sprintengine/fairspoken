@@ -6,10 +6,15 @@ use crate::remote_transcription::{
 };
 use crate::settings::{Settings, TranscriptionBackend};
 use crate::transcription::TranscriptionService;
+use serde::Serialize;
+use std::collections::VecDeque;
 use std::env;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const DASHBOARD_HTML: &str = include_str!("host_dashboard.html");
+const RECENT_CAPACITY: usize = 50;
 
 pub fn run_transcription_host() -> Result<(), String> {
     let addr = env::var("MULTIVOICE_HOST_ADDR").unwrap_or_else(|_| "127.0.0.1:48173".to_string());
@@ -20,9 +25,17 @@ pub fn run_transcription_host() -> Result<(), String> {
 
     let models = ModelService::default();
     let mut transcription = TranscriptionService::default();
+    let mut metrics = HostMetrics::new();
 
     for request in server.incoming_requests() {
-        let response = handle_request(request, token.as_deref(), &models, &mut transcription);
+        let response = handle_request(
+            request,
+            token.as_deref(),
+            &models,
+            &mut transcription,
+            &mut metrics,
+            &addr,
+        );
         if let Err(err) = response {
             eprintln!("Failed to handle transcription host request: {err}");
         }
@@ -36,7 +49,15 @@ fn handle_request(
     token: Option<&str>,
     models: &ModelService,
     transcription: &mut TranscriptionService,
+    metrics: &mut HostMetrics,
+    bind_addr: &str,
 ) -> Result<(), String> {
+    // The dashboard HTML itself is safe to serve without auth — it contains no secrets
+    // and gates its own data calls behind the token. Every other route still authenticates.
+    if matches!((request.method(), request.url()), (&Method::Get, "/")) {
+        return respond_html(request, DASHBOARD_HTML);
+    }
+
     if !authorized(&request, token) {
         return respond_json(
             request,
@@ -60,6 +81,15 @@ fn handle_request(
                     .map_err(|err| format!("Failed to serialize health response: {err}"))?,
             )
         }
+        (&Method::Get, "/v1/stats") => {
+            let snapshot = metrics.snapshot(bind_addr);
+            respond_json(
+                request,
+                StatusCode(200),
+                serde_json::to_string(&snapshot)
+                    .map_err(|err| format!("Failed to serialize stats response: {err}"))?,
+            )
+        }
         (&Method::Post, "/v1/transcriptions") => {
             let mut body = Vec::new();
             if let Err(err) = request.as_reader().read_to_end(&mut body) {
@@ -78,15 +108,22 @@ fn handle_request(
                 Err(err) => return respond_error(request, StatusCode(400), &err),
             };
             let duration_seconds = recording.stats().duration_seconds;
+            metrics.begin_session();
             let text = match transcribe_recording(transcription, models, &settings, recording) {
                 Ok(text) => text,
-                Err(err) => return respond_error(request, StatusCode(500), &err),
+                Err(err) => {
+                    metrics.abort_session();
+                    return respond_error(request, StatusCode(500), &err);
+                }
             };
+            let backend = backend_id(settings.transcription_backend).to_string();
+            let model = selected_model_id(&settings).to_string();
+            metrics.complete_session(duration_seconds, backend.clone(), model.clone(), "batch");
             let response = RemoteTranscriptionResponse {
                 text,
                 duration_seconds,
-                backend: backend_id(settings.transcription_backend).to_string(),
-                model: selected_model_id(&settings).to_string(),
+                backend,
+                model,
                 server_version: Some(SERVER_VERSION.to_string()),
             };
             respond_json(
@@ -101,16 +138,23 @@ fn handle_request(
                 Ok(settings) => settings,
                 Err(err) => return respond_error(request, StatusCode(400), &err),
             };
+            metrics.begin_session();
             let (text, duration_seconds) =
                 match transcribe_stream(transcription, models, &settings, &mut request) {
                     Ok(result) => result,
-                    Err(err) => return respond_error(request, StatusCode(500), &err),
+                    Err(err) => {
+                        metrics.abort_session();
+                        return respond_error(request, StatusCode(500), &err);
+                    }
                 };
+            let backend = backend_id(settings.transcription_backend).to_string();
+            let model = selected_model_id(&settings).to_string();
+            metrics.complete_session(duration_seconds, backend.clone(), model.clone(), "stream");
             let response = RemoteTranscriptionResponse {
                 text,
                 duration_seconds,
-                backend: backend_id(settings.transcription_backend).to_string(),
-                model: selected_model_id(&settings).to_string(),
+                backend,
+                model,
                 server_version: Some(SERVER_VERSION.to_string()),
             };
             respond_json(
@@ -230,9 +274,62 @@ fn authorized(request: &Request, token: Option<&str>) -> bool {
     let Some(token) = token.filter(|value| !value.trim().is_empty()) else {
         return true;
     };
-    header_value(request, "authorization")
-        .map(|value| value == format!("Bearer {token}"))
+    let bearer = format!("Bearer {token}");
+    if header_value(request, "authorization")
+        .map(|value| value == bearer)
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // Allow the dashboard's GET polling to authenticate via ?token=… so the host
+    // operator can bookmark a single URL in the browser.
+    query_param(request.url(), "token")
+        .map(|value| value == token)
+        .unwrap_or(false)
+}
+
+fn query_param(url: &str, name: &str) -> Option<String> {
+    let query_start = url.find('?')? + 1;
+    let query = &url[query_start..];
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?;
+        if key == name {
+            let raw_value = parts.next().unwrap_or("");
+            return Some(percent_decode(raw_value));
+        }
+    }
+    None
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else if b == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            match (hi, lo) {
+                (Some(hi), Some(lo)) => {
+                    out.push(((hi << 4) | lo) as u8);
+                    i += 3;
+                }
+                _ => {
+                    out.push(b);
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
@@ -253,4 +350,113 @@ fn respond_json(request: Request, status: StatusCode, body: String) -> Result<()
                 .with_header(content_type),
         )
         .map_err(|err| format!("Failed to send response: {err}"))
+}
+
+fn respond_html(request: Request, body: &str) -> Result<(), String> {
+    let content_type = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+        .map_err(|_| "Failed to create response content-type header".to_string())?;
+    request
+        .respond(
+            Response::from_string(body)
+                .with_status_code(StatusCode(200))
+                .with_header(content_type),
+        )
+        .map_err(|err| format!("Failed to send response: {err}"))
+}
+
+/// Lightweight in-process metrics for the standalone transcription host.
+/// Lives in the single request-loop thread, so no synchronisation is needed.
+struct HostMetrics {
+    started: Instant,
+    active_sessions: u32,
+    total_transcriptions: u64,
+    total_audio_seconds: f64,
+    next_record_id: u64,
+    recent: VecDeque<TranscriptionRecord>,
+}
+
+impl HostMetrics {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            active_sessions: 0,
+            total_transcriptions: 0,
+            total_audio_seconds: 0.0,
+            next_record_id: 0,
+            recent: VecDeque::with_capacity(RECENT_CAPACITY),
+        }
+    }
+
+    fn begin_session(&mut self) {
+        self.active_sessions = self.active_sessions.saturating_add(1);
+    }
+
+    fn abort_session(&mut self) {
+        self.active_sessions = self.active_sessions.saturating_sub(1);
+    }
+
+    fn complete_session(
+        &mut self,
+        duration_seconds: f32,
+        backend: String,
+        model: String,
+        source: &'static str,
+    ) {
+        self.active_sessions = self.active_sessions.saturating_sub(1);
+        self.total_transcriptions = self.total_transcriptions.saturating_add(1);
+        self.total_audio_seconds += duration_seconds as f64;
+        self.next_record_id = self.next_record_id.saturating_add(1);
+
+        let completed_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        self.recent.push_front(TranscriptionRecord {
+            id: self.next_record_id,
+            completed_at_ms,
+            duration_seconds,
+            backend,
+            model,
+            source,
+        });
+        while self.recent.len() > RECENT_CAPACITY {
+            self.recent.pop_back();
+        }
+    }
+
+    fn snapshot(&self, bind_addr: &str) -> StatsSnapshot<'_> {
+        StatsSnapshot {
+            server_version: SERVER_VERSION,
+            bind_addr: bind_addr.to_string(),
+            uptime_seconds: self.started.elapsed().as_secs(),
+            active_sessions: self.active_sessions,
+            total_transcriptions: self.total_transcriptions,
+            total_audio_seconds: self.total_audio_seconds,
+            recent: self.recent.iter().collect(),
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptionRecord {
+    id: u64,
+    completed_at_ms: u64,
+    duration_seconds: f32,
+    backend: String,
+    model: String,
+    source: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsSnapshot<'a> {
+    server_version: &'static str,
+    bind_addr: String,
+    uptime_seconds: u64,
+    active_sessions: u32,
+    total_transcriptions: u64,
+    total_audio_seconds: f64,
+    recent: Vec<&'a TranscriptionRecord>,
 }

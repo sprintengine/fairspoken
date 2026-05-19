@@ -22,6 +22,15 @@ pub struct TranscriptionSessionStart {
     pub cancel_handle: TranscriptionCancelHandle,
 }
 
+pub type TranscriptionPreviewSender = mpsc::Sender<TranscriptPreview>;
+
+#[derive(Clone, Debug)]
+pub struct TranscriptPreview {
+    pub index: usize,
+    pub text: String,
+    pub final_preview: bool,
+}
+
 #[derive(Clone)]
 pub struct TranscriptionCancelHandle {
     sender: TranscriptionCancelSender,
@@ -82,7 +91,7 @@ impl TranscriptionService {
         settings: &Settings,
         models: &ModelService,
     ) -> Result<Option<SyncSender<AudioFrame>>, String> {
-        self.start_session_with_cancel(settings, models)
+        self.start_session_with_cancel(settings, models, None)
             .map(|start| start.audio_tx)
     }
 
@@ -90,6 +99,7 @@ impl TranscriptionService {
         &mut self,
         settings: &Settings,
         models: &ModelService,
+        preview_tx: Option<TranscriptionPreviewSender>,
     ) -> Result<TranscriptionSessionStart, String> {
         if self.session.is_some() {
             return Err("Transcription session already in progress".to_string());
@@ -102,7 +112,7 @@ impl TranscriptionService {
                 {
                     let model_path = models.path_for(settings.model);
                     transcriber.ensure_context(settings.model, &model_path)?;
-                    let handle = transcriber.start_chunked_session(settings)?;
+                    let handle = transcriber.start_chunked_session(settings, preview_tx)?;
                     let audio_tx = handle.audio_tx.clone();
                     let cancel_handle = handle.cancel_handle();
                     self.session = Some(ActiveTranscriptionSession::Whisper(handle));
@@ -125,7 +135,7 @@ impl TranscriptionService {
                     return Err(status.message);
                 }
 
-                let handle = SherpaSessionHandle::start(settings.sherpa_model, paths)?;
+                let handle = SherpaSessionHandle::start(settings.sherpa_model, paths, preview_tx)?;
                 let audio_tx = handle.audio_tx.clone();
                 let cancel_handle = handle.cancel_handle();
                 self.session = Some(ActiveTranscriptionSession::Sherpa(handle));
@@ -280,7 +290,11 @@ impl WhisperTranscriber {
         Ok(())
     }
 
-    fn start_chunked_session(&self, settings: &Settings) -> Result<WhisperSessionHandle, String> {
+    fn start_chunked_session(
+        &self,
+        settings: &Settings,
+        preview_tx: Option<TranscriptionPreviewSender>,
+    ) -> Result<WhisperSessionHandle, String> {
         let context = self
             .context
             .as_ref()
@@ -289,6 +303,7 @@ impl WhisperTranscriber {
             Arc::clone(context),
             settings.language.clone(),
             settings.whisper_chunk_seconds,
+            preview_tx,
         )
     }
 }
@@ -298,6 +313,7 @@ impl WhisperSessionHandle {
         context: Arc<WhisperContext>,
         language: String,
         chunk_seconds: u16,
+        preview_tx: Option<TranscriptionPreviewSender>,
     ) -> Result<Self, String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(WHISPER_STREAM_CHANNEL_DEPTH);
         let (control_tx, control_rx) = mpsc::channel::<WhisperControl>();
@@ -311,6 +327,7 @@ impl WhisperSessionHandle {
                     chunk_seconds,
                     audio_rx,
                     control_rx,
+                    preview_tx,
                 );
                 let _ = result_tx.send(result);
             })
@@ -369,6 +386,7 @@ fn run_whisper_chunked_session(
     chunk_seconds: u16,
     audio_rx: Receiver<AudioFrame>,
     control_rx: Receiver<WhisperControl>,
+    preview_tx: Option<TranscriptionPreviewSender>,
 ) -> Result<String, String> {
     let chunk_seconds = usize::from(chunk_seconds.clamp(5, 60));
     let (job_tx, job_rx) = mpsc::channel::<WhisperChunkJob>();
@@ -411,6 +429,7 @@ fn run_whisper_chunked_session(
     let mut chunk_index = 0;
     let mut dispatched_chunks = 0;
     let mut received_audio = false;
+    let mut chunks = Vec::new();
 
     loop {
         match control_rx.try_recv() {
@@ -439,10 +458,12 @@ fn run_whisper_chunked_session(
                     &mut chunk_index,
                     &mut dispatched_chunks,
                 )?;
+                collect_available_whisper_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        collect_available_whisper_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
 
     for frame in audio_rx.try_iter() {
@@ -460,6 +481,7 @@ fn run_whisper_chunked_session(
             &mut chunk_index,
             &mut dispatched_chunks,
         )?;
+        collect_available_whisper_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
 
     if !received_audio {
@@ -478,9 +500,9 @@ fn run_whisper_chunked_session(
     drop(job_tx);
     let _ = worker.join();
 
-    let mut chunks = Vec::new();
     for result in chunk_result_rx {
         chunks.push(result?);
+        emit_whisper_preview(&chunks, &preview_tx, false);
     }
 
     chunks.sort_by_key(|chunk| chunk.index);
@@ -488,7 +510,60 @@ fn run_whisper_chunked_session(
     if transcript.is_empty() {
         return Err("No speech was transcribed".to_string());
     }
+    emit_preview(&preview_tx, chunk_index, transcript.clone(), true);
     Ok(transcript)
+}
+
+fn collect_available_whisper_results(
+    chunk_result_rx: &Receiver<Result<WhisperChunkResult, String>>,
+    chunks: &mut Vec<WhisperChunkResult>,
+    preview_tx: &Option<TranscriptionPreviewSender>,
+) -> Result<(), String> {
+    loop {
+        match chunk_result_rx.try_recv() {
+            Ok(result) => {
+                chunks.push(result?);
+                emit_whisper_preview(chunks, preview_tx, false);
+            }
+            Err(mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
+fn emit_whisper_preview(
+    chunks: &[WhisperChunkResult],
+    preview_tx: &Option<TranscriptionPreviewSender>,
+    final_preview: bool,
+) {
+    let mut sorted = chunks
+        .iter()
+        .map(|chunk| WhisperChunkResult {
+            index: chunk.index,
+            text: chunk.text.clone(),
+        })
+        .collect::<Vec<_>>();
+    sorted.sort_by_key(|chunk| chunk.index);
+    let text = merge_whisper_chunk_results(&sorted);
+    if !text.is_empty() {
+        let index = sorted.last().map(|chunk| chunk.index).unwrap_or_default();
+        emit_preview(preview_tx, index, text, final_preview);
+    }
+}
+
+fn emit_preview(
+    preview_tx: &Option<TranscriptionPreviewSender>,
+    index: usize,
+    text: String,
+    final_preview: bool,
+) {
+    if let Some(preview_tx) = preview_tx {
+        let _ = preview_tx.send(TranscriptPreview {
+            index,
+            text,
+            final_preview,
+        });
+    }
 }
 
 fn dispatch_ready_whisper_chunks(
@@ -654,14 +729,18 @@ fn normalize_transcript_word(word: &str) -> String {
 }
 
 impl SherpaSessionHandle {
-    fn start(model: SherpaModel, paths: crate::models::SherpaModelPaths) -> Result<Self, String> {
+    fn start(
+        model: SherpaModel,
+        paths: crate::models::SherpaModelPaths,
+        preview_tx: Option<TranscriptionPreviewSender>,
+    ) -> Result<Self, String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(12);
         let (control_tx, control_rx) = mpsc::channel::<SherpaControl>();
         let (result_tx, result_rx) = mpsc::channel::<Result<String, String>>();
         let worker = thread::Builder::new()
             .name("sherpa-streaming-transcription".to_string())
             .spawn(move || {
-                let result = run_sherpa_session(model, paths, audio_rx, control_rx);
+                let result = run_sherpa_session(model, paths, audio_rx, control_rx, preview_tx);
                 let _ = result_tx.send(result);
             })
             .map_err(|err| format!("Failed to start Sherpa worker: {err}"))?;
@@ -707,10 +786,12 @@ fn run_sherpa_session(
     paths: crate::models::SherpaModelPaths,
     audio_rx: Receiver<AudioFrame>,
     control_rx: Receiver<SherpaControl>,
+    preview_tx: Option<TranscriptionPreviewSender>,
 ) -> Result<String, String> {
     let recognizer = create_sherpa_recognizer(&paths)?;
     let stream = recognizer.create_stream();
     let mut latest = String::new();
+    let mut preview_index = 0;
 
     loop {
         match control_rx.try_recv() {
@@ -730,6 +811,8 @@ fn run_sherpa_session(
                     &frame.pcm_i16,
                     frame.sample_rate,
                     &mut latest,
+                    &preview_tx,
+                    &mut preview_index,
                 );
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -744,6 +827,8 @@ fn run_sherpa_session(
             &frame.pcm_i16,
             frame.sample_rate,
             &mut latest,
+            &preview_tx,
+            &mut preview_index,
         );
     }
 
@@ -755,6 +840,8 @@ fn run_sherpa_session(
         if let Some(result) = recognizer.get_result(&stream) {
             if !result.text.trim().is_empty() {
                 latest = result.text.trim().to_string();
+                emit_preview(&preview_tx, preview_index, latest.clone(), false);
+                preview_index += 1;
             }
         }
     }
@@ -762,7 +849,9 @@ fn run_sherpa_session(
     if latest.trim().is_empty() {
         return Err("No speech was transcribed".to_string());
     }
-    Ok(latest.trim().to_string())
+    let transcript = latest.trim().to_string();
+    emit_preview(&preview_tx, preview_index, transcript.clone(), true);
+    Ok(transcript)
 }
 
 fn create_sherpa_recognizer(
@@ -787,14 +876,19 @@ fn feed_sherpa_samples(
     samples: &[i16],
     sample_rate: u32,
     latest: &mut String,
+    preview_tx: &Option<TranscriptionPreviewSender>,
+    preview_index: &mut usize,
 ) {
     let audio = resample_i16_to_16khz_f32(samples, sample_rate);
     stream.accept_waveform(16_000, &audio);
     while recognizer.is_ready(stream) {
         recognizer.decode(stream);
         if let Some(result) = recognizer.get_result(stream) {
-            if !result.text.trim().is_empty() {
-                *latest = result.text.trim().to_string();
+            let text = result.text.trim();
+            if !text.is_empty() && text != latest.trim() {
+                *latest = text.to_string();
+                emit_preview(preview_tx, *preview_index, latest.clone(), false);
+                *preview_index += 1;
             }
         }
         if recognizer.is_endpoint(stream) {

@@ -497,7 +497,13 @@ function renderEvent(event: AppEvent): HTMLElement {
 
   const meta = document.createElement("span");
   meta.className = "event-meta";
-  meta.textContent = `${formatEventTime(event.timestamp)} ${event.level}`;
+  const time = document.createElement("span");
+  time.className = "event-time";
+  time.textContent = formatEventTime(event.timestamp);
+  const level = document.createElement("span");
+  level.className = "event-level";
+  level.textContent = event.level;
+  meta.append(time, level);
 
   const message = document.createElement("span");
   message.className = "event-message";

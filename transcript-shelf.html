@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en" class="shelf-root">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>multivoice Transcript Shelf</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <script type="module" src="/src/transcriptShelf.ts" defer></script>
+</head>
+<body class="shelf-body">
+  <main class="shelf-window" aria-label="Transcript clips" data-tauri-drag-region>
+    <div class="shelf-drag-handle" data-tauri-drag-region aria-hidden="true">
+      <span class="shelf-drag-grip" data-tauri-drag-region></span>
+    </div>
+    <div class="live-transcript-bubble shelf-live" id="liveTranscriptBubble" aria-live="polite" hidden>
+      <div class="live-transcript-text" id="liveTranscriptText"></div>
+    </div>
+    <div class="transcript-shelf shelf-clips" id="transcriptShelf" aria-live="polite"></div>
+  </main>
+</body>
+</html>

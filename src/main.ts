@@ -16,6 +16,25 @@ interface BackendLogEvent {
   message: string;
 }
 
+interface TranscriptPreviewEvent {
+  index: number;
+  text: string;
+  finalPreview: boolean;
+}
+
+interface TranscriptHistoryItem {
+  id: string;
+  createdAt: number;
+  text: string;
+  backend: string;
+  location: string;
+  durationSeconds: number;
+}
+
+interface TranscriptHistoryUpdatedEvent {
+  item: TranscriptHistoryItem;
+}
+
 const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
 const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
 
@@ -26,6 +45,9 @@ const settingsEventBadge = required<HTMLElement>("settingsEventBadge");
 const copyIndicator = required<HTMLElement>("copyIndicator");
 const statusLabel = required<HTMLElement>("statusLabel");
 const timerEl = required<HTMLElement>("timer");
+const liveTranscriptBubble = required<HTMLElement>("liveTranscriptBubble");
+const liveTranscriptText = required<HTMLElement>("liveTranscriptText");
+const transcriptShelf = required<HTMLElement>("transcriptShelf");
 
 let appState: AppState = "idle";
 let timerInterval: ReturnType<typeof setInterval> | null = null;
@@ -36,6 +58,12 @@ let recordingSeconds = 0;
 let startRecordingRequestPending = false;
 let stopRecordingRequestPending = false;
 let cancelTranscriptionRequestPending = false;
+let transcriptHistory: TranscriptHistoryItem[] = [];
+let copiedTranscriptId: string | null = null;
+let shelfHideTimer: ReturnType<typeof setTimeout> | null = null;
+let shelfVisible = false;
+
+const SHELF_VISIBLE_MS = 18_000;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -166,6 +194,145 @@ function updateSettingsEventBadge(): void {
   settingsBtn.title = severity === "error" ? "Settings: errors recorded" : severity === "warning" ? "Settings: warnings recorded" : "Settings";
 }
 
+async function loadTranscriptHistory(): Promise<void> {
+  transcriptHistory = uniqueTranscriptItems(await invoke<TranscriptHistoryItem[]>("get_transcript_history"));
+  copiedTranscriptId = copiedTranscriptId ?? transcriptHistory[0]?.id ?? null;
+  renderTranscriptShelf();
+}
+
+function renderTranscriptShelf(): void {
+  transcriptShelf.replaceChildren();
+
+  if (!shelfVisible) {
+    return;
+  }
+
+  for (const item of transcriptHistory.slice(0, 8)) {
+    const clip = document.createElement("div");
+    clip.className = "transcript-clip";
+    clip.dataset.id = item.id;
+    clip.dataset.copied = String(item.id === copiedTranscriptId);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "transcript-clip-copy";
+    button.title = item.text;
+    button.setAttribute("aria-label", item.id === copiedTranscriptId ? "Copied transcript clip" : "Copy transcript clip");
+    const text = document.createElement("span");
+    text.className = "transcript-clip-text";
+    text.textContent = item.text;
+    button.append(text);
+    button.addEventListener("click", () => {
+      void copyTranscriptItem(item.id);
+    });
+
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "transcript-clip-close";
+    closeButton.setAttribute("aria-label", "Delete transcript clip");
+    closeButton.title = "Delete";
+    closeButton.textContent = "x";
+    closeButton.addEventListener("click", () => {
+      void deleteTranscriptItem(item.id);
+    });
+
+    clip.append(button, closeButton);
+    transcriptShelf.append(clip);
+  }
+}
+
+async function copyTranscriptItem(id: string): Promise<void> {
+  try {
+    const item = await invoke<TranscriptHistoryItem>("copy_transcript_history_item", { id });
+    copiedTranscriptId = item.id;
+    showTranscriptShelf();
+    renderTranscriptShelf();
+    showCopiedStatus();
+    showCopyIndicator();
+  } catch (error) {
+    addEvent("error", error instanceof Error ? error.message : String(error));
+    setState("error", "Error");
+  }
+}
+
+async function deleteTranscriptItem(id: string): Promise<void> {
+  const clip = transcriptShelf.querySelector<HTMLElement>(`.transcript-clip[data-id="${CSS.escape(id)}"]`);
+  clip?.setAttribute("data-removing", "true");
+
+  window.setTimeout(async () => {
+    try {
+      await invoke("delete_transcript_history_item", { id });
+      transcriptHistory = transcriptHistory.filter((item) => item.id !== id);
+      if (copiedTranscriptId === id) {
+        copiedTranscriptId = transcriptHistory[0]?.id ?? null;
+      }
+      renderTranscriptShelf();
+    } catch (error) {
+      addEvent("error", error instanceof Error ? error.message : String(error));
+      clip?.removeAttribute("data-removing");
+    }
+  }, 170);
+}
+
+function addOrReplaceTranscriptItem(item: TranscriptHistoryItem): void {
+  transcriptHistory = uniqueTranscriptItems([item, ...transcriptHistory]).slice(0, 50);
+  copiedTranscriptId = item.id;
+  showTranscriptShelf();
+  renderTranscriptShelf();
+}
+
+function uniqueTranscriptItems(items: TranscriptHistoryItem[]): TranscriptHistoryItem[] {
+  const seen = new Set<string>();
+  const unique: TranscriptHistoryItem[] = [];
+  for (const item of items) {
+    const key = item.text.replace(/\s+/g, " ").trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function resetLiveTranscript(): void {
+  liveTranscriptText.textContent = "";
+  liveTranscriptBubble.hidden = true;
+}
+
+function showLiveTranscript(text: string): void {
+  const preview = recentTranscriptText(text);
+  if (!preview) return;
+  if (shelfHideTimer !== null) {
+    clearTimeout(shelfHideTimer);
+    shelfHideTimer = null;
+  }
+  liveTranscriptText.textContent = preview;
+  liveTranscriptBubble.hidden = false;
+  liveTranscriptText.scrollTop = liveTranscriptText.scrollHeight;
+}
+
+function showTranscriptShelf(): void {
+  shelfVisible = true;
+  if (shelfHideTimer !== null) {
+    clearTimeout(shelfHideTimer);
+  }
+  shelfHideTimer = setTimeout(hideTranscriptShelf, SHELF_VISIBLE_MS);
+}
+
+function hideTranscriptShelf(): void {
+  shelfHideTimer = null;
+  shelfVisible = false;
+  renderTranscriptShelf();
+}
+
+function recentTranscriptText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 320) return normalized;
+
+  const tail = normalized.slice(-320);
+  const sentenceStart = tail.search(/[.!?]\s+[A-Z0-9]/);
+  return sentenceStart >= 0 ? tail.slice(sentenceStart + 2).trim() : tail.trim();
+}
+
 async function loadBackendStatus(): Promise<void> {
   const status = await invoke<BackendStatus>("get_app_status");
   setState(status.state, status.message);
@@ -190,11 +357,27 @@ async function toggleRecording(): Promise<void> {
     startRecordingRequestPending = false;
     cancelTranscriptionRequestPending = false;
     setState("recording");
+    resetLiveTranscript();
     scheduleMaxRecordingStop(maxRecordingSeconds);
   } catch (error) {
     startRecordingRequestPending = false;
     stopRecordingRequestPending = false;
-    addEvent("error", error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    addEvent("error", message);
+    await refreshStateAfterStartError();
+  }
+}
+
+async function refreshStateAfterStartError(): Promise<void> {
+  try {
+    const status = await invoke<BackendStatus>("get_app_status");
+    if (status.state === "recording") {
+      setState("recording", status.message);
+      addEvent("warning", "Recovered recording state after a UI error");
+    } else {
+      setState("error", "Error");
+    }
+  } catch {
     setState("error", "Error");
   }
 }
@@ -215,6 +398,8 @@ async function stopAndTranscribe(): Promise<void> {
     }
     if (transcript) {
       addEvent("info", "Transcript copied to clipboard");
+      void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+      resetLiveTranscript();
       showCopiedStatus();
       showCopyIndicator();
     } else {
@@ -225,6 +410,7 @@ async function stopAndTranscribe(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "Transcription was cancelled") {
       addEvent("info", "Transcription cancelled");
+      resetLiveTranscript();
       setState("idle", "Ready");
     } else {
       addEvent("error", message);
@@ -298,9 +484,25 @@ void listen<BackendLogEvent>("backend-event", (event) => {
   addEventWithId(event.payload.id, event.payload.level, event.payload.message);
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
+void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
+  showLiveTranscript(event.payload.text);
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
+void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event) => {
+  addOrReplaceTranscriptItem(event.payload.item);
+  resetLiveTranscript();
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
+void listen<TranscriptHistoryItem>("transcript-copied", (event) => {
+  copiedTranscriptId = event.payload.id;
+  renderTranscriptShelf();
+  showCopyIndicator();
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
 void loadBackendStatus().catch((error) => {
   addEvent("error", error instanceof Error ? error.message : String(error));
   setState("error", "Error");
 });
+void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 void registerRecordingShortcut();
 updateSettingsEventBadge();

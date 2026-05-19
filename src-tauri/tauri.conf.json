@@ -44,6 +44,23 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": false
+      },
+      {
+        "title": "Multivoice Transcript Shelf",
+        "label": "transcript-shelf",
+        "url": "transcript-shelf.html",
+        "width": 360,
+        "height": 320,
+        "minWidth": 360,
+        "minHeight": 320,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

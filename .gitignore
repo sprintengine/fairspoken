@@ -12,6 +12,7 @@ src-tauri/target/
 .env
 .env.*
 !.env.example
+.mcp.json
 
 # Logs
 *.log
