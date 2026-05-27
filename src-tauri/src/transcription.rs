@@ -272,6 +272,7 @@ impl WhisperTranscriber {
             &recording.pcm_i16,
             recording.sample_rate,
             &settings.language,
+            settings.whisper_initial_prompt().as_deref(),
         )
     }
 
@@ -302,6 +303,7 @@ impl WhisperTranscriber {
         WhisperSessionHandle::start(
             Arc::clone(context),
             settings.language.clone(),
+            settings.whisper_initial_prompt(),
             settings.whisper_chunk_seconds,
             preview_tx,
         )
@@ -312,6 +314,7 @@ impl WhisperSessionHandle {
     fn start(
         context: Arc<WhisperContext>,
         language: String,
+        initial_prompt: Option<String>,
         chunk_seconds: u16,
         preview_tx: Option<TranscriptionPreviewSender>,
     ) -> Result<Self, String> {
@@ -324,6 +327,7 @@ impl WhisperSessionHandle {
                 let result = run_whisper_chunked_session(
                     context,
                     language,
+                    initial_prompt,
                     chunk_seconds,
                     audio_rx,
                     control_rx,
@@ -383,6 +387,7 @@ struct WhisperChunkResult {
 fn run_whisper_chunked_session(
     context: Arc<WhisperContext>,
     language: String,
+    initial_prompt: Option<String>,
     chunk_seconds: u16,
     audio_rx: Receiver<AudioFrame>,
     control_rx: Receiver<WhisperControl>,
@@ -400,6 +405,7 @@ fn run_whisper_chunked_session(
                     &job.pcm_i16,
                     job.sample_rate,
                     &language,
+                    initial_prompt.as_deref(),
                 )
                 .map(|text| WhisperChunkResult {
                     index: job.index,
@@ -633,6 +639,7 @@ fn transcribe_whisper_pcm(
     samples: &[i16],
     sample_rate: u32,
     language: &str,
+    initial_prompt: Option<&str>,
 ) -> Result<String, String> {
     if samples.is_empty() {
         return Err("No audio samples were captured".to_string());
@@ -649,6 +656,9 @@ fn transcribe_whisper_pcm(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_no_context(true);
+    if let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+        params.set_initial_prompt(initial_prompt);
+    }
 
     if language == "auto" {
         params.set_language(None);

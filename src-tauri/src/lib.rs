@@ -2,6 +2,7 @@ mod audio;
 mod clipboard;
 mod host;
 mod models;
+mod post_processing;
 mod remote_transcription;
 mod settings;
 mod transcript_history;
@@ -15,6 +16,7 @@ use models::{
     ModelPrepareProgress, ModelService, ModelStatus, SherpaModel, TranscriptionModelStatus,
     WhisperModel,
 };
+use post_processing::apply_transcript_post_processing;
 use remote_transcription::{
     start_remote_streaming_session,
     test_remote_transcription_host as check_remote_transcription_host, RemoteHealth,
@@ -399,8 +401,9 @@ fn show_transcript_shelf_window(
         }
     }
 
+    // Transcript previews are passive status updates. Showing the shelf must not
+    // steal focus from the application the user is dictating or typing into.
     window.show().map_err(|err| err.to_string())?;
-    window.set_focus().map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -621,7 +624,7 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
             settings.transcription_location, settings.transcription_backend
         ),
     );
-    let transcript = match settings.transcription_location {
+    let raw_transcript = match settings.transcription_location {
         TranscriptionLocation::Local => {
             let result = services
                 .transcription
@@ -661,6 +664,24 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         emit_backend_event(&app, "info", "Transcription cancelled");
         return Err("Transcription was cancelled".to_string());
     }
+
+    let processed = apply_transcript_post_processing(&raw_transcript, &settings);
+    if processed.corrections_applied > 0 {
+        emit_backend_event(
+            &app,
+            "info",
+            format!(
+                "Applied {} transcript correction{}",
+                processed.corrections_applied,
+                if processed.corrections_applied == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+        );
+    }
+    let transcript = processed.text;
 
     let stored_item = services
         .transcript_history

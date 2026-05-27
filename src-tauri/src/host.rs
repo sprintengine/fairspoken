@@ -250,10 +250,15 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
     let whisper_chunk_seconds = header_value(request, "x-multivoice-whisper-chunk-seconds")
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(Settings::default().whisper_chunk_seconds);
+    let vocabulary_hints = header_value(request, "x-multivoice-vocabulary-hints")
+        .map(percent_decode)
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default();
 
     let mut settings = Settings::default();
     settings.language = language;
     settings.whisper_chunk_seconds = whisper_chunk_seconds.clamp(5, 60);
+    settings.vocabulary_hints = vocabulary_hints;
     settings.transcription_backend = match backend {
         "whisper" => {
             settings.model = WhisperModel::from_model_id(model)

@@ -1,0 +1,170 @@
+use crate::settings::Settings;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptPostProcessResult {
+    pub text: String,
+    pub corrections_applied: usize,
+}
+
+pub fn apply_transcript_post_processing(
+    transcript: &str,
+    settings: &Settings,
+) -> TranscriptPostProcessResult {
+    if !settings.post_process {
+        return TranscriptPostProcessResult {
+            text: transcript.to_string(),
+            corrections_applied: 0,
+        };
+    }
+
+    let mut text = transcript.to_string();
+    let mut corrections_applied = 0;
+    for correction in &settings.transcript_corrections {
+        if !correction.enabled {
+            continue;
+        }
+
+        let (next_text, count) = replace_phrase(
+            &text,
+            correction.from.trim(),
+            correction.to.trim(),
+            correction.case_sensitive,
+            correction.whole_phrase,
+        );
+        text = next_text;
+        corrections_applied += count;
+    }
+
+    TranscriptPostProcessResult {
+        text,
+        corrections_applied,
+    }
+}
+
+fn replace_phrase(
+    text: &str,
+    from: &str,
+    to: &str,
+    case_sensitive: bool,
+    whole_phrase: bool,
+) -> (String, usize) {
+    if text.is_empty() || from.is_empty() {
+        return (text.to_string(), 0);
+    }
+
+    let haystack = if case_sensitive {
+        text.to_string()
+    } else {
+        text.to_ascii_lowercase()
+    };
+    let needle = if case_sensitive {
+        from.to_string()
+    } else {
+        from.to_ascii_lowercase()
+    };
+
+    let mut output = String::with_capacity(text.len());
+    let mut search_cursor = 0;
+    let mut emit_cursor = 0;
+    let mut count = 0;
+    while let Some(relative_index) = haystack[search_cursor..].find(&needle) {
+        let index = search_cursor + relative_index;
+        let end = index + from.len();
+        if !text.is_char_boundary(index)
+            || !text.is_char_boundary(end)
+            || (whole_phrase && !is_phrase_boundary(text, index, end))
+        {
+            search_cursor = text[index..]
+                .char_indices()
+                .nth(1)
+                .map(|(offset, _)| index + offset)
+                .unwrap_or(text.len());
+            continue;
+        }
+
+        output.push_str(&text[emit_cursor..index]);
+        output.push_str(to);
+        emit_cursor = end;
+        search_cursor = end;
+        count += 1;
+    }
+
+    if count == 0 {
+        return (text.to_string(), 0);
+    }
+
+    output.push_str(&text[emit_cursor..]);
+    (output, count)
+}
+
+fn is_phrase_boundary(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    let after = text[end..].chars().next();
+    !before.map(is_word_char).unwrap_or(false) && !after.map(is_word_char).unwrap_or(false)
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_transcript_post_processing;
+    use crate::settings::{Settings, TranscriptCorrection};
+
+    #[test]
+    fn applies_case_insensitive_phrase_correction() {
+        let settings = settings_with_corrections(vec![TranscriptCorrection {
+            enabled: true,
+            from: "moldy voice".to_string(),
+            to: "Multivoice".to_string(),
+            case_sensitive: false,
+            whole_phrase: true,
+        }]);
+
+        let result = apply_transcript_post_processing("Open moldy voice settings.", &settings);
+
+        assert_eq!(result.text, "Open Multivoice settings.");
+        assert_eq!(result.corrections_applied, 1);
+    }
+
+    #[test]
+    fn whole_phrase_correction_does_not_replace_inside_words() {
+        let settings = settings_with_corrections(vec![TranscriptCorrection {
+            enabled: true,
+            from: "app".to_string(),
+            to: "application".to_string(),
+            case_sensitive: false,
+            whole_phrase: true,
+        }]);
+
+        let result = apply_transcript_post_processing("The app maps happen.", &settings);
+
+        assert_eq!(result.text, "The application maps happen.");
+        assert_eq!(result.corrections_applied, 1);
+    }
+
+    #[test]
+    fn disabled_post_processing_skips_corrections() {
+        let mut settings = settings_with_corrections(vec![TranscriptCorrection {
+            enabled: true,
+            from: "toury".to_string(),
+            to: "Tauri".to_string(),
+            case_sensitive: false,
+            whole_phrase: true,
+        }]);
+        settings.post_process = false;
+
+        let result = apply_transcript_post_processing("toury app", &settings);
+
+        assert_eq!(result.text, "toury app");
+        assert_eq!(result.corrections_applied, 0);
+    }
+
+    fn settings_with_corrections(corrections: Vec<TranscriptCorrection>) -> Settings {
+        Settings {
+            transcript_corrections: corrections,
+            ..Settings::default()
+        }
+    }
+}

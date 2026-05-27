@@ -113,6 +113,7 @@
               <option value="medium">Medium</option>
               <option value="large-v2">Large v2</option>
               <option value="large-v3">Large v3</option>
+              <option value="large-v3-turbo">Large v3 Turbo</option>
             </select>
             <span class="model-size" id="modelSize">~80 MB</span>
           </div>
@@ -171,6 +172,19 @@
           </span>
           <input id="postProcess" type="checkbox" />
         </label>
+
+        <label class="field stacked-field">
+          <span>Vocabulary hints</span>
+          <textarea id="vocabularyHints" class="setting-input setting-textarea" rows="3"></textarea>
+        </label>
+
+        <div class="corrections-panel" id="correctionsPanel">
+          <div class="corrections-head">
+            <span>Corrections</span>
+            <button class="model-prepare-btn" id="addCorrection" type="button">Add</button>
+          </div>
+          <div class="correction-list" id="correctionList"></div>
+        </div>
         </section>
 
         <section class="settings-section" aria-labelledby="windowTitle">

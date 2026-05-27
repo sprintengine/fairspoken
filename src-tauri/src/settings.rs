@@ -40,10 +40,29 @@ pub struct Settings {
     pub echo_cancellation: bool,
     pub input_gain: u8,
     pub post_process: bool,
+    #[serde(default)]
+    pub vocabulary_hints: Vec<String>,
+    #[serde(default)]
+    pub transcript_corrections: Vec<TranscriptCorrection>,
     pub always_on_top: bool,
     pub max_recording_seconds: u16,
     #[serde(default = "default_whisper_chunk_seconds")]
     pub whisper_chunk_seconds: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptCorrection {
+    #[serde(default = "default_correction_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default = "default_correction_whole_phrase")]
+    pub whole_phrase: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +81,8 @@ impl Default for Settings {
             echo_cancellation: true,
             input_gain: 2,
             post_process: true,
+            vocabulary_hints: Vec::new(),
+            transcript_corrections: Vec::new(),
             always_on_top: true,
             max_recording_seconds: 120,
             whisper_chunk_seconds: default_whisper_chunk_seconds(),
@@ -131,6 +152,25 @@ impl Settings {
             || self.model != next.model
             || self.sherpa_model != next.sherpa_model
     }
+
+    pub fn whisper_initial_prompt(&self) -> Option<String> {
+        let mut terms = self.vocabulary_hints.clone();
+        terms.extend(
+            self.transcript_corrections
+                .iter()
+                .filter(|correction| correction.enabled)
+                .filter_map(|correction| {
+                    let term = correction.to.trim();
+                    (!term.is_empty()).then(|| term.to_string())
+                }),
+        );
+        let terms = normalize_vocabulary_hints(terms);
+        if terms.is_empty() {
+            return None;
+        }
+
+        Some(format!("Relevant names and terms: {}.", terms.join(", ")))
+    }
 }
 
 fn normalize(settings: Settings) -> Settings {
@@ -140,6 +180,8 @@ fn normalize(settings: Settings) -> Settings {
         whisper_chunk_seconds: settings.whisper_chunk_seconds.clamp(5, 60),
         remote_url: normalize_remote_url(&settings.remote_url),
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
+        vocabulary_hints: normalize_vocabulary_hints(settings.vocabulary_hints),
+        transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
         ..settings
     }
 }
@@ -150,6 +192,64 @@ fn default_whisper_chunk_seconds() -> u16 {
 
 fn default_remote_timeout_seconds() -> u16 {
     60
+}
+
+fn default_correction_enabled() -> bool {
+    true
+}
+
+fn default_correction_whole_phrase() -> bool {
+    true
+}
+
+fn normalize_vocabulary_hints(hints: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for hint in hints {
+        let hint = clean_text_setting(&hint, 100);
+        if hint.is_empty() || normalized.iter().any(|value| value == &hint) {
+            continue;
+        }
+        normalized.push(hint);
+        if normalized.len() >= 50 {
+            break;
+        }
+    }
+    normalized
+}
+
+fn normalize_transcript_corrections(
+    corrections: Vec<TranscriptCorrection>,
+) -> Vec<TranscriptCorrection> {
+    let mut normalized = Vec::new();
+    for correction in corrections {
+        let from = clean_text_setting(&correction.from, 120);
+        let to = clean_text_setting(&correction.to, 120);
+        if from.is_empty() || to.is_empty() {
+            continue;
+        }
+        normalized.push(TranscriptCorrection {
+            enabled: correction.enabled,
+            from,
+            to,
+            case_sensitive: correction.case_sensitive,
+            whole_phrase: correction.whole_phrase,
+        });
+        if normalized.len() >= 100 {
+            break;
+        }
+    }
+    normalized
+}
+
+fn clean_text_setting(value: &str, max_chars: usize) -> String {
+    value
+        .replace('\0', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
 }
 
 fn normalize_remote_url(url: &str) -> String {

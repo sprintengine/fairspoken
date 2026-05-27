@@ -2,10 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { addEvent, addEventWithId, clearEvents, eventSeverity, readEvents, type AppEvent, type EventLevel } from "./events";
 
-type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3";
+type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3" | "large-v3-turbo";
 type TranscriptionBackend = "whisper" | "sherpa-streaming";
 type TranscriptionLocation = "local" | "remote-host";
 type SherpaModel = "streaming-zipformer-en-2023-06-26-int8";
+
+interface TranscriptCorrection {
+  enabled: boolean;
+  from: string;
+  to: string;
+  caseSensitive: boolean;
+  wholePhrase: boolean;
+}
 
 interface Settings {
   transcriptionLocation: TranscriptionLocation;
@@ -24,6 +32,8 @@ interface Settings {
   echoCancellation?: boolean;
   inputGain?: number;
   postProcess?: boolean;
+  vocabularyHints?: string[];
+  transcriptCorrections?: TranscriptCorrection[];
 }
 
 interface ModelStatus {
@@ -75,6 +85,8 @@ const DEFAULTS: Settings = {
   echoCancellation: true,
   inputGain: 2,
   postProcess: true,
+  vocabularyHints: [],
+  transcriptCorrections: [],
 };
 
 const closeBtn = required<HTMLButtonElement>("settingsClose");
@@ -88,6 +100,9 @@ const noiseSuppression = required<HTMLInputElement>("noiseSuppression");
 const echoCancellation = required<HTMLInputElement>("echoCancellation");
 const inputGain = required<HTMLSelectElement>("inputGain");
 const postProcess = required<HTMLInputElement>("postProcess");
+const vocabularyHints = required<HTMLTextAreaElement>("vocabularyHints");
+const addCorrection = required<HTMLButtonElement>("addCorrection");
+const correctionList = required<HTMLElement>("correctionList");
 const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
 const maxRecordingSeconds = required<HTMLInputElement>("maxRecordingSeconds");
 const whisperChunkField = required<HTMLElement>("whisperChunkField");
@@ -118,6 +133,7 @@ const MODEL_MEMORY_FOOTPRINTS: Record<WhisperModel, string> = {
   medium: "RAM ~8G",
   "large-v2": "RAM ~16G",
   "large-v3": "RAM ~16G",
+  "large-v3-turbo": "RAM ~8G",
 };
 
 const SHERPA_MODEL_FOOTPRINTS: Record<SherpaModel, string> = {
@@ -131,6 +147,7 @@ const WHISPER_MODEL_OPTIONS: Array<[WhisperModel, string]> = [
   ["medium", "Medium"],
   ["large-v2", "Large v2"],
   ["large-v3", "Large v3"],
+  ["large-v3-turbo", "Large v3 Turbo"],
 ];
 
 const SHERPA_MODEL_OPTIONS: Array<[SherpaModel, string]> = [
@@ -160,6 +177,8 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     whisperChunkSeconds: Math.max(5, Math.min(60, Math.round(chunkSeconds || DEFAULTS.whisperChunkSeconds))),
     remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
+    vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
+    transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
   };
 }
 
@@ -178,6 +197,8 @@ function applyToForm(settings: Settings): void {
   echoCancellation.checked = settings.echoCancellation ?? true;
   inputGain.value = String(settings.inputGain ?? 2);
   postProcess.checked = settings.postProcess ?? true;
+  vocabularyHints.value = (settings.vocabularyHints ?? []).join("\n");
+  renderCorrectionList(settings.transcriptCorrections ?? []);
   alwaysOnTop.checked = settings.alwaysOnTop;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
@@ -201,10 +222,49 @@ function readFromForm(): Settings {
     echoCancellation: echoCancellation.checked,
     inputGain: Number(inputGain.value),
     postProcess: postProcess.checked,
+    vocabularyHints: readVocabularyHints(),
+    transcriptCorrections: readCorrectionsFromList(),
     alwaysOnTop: alwaysOnTop.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
     whisperChunkSeconds: Number(whisperChunkSeconds.value),
   });
+}
+
+function normalizeVocabularyHints(hints: string[] = []): string[] {
+  const normalized: string[] = [];
+  for (const hint of hints) {
+    const value = cleanSettingText(hint, 100);
+    if (!value || normalized.includes(value)) continue;
+    normalized.push(value);
+    if (normalized.length >= 50) break;
+  }
+  return normalized;
+}
+
+function normalizeTranscriptCorrections(corrections: TranscriptCorrection[] = []): TranscriptCorrection[] {
+  const normalized: TranscriptCorrection[] = [];
+  for (const correction of corrections) {
+    const from = cleanSettingText(correction.from, 120);
+    const to = cleanSettingText(correction.to, 120);
+    if (!from || !to) continue;
+    normalized.push({
+      enabled: correction.enabled !== false,
+      from,
+      to,
+      caseSensitive: correction.caseSensitive === true,
+      wholePhrase: correction.wholePhrase !== false,
+    });
+    if (normalized.length >= 100) break;
+  }
+  return normalized;
+}
+
+function cleanSettingText(value: string, maxLength: number): string {
+  return value.replace(/\0/g, "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function readVocabularyHints(): string[] {
+  return normalizeVocabularyHints(vocabularyHints.value.split(/\r?\n|,/));
 }
 
 async function persistSettings(): Promise<boolean> {
@@ -381,6 +441,79 @@ function modelRequest(backend: TranscriptionBackend, model: WhisperModel | Sherp
     model: backend === "whisper" ? model : null,
     sherpaModel: backend === "sherpa-streaming" ? model : null,
   };
+}
+
+function renderCorrectionList(corrections: TranscriptCorrection[]): void {
+  correctionList.replaceChildren();
+  const entries = corrections.length > 0 ? corrections : [];
+  entries.forEach((correction) => correctionList.append(renderCorrectionRow(correction)));
+}
+
+function renderCorrectionRow(correction: TranscriptCorrection): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "correction-row";
+
+  const enabled = document.createElement("input");
+  enabled.type = "checkbox";
+  enabled.className = "correction-enabled";
+  enabled.checked = correction.enabled !== false;
+  enabled.setAttribute("aria-label", "Enable correction");
+
+  const from = document.createElement("input");
+  from.className = "setting-input correction-input";
+  from.dataset.field = "from";
+  from.type = "text";
+  from.placeholder = "Mistake";
+  from.value = correction.from;
+
+  const to = document.createElement("input");
+  to.className = "setting-input correction-input";
+  to.dataset.field = "to";
+  to.type = "text";
+  to.placeholder = "Replacement";
+  to.value = correction.to;
+
+  const caseSensitive = document.createElement("input");
+  caseSensitive.type = "checkbox";
+  caseSensitive.className = "correction-case";
+  caseSensitive.checked = correction.caseSensitive === true;
+  caseSensitive.title = "Case sensitive";
+  caseSensitive.setAttribute("aria-label", "Case sensitive");
+
+  const remove = document.createElement("button");
+  remove.className = "icon-btn correction-remove";
+  remove.type = "button";
+  remove.textContent = "x";
+  remove.title = "Delete correction";
+  remove.setAttribute("aria-label", "Delete correction");
+
+  row.append(enabled, from, to, caseSensitive, remove);
+  row.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+  from.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+  to.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+  remove.addEventListener("click", () => {
+    row.remove();
+    void persistSettings().catch(reportAsyncError);
+  });
+
+  return row;
+}
+
+function readCorrectionsFromList(): TranscriptCorrection[] {
+  const rows = Array.from(correctionList.querySelectorAll<HTMLElement>(".correction-row"));
+  return normalizeTranscriptCorrections(rows.map((row) => {
+    const enabled = row.querySelector<HTMLInputElement>(".correction-enabled");
+    const from = row.querySelector<HTMLInputElement>('[data-field="from"]');
+    const to = row.querySelector<HTMLInputElement>('[data-field="to"]');
+    const caseSensitive = row.querySelector<HTMLInputElement>(".correction-case");
+    return {
+      enabled: enabled?.checked ?? true,
+      from: from?.value ?? "",
+      to: to?.value ?? "",
+      caseSensitive: caseSensitive?.checked ?? false,
+      wholePhrase: true,
+    };
+  }));
 }
 
 async function loadAudioDevices(): Promise<void> {
@@ -620,6 +753,16 @@ inputGain.addEventListener("change", () => {
 });
 langSelect.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 postProcess.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+vocabularyHints.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+addCorrection.addEventListener("click", () => {
+  correctionList.append(renderCorrectionRow({
+    enabled: true,
+    from: "",
+    to: "",
+    caseSensitive: false,
+    wholePhrase: true,
+  }));
+});
 alwaysOnTop.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));

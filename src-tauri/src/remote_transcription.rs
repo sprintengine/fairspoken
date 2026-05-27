@@ -377,7 +377,29 @@ fn transcription_headers(settings: &Settings) -> Result<HeaderMap, String> {
         HeaderValue::from_str(&settings.whisper_chunk_seconds.to_string())
             .map_err(|err| format!("Invalid Whisper chunk seconds header: {err}"))?,
     );
+    if !settings.vocabulary_hints.is_empty() {
+        let hints = serde_json::to_string(&settings.vocabulary_hints)
+            .map_err(|err| format!("Failed to serialize vocabulary hints: {err}"))?;
+        headers.insert(
+            "x-multivoice-vocabulary-hints",
+            HeaderValue::from_str(&percent_encode(&hints))
+                .map_err(|err| format!("Invalid vocabulary hints header: {err}"))?,
+        );
+    }
     Ok(headers)
+}
+
+fn percent_encode(input: &str) -> String {
+    let mut encoded = String::new();
+    for byte in input.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 fn validate_remote_base_url(raw_url: &str) -> Result<Url, String> {

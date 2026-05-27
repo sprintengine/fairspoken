@@ -2,6 +2,7 @@ use crate::settings::TranscriptionBackend;
 use bzip2::read::BzDecoder;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
@@ -21,6 +22,7 @@ pub enum WhisperModel {
     Medium,
     LargeV2,
     LargeV3,
+    LargeV3Turbo,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -73,7 +75,7 @@ impl Default for ModelService {
 impl ModelService {
     pub fn status(&self, model: WhisperModel) -> ModelStatus {
         let path = self.path_for(model);
-        let cached = path.is_file() && file_sha1_matches(&path, model.sha1()).unwrap_or(false);
+        let cached = path.is_file() && file_hash_matches(&path, model.hash()).unwrap_or(false);
         ModelStatus {
             model,
             cached,
@@ -197,7 +199,7 @@ impl ModelService {
             message: "Validating model checksum".to_string(),
             percentage: 95,
         });
-        if !file_sha1_matches(&tmp, model.sha1())? {
+        if !file_hash_matches(&tmp, model.hash())? {
             let _ = fs::remove_file(&tmp);
             return Err("Downloaded model failed checksum validation".to_string());
         }
@@ -375,6 +377,7 @@ impl WhisperModel {
             "medium" => Some(Self::Medium),
             "large-v2" => Some(Self::LargeV2),
             "large-v3" => Some(Self::LargeV3),
+            "large-v3-turbo" => Some(Self::LargeV3Turbo),
             _ => None,
         }
     }
@@ -387,6 +390,7 @@ impl WhisperModel {
             Self::Medium => "medium",
             Self::LargeV2 => "large-v2",
             Self::LargeV3 => "large-v3",
+            Self::LargeV3Turbo => "large-v3-turbo",
         }
     }
 
@@ -398,17 +402,21 @@ impl WhisperModel {
             Self::Medium => "ggml-medium.bin",
             Self::LargeV2 => "ggml-large-v2.bin",
             Self::LargeV3 => "ggml-large-v3.bin",
+            Self::LargeV3Turbo => "ggml-large-v3-turbo.bin",
         }
     }
 
-    fn sha1(self) -> &'static str {
+    fn hash(self) -> ModelHash {
         match self {
-            Self::Tiny => "bd577a113a864445d4c299885e0cb97d4ba92b5f",
-            Self::Base => "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
-            Self::Small => "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
-            Self::Medium => "fd9727b6e1217c2f614f9b698455c4ffd82463b4",
-            Self::LargeV2 => "0f4c8e34f21cf1a914c59d8b3ce882345ad349d6",
-            Self::LargeV3 => "ad82bf6a9043ceed055076d0fd39f5f186ff8062",
+            Self::Tiny => ModelHash::Sha1("bd577a113a864445d4c299885e0cb97d4ba92b5f"),
+            Self::Base => ModelHash::Sha1("465707469ff3a37a2b9b8d8f89f2f99de7299dac"),
+            Self::Small => ModelHash::Sha1("55356645c2b361a969dfd0ef2c5a50d530afd8d5"),
+            Self::Medium => ModelHash::Sha1("fd9727b6e1217c2f614f9b698455c4ffd82463b4"),
+            Self::LargeV2 => ModelHash::Sha1("0f4c8e34f21cf1a914c59d8b3ce882345ad349d6"),
+            Self::LargeV3 => ModelHash::Sha1("ad82bf6a9043ceed055076d0fd39f5f186ff8062"),
+            Self::LargeV3Turbo => ModelHash::Sha256(
+                "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+            ),
         }
     }
 }
@@ -560,31 +568,56 @@ fn unpack_tar_bz2(archive_path: &Path, target_dir: &Path) -> Result<(), String> 
     Ok(())
 }
 
-fn file_sha1_matches(path: &Path, expected: &str) -> Result<bool, String> {
+#[derive(Clone, Copy)]
+enum ModelHash {
+    Sha1(&'static str),
+    Sha256(&'static str),
+}
+
+fn file_hash_matches(path: &Path, expected: ModelHash) -> Result<bool, String> {
     let file = File::open(path).map_err(|err| format!("Failed to open model file: {err}"))?;
     let mut reader = BufReader::new(file);
-    let mut hasher = Sha1::new();
     let mut chunk = [0_u8; 1024 * 64];
-    loop {
-        let read = reader
-            .read(&mut chunk)
-            .map_err(|err| format!("Failed to hash model file: {err}"))?;
-        if read == 0 {
-            break;
+    match expected {
+        ModelHash::Sha1(expected) => {
+            let mut hasher = Sha1::new();
+            loop {
+                let read = reader
+                    .read(&mut chunk)
+                    .map_err(|err| format!("Failed to hash model file: {err}"))?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&chunk[..read]);
+            }
+            Ok(hex_digest(hasher.finalize().as_slice()) == expected)
         }
-        hasher.update(&chunk[..read]);
+        ModelHash::Sha256(expected) => {
+            let mut hasher = Sha256::new();
+            loop {
+                let read = reader
+                    .read(&mut chunk)
+                    .map_err(|err| format!("Failed to hash model file: {err}"))?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&chunk[..read]);
+            }
+            Ok(hex_digest(hasher.finalize().as_slice()) == expected)
+        }
     }
-    let actual = hasher
-        .finalize()
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    Ok(actual == expected)
+        .collect::<String>()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{file_sha1_matches, ModelService, WhisperModel};
+    use super::{file_hash_matches, ModelHash, ModelService, WhisperModel};
     use std::fs;
 
     #[test]
@@ -593,16 +626,43 @@ mod tests {
             std::env::temp_dir().join(format!("multivoice-tauri-sha1-{}.txt", std::process::id()));
         fs::write(&path, b"abc").expect("write fixture");
 
-        assert!(
-            file_sha1_matches(&path, "a9993e364706816aba3e25717850c26c9cd0d89d")
-                .expect("hash fixture")
-        );
-        assert!(
-            !file_sha1_matches(&path, "0000000000000000000000000000000000000000")
-                .expect("hash fixture")
-        );
+        assert!(file_hash_matches(
+            &path,
+            ModelHash::Sha1("a9993e364706816aba3e25717850c26c9cd0d89d")
+        )
+        .expect("hash fixture"));
+        assert!(!file_hash_matches(
+            &path,
+            ModelHash::Sha1("0000000000000000000000000000000000000000")
+        )
+        .expect("hash fixture"));
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn validates_sha256_hashes() {
+        let path = std::env::temp_dir().join(format!(
+            "multivoice-tauri-sha256-{}.txt",
+            std::process::id()
+        ));
+        fs::write(&path, b"abc").expect("write fixture");
+
+        assert!(file_hash_matches(
+            &path,
+            ModelHash::Sha256("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        )
+        .expect("hash fixture"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn maps_large_v3_turbo_model_metadata() {
+        let model = WhisperModel::from_model_id("large-v3-turbo").expect("model");
+
+        assert_eq!(model.model_id(), "large-v3-turbo");
+        assert_eq!(model.file_name(), "ggml-large-v3-turbo.bin");
     }
 
     #[test]
