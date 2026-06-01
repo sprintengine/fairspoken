@@ -391,7 +391,7 @@ fn show_transcript_shelf_window(
             let size = monitor.size();
             let scale = monitor.scale_factor();
             let x = f64::from(position.x) / scale + 18.0;
-            let y = (f64::from(position.y) + f64::from(size.height)) / scale - 320.0 - 56.0;
+            let y = (f64::from(position.y) + f64::from(size.height)) / scale - 240.0 - 56.0;
             window
                 .set_position(Position::Logical(LogicalPosition { x, y: y.max(18.0) }))
                 .map_err(|err| err.to_string())?;
@@ -592,8 +592,8 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         &app,
         "info",
         format!(
-            "Recording stopped: {:.2}s, peak {:.4}, rms {:.4}",
-            stats.duration_seconds, stats.peak, stats.rms
+            "Recording stopped: {:.2}s, peak {:.4}, rms {:.4}, dropped stream frames {}",
+            stats.duration_seconds, stats.peak, stats.rms, stats.dropped_stream_frames
         ),
     );
 

@@ -1,5 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream, StreamConfig};
+use cpal::{SampleFormat, Stream, StreamConfig, SupportedStreamConfig};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
@@ -10,6 +11,7 @@ pub struct AudioService {
     is_recording: bool,
     stream: Option<Stream>,
     buffer: Option<Arc<Mutex<Vec<i16>>>>,
+    dropped_stream_frames: Option<Arc<AtomicU64>>,
     sample_rate: u32,
 }
 
@@ -17,6 +19,7 @@ pub struct AudioService {
 pub struct Recording {
     pub pcm_i16: Vec<i16>,
     pub sample_rate: u32,
+    pub dropped_stream_frames: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +33,7 @@ pub struct AudioStats {
     pub duration_seconds: f32,
     pub peak: f32,
     pub rms: f32,
+    pub dropped_stream_frames: u64,
 }
 
 impl Recording {
@@ -49,6 +53,7 @@ impl Recording {
             duration_seconds: self.pcm_i16.len() as f32 / self.sample_rate.max(1) as f32,
             peak,
             rms: (sum_sq / len as f64).sqrt() as f32,
+            dropped_stream_frames: self.dropped_stream_frames,
         }
     }
 }
@@ -69,12 +74,7 @@ impl AudioService {
         }
 
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| "No default input device is available".to_string())?;
-        let supported_config = device
-            .default_input_config()
-            .map_err(|err| format!("Failed to read default input config: {err}"))?;
+        let (device, supported_config) = input_device_and_config(&host)?;
         let sample_rate = supported_config.sample_rate();
         let channels = supported_config.channels() as usize;
         let config: StreamConfig = supported_config.clone().into();
@@ -84,6 +84,7 @@ impl AudioService {
             sample_rate as usize
                 * usize::from(DEFAULT_MAX_RECORDING_SECONDS.min(max_recording_seconds)),
         )));
+        let dropped_stream_frames = Arc::new(AtomicU64::new(0));
 
         let stream = match supported_config.sample_format() {
             SampleFormat::F32 => build_input_stream::<f32>(
@@ -93,6 +94,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::F64 => build_input_stream::<f64>(
@@ -102,6 +104,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::I8 => build_input_stream::<i8>(
@@ -111,6 +114,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::I16 => build_input_stream::<i16>(
@@ -120,6 +124,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::I32 => build_input_stream::<i32>(
@@ -129,6 +134,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::U8 => build_input_stream::<u8>(
@@ -138,6 +144,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::U16 => build_input_stream::<u16>(
@@ -147,6 +154,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             SampleFormat::U32 => build_input_stream::<u32>(
@@ -156,6 +164,7 @@ impl AudioService {
                 input_gain,
                 max_samples,
                 &buffer,
+                &dropped_stream_frames,
                 stream_sink,
             ),
             other => Err(format!("Unsupported input sample format: {other:?}")),
@@ -168,6 +177,7 @@ impl AudioService {
         self.is_recording = true;
         self.sample_rate = sample_rate;
         self.buffer = Some(buffer);
+        self.dropped_stream_frames = Some(dropped_stream_frames);
         self.stream = Some(stream);
         Ok(())
     }
@@ -187,6 +197,11 @@ impl AudioService {
             .lock()
             .map_err(|_| "Recording buffer lock failed".to_string())?
             .clone();
+        let dropped_stream_frames = self
+            .dropped_stream_frames
+            .take()
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .unwrap_or(0);
 
         if pcm_i16.is_empty() {
             return Err("No audio samples were captured".to_string());
@@ -195,7 +210,88 @@ impl AudioService {
         Ok(Recording {
             pcm_i16,
             sample_rate: self.sample_rate,
+            dropped_stream_frames,
         })
+    }
+}
+
+fn input_device_and_config(
+    host: &cpal::Host,
+) -> Result<(cpal::Device, SupportedStreamConfig), String> {
+    let default_device = host.default_input_device();
+    let mut default_error = None;
+
+    if let Some(device) = default_device {
+        match device.default_input_config() {
+            Ok(config) => return Ok((device, config)),
+            Err(err) => {
+                let name = input_device_name(&device);
+                default_error = Some(format!(
+                    "Default input device{} is unavailable: {}{}",
+                    name.as_deref()
+                        .map(|name| format!(" '{name}'"))
+                        .unwrap_or_default(),
+                    err,
+                    macos_audio_hint(&err.to_string())
+                ));
+            }
+        }
+    }
+
+    let mut fallback_errors = Vec::new();
+    let input_devices = host
+        .input_devices()
+        .map_err(|err| format!("Failed to enumerate input devices: {err}"))?;
+
+    for device in input_devices {
+        match device.default_input_config() {
+            Ok(config) => {
+                if let Some(err) = default_error {
+                    eprintln!(
+                        "{err}; using fallback input device{}",
+                        input_device_label(&device)
+                    );
+                }
+                return Ok((device, config));
+            }
+            Err(err) => {
+                fallback_errors.push(format!(
+                    "{}: {err}",
+                    input_device_name(&device)
+                        .unwrap_or_else(|| "Unnamed input device".to_string())
+                ));
+            }
+        }
+    }
+
+    let mut message =
+        default_error.unwrap_or_else(|| "No default input device is available".to_string());
+    if !fallback_errors.is_empty() {
+        message.push_str("; checked input devices: ");
+        message.push_str(&fallback_errors.join("; "));
+    }
+    Err(message)
+}
+
+fn input_device_name(device: &cpal::Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_string())
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn input_device_label(device: &cpal::Device) -> String {
+    input_device_name(device)
+        .map(|name| format!(" '{name}'"))
+        .unwrap_or_default()
+}
+
+fn macos_audio_hint(error: &str) -> &'static str {
+    if cfg!(target_os = "macos") && (error.contains("560947818") || error.contains("!obj")) {
+        " (CoreAudio !obj: macOS could not resolve the selected input device; check microphone permission and the system default input device)"
+    } else {
+        ""
     }
 }
 
@@ -263,34 +359,59 @@ fn build_input_stream<T>(
     input_gain: f32,
     max_samples: usize,
     buffer: &Arc<Mutex<Vec<i16>>>,
+    dropped_stream_frames: &Arc<AtomicU64>,
     stream_sink: Option<SyncSender<AudioFrame>>,
 ) -> Result<Stream, String>
 where
     T: ToI16Sample + cpal::SizedSample + Copy + Send + 'static,
 {
     let buffer = Arc::clone(buffer);
+    let captured_samples = Arc::new(AtomicUsize::new(0));
+    let dropped_stream_frames = Arc::clone(dropped_stream_frames);
     let err_fn = |err| eprintln!("Audio input stream error: {err}");
     let sink = stream_sink;
     let sample_rate = config.sample_rate;
+    let mut chunk = Vec::new();
 
     device
         .build_input_stream(
             config,
             move |data: &[T], _| {
+                let captured = captured_samples.load(Ordering::Relaxed);
+                if captured >= max_samples {
+                    return;
+                }
+
+                chunk.clear();
+                append_mono_samples(
+                    data,
+                    channels,
+                    input_gain,
+                    max_samples - captured,
+                    &mut chunk,
+                );
+                if chunk.is_empty() {
+                    return;
+                }
+
                 if let Ok(mut target) = buffer.lock() {
-                    let start = target.len();
-                    append_mono_samples(data, channels, input_gain, max_samples, &mut target);
-                    if let Some(sink) = &sink {
-                        if target.len() > start {
-                            let chunk = AudioFrame {
-                                pcm_i16: target[start..].to_vec(),
-                                sample_rate,
-                            };
-                            match sink.try_send(chunk) {
-                                Ok(()) | Err(TrySendError::Full(_)) => {}
-                                Err(TrySendError::Disconnected(_)) => {}
-                            }
+                    target.extend_from_slice(&chunk);
+                    captured_samples.fetch_add(chunk.len(), Ordering::Relaxed);
+                } else {
+                    return;
+                }
+
+                if let Some(sink) = &sink {
+                    let frame = AudioFrame {
+                        pcm_i16: chunk.clone(),
+                        sample_rate,
+                    };
+                    match sink.try_send(frame) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(_)) => {
+                            dropped_stream_frames.fetch_add(1, Ordering::Relaxed);
                         }
+                        Err(TrySendError::Disconnected(_)) => {}
                     }
                 }
             },
@@ -374,11 +495,13 @@ mod tests {
         let recording = Recording {
             pcm_i16: vec![0, 16_384, -16_384, 0],
             sample_rate: 4,
+            dropped_stream_frames: 2,
         };
         let stats = recording.stats();
 
         assert_eq!(stats.duration_seconds, 1.0);
         assert!((stats.peak - 0.5).abs() < 0.001);
         assert!((stats.rms - 0.353).abs() < 0.001);
+        assert_eq!(stats.dropped_stream_frames, 2);
     }
 }

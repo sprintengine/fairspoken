@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface TranscriptPreviewEvent {
   text: string;
@@ -16,16 +17,30 @@ interface TranscriptHistoryUpdatedEvent {
   item: TranscriptHistoryItem;
 }
 
-const SHELF_VISIBLE_MS = 18_000;
-
 const liveTranscriptBubble = required<HTMLElement>("liveTranscriptBubble");
 const liveTranscriptText = required<HTMLElement>("liveTranscriptText");
 const transcriptShelf = required<HTMLElement>("transcriptShelf");
 
+const appWindow = getCurrentWindow();
+// A press that moves drags the whole stack; a press that stays put copies that
+// clip. We drive both from JS (rather than a CSS drag region) so the click is
+// delivered reliably on macOS instead of being swallowed by the OS drag — the
+// same approach the pill uses in main.ts.
+const CLIP_DRAG_THRESHOLD_PX = 4;
+
 let transcriptHistory: TranscriptHistoryItem[] = [];
 let copiedTranscriptId: string | null = null;
-let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let relativeTimeTimer: ReturnType<typeof setInterval> | null = null;
+// Clips collapse to their first sentences; this tracks which the user expanded
+// so the choice survives re-renders.
+const expandedTranscriptIds = new Set<string>();
+let clipPress: { x: number; y: number; dragging: boolean } | null = null;
+let suppressClipClick = false;
+let contextMenu: HTMLElement | null = null;
+// The stack is shown only when summoned from the pill (click or shortcut).
+// It never opens on its own, so it cannot sit on top of and block whatever the
+// user is working on behind it.
+let shelfVisible = false;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -42,50 +57,125 @@ async function loadTranscriptHistory(): Promise<void> {
 function renderTranscriptShelf(): void {
   transcriptShelf.replaceChildren();
 
-  for (const item of transcriptHistory.slice(0, 8)) {
-    const clip = document.createElement("div");
-    clip.className = "transcript-clip";
-    clip.dataset.id = item.id;
-    clip.dataset.copied = String(item.id === copiedTranscriptId);
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "transcript-clip-copy";
-    button.title = item.text;
-    button.setAttribute("aria-label", item.id === copiedTranscriptId ? "Copied transcript clip" : "Copy transcript clip");
-
-    const text = document.createElement("span");
-    text.className = "transcript-clip-text";
-    text.textContent = item.text;
-    const meta = document.createElement("span");
-    meta.className = "transcript-clip-meta";
-    meta.dataset.createdAt = String(item.createdAt);
-    meta.textContent = relativeTimeLabel(item.createdAt);
-    button.append(text, meta);
-    button.addEventListener("click", () => {
-      void copyTranscriptItem(item.id);
-    });
-
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.className = "transcript-clip-close";
-    closeButton.setAttribute("aria-label", "Delete transcript clip");
-    closeButton.title = "Delete";
-    closeButton.textContent = "✕";
-    closeButton.addEventListener("click", () => {
-      void deleteTranscriptItem(item.id);
-    });
-
-    clip.append(button, closeButton);
-    transcriptShelf.append(clip);
+  if (transcriptHistory.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "shelf-empty";
+    empty.textContent = "No copied messages yet";
+    transcriptShelf.append(empty);
+    return;
   }
+
+  for (const item of transcriptHistory.slice(0, 8)) {
+    transcriptShelf.append(buildTranscriptClip(item));
+  }
+}
+
+function buildTranscriptClip(item: TranscriptHistoryItem): HTMLElement {
+  const isCopied = item.id === copiedTranscriptId;
+  const fullText = item.text.replace(/\s+/g, " ").trim();
+  const collapsed = collapsedTranscriptText(fullText);
+  const expandable = collapsed !== fullText;
+  const expanded = expandable && expandedTranscriptIds.has(item.id);
+
+  const clip = document.createElement("div");
+  clip.className = "transcript-clip";
+  clip.dataset.id = item.id;
+  clip.dataset.copied = String(isCopied);
+
+  const content = document.createElement("div");
+  content.className = "transcript-clip-content";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "transcript-clip-copy";
+  button.title = item.text;
+  button.setAttribute("aria-label", isCopied ? "Copied transcript clip" : "Copy transcript clip");
+
+  const text = document.createElement("span");
+  text.className = "transcript-clip-text";
+  text.textContent = expanded ? fullText : collapsed;
+  button.append(text);
+  button.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    suppressClipClick = false;
+    clipPress = { x: event.clientX, y: event.clientY, dragging: false };
+  });
+  button.addEventListener("click", () => {
+    if (suppressClipClick) {
+      suppressClipClick = false;
+      return;
+    }
+    void copyTranscriptItem(item.id);
+  });
+
+  const foot = document.createElement("div");
+  foot.className = "transcript-clip-foot";
+
+  const meta = document.createElement("span");
+  meta.className = "transcript-clip-meta";
+  meta.dataset.createdAt = String(item.createdAt);
+  meta.textContent = relativeTimeLabel(item.createdAt);
+  foot.append(meta);
+
+  if (expandable) {
+    const expandButton = document.createElement("button");
+    expandButton.type = "button";
+    expandButton.className = "transcript-clip-expand";
+    expandButton.textContent = expanded ? "Show less" : "Show more";
+    expandButton.setAttribute("aria-expanded", String(expanded));
+    expandButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const nowExpanded = !expandedTranscriptIds.has(item.id);
+      if (nowExpanded) {
+        expandedTranscriptIds.add(item.id);
+      } else {
+        expandedTranscriptIds.delete(item.id);
+      }
+      text.textContent = nowExpanded ? fullText : collapsed;
+      expandButton.textContent = nowExpanded ? "Show less" : "Show more";
+      expandButton.setAttribute("aria-expanded", String(nowExpanded));
+    });
+    foot.append(expandButton);
+  }
+
+  content.append(button, foot);
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "transcript-clip-close";
+  closeButton.setAttribute("aria-label", "Delete transcript clip");
+  closeButton.title = "Delete";
+  closeButton.textContent = "✕";
+  closeButton.addEventListener("click", () => {
+    void deleteTranscriptItem(item.id);
+  });
+
+  clip.append(content, closeButton);
+  return clip;
+}
+
+// Collapse a clip to its first two sentences, falling back to a hard character
+// cap when the text has no sentence breaks (or one very long sentence).
+function collapsedTranscriptText(fullText: string): string {
+  const sentences = fullText.match(/[^.!?]+[.!?]+(?=\s|$)/g);
+  let collapsed = sentences ? sentences.slice(0, 2).join(" ").trim() : fullText;
+  if (collapsed.length > 200) {
+    collapsed = `${collapsed.slice(0, 200).trimEnd()}…`;
+  }
+  return collapsed;
 }
 
 async function copyTranscriptItem(id: string): Promise<void> {
   const item = await invoke<TranscriptHistoryItem>("copy_transcript_history_item", { id });
   copiedTranscriptId = item.id;
-  renderTranscriptShelf();
-  await showShelf();
+  // Grab-and-go: the copied clip flashes a green border as confirmation, then
+  // the stack closes so it is out of the way. The pill keeps its copied dot.
+  const clip = transcriptShelf.querySelector<HTMLElement>(`.transcript-clip[data-id="${CSS.escape(id)}"]`);
+  if (clip) {
+    clip.dataset.justCopied = "true";
+    await new Promise((resolve) => window.setTimeout(resolve, 440));
+  }
+  await hideShelf();
 }
 
 async function deleteTranscriptItem(id: string): Promise<void> {
@@ -95,13 +185,11 @@ async function deleteTranscriptItem(id: string): Promise<void> {
   window.setTimeout(async () => {
     await invoke("delete_transcript_history_item", { id });
     transcriptHistory = transcriptHistory.filter((item) => item.id !== id);
+    expandedTranscriptIds.delete(id);
     if (copiedTranscriptId === id) {
       copiedTranscriptId = transcriptHistory[0]?.id ?? null;
     }
     renderTranscriptShelf();
-    if (transcriptHistory.length === 0 && liveTranscriptBubble.hidden) {
-      await hideShelf();
-    }
   }, 170);
 }
 
@@ -185,34 +273,118 @@ function stopRelativeTimeRefresh(): void {
 }
 
 async function showShelf(): Promise<void> {
-  if (hideTimer !== null) {
-    clearTimeout(hideTimer);
+  if (!shelfVisible) {
+    await invoke("show_transcript_shelf_window");
+    shelfVisible = true;
   }
-  await invoke("show_transcript_shelf_window");
   refreshRelativeTimes();
   startRelativeTimeRefresh();
-  hideTimer = setTimeout(() => void hideShelf(), SHELF_VISIBLE_MS);
 }
 
 async function hideShelf(): Promise<void> {
-  hideTimer = null;
+  shelfVisible = false;
   resetLiveTranscript();
   stopRelativeTimeRefresh();
+  closeContextMenu();
   await invoke("hide_transcript_shelf_window");
 }
 
-void listen<TranscriptPreviewEvent>("transcript-preview", async (event) => {
+function openContextMenu(x: number, y: number): void {
+  closeContextMenu();
+
+  const menu = document.createElement("div");
+  menu.className = "shelf-context-menu";
+  menu.setAttribute("role", "menu");
+
+  const hideItem = document.createElement("button");
+  hideItem.type = "button";
+  hideItem.className = "shelf-context-item";
+  hideItem.setAttribute("role", "menuitem");
+  hideItem.textContent = "Hide";
+  hideItem.addEventListener("click", () => {
+    void hideShelf();
+  });
+
+  menu.append(hideItem);
+  document.body.append(menu);
+  contextMenu = menu;
+
+  // Keep the menu inside the small frameless window.
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
+  hideItem.focus();
+}
+
+function closeContextMenu(): void {
+  contextMenu?.remove();
+  contextMenu = null;
+}
+
+// A press that moves drags the whole stack; a stationary press copies the clip
+// (the click handler does that). Drag detection lives on window so it keeps
+// tracking once the pointer leaves the originating clip.
+window.addEventListener("mousemove", (event) => {
+  if (clipPress === null || clipPress.dragging) return;
+  if (
+    Math.abs(event.clientX - clipPress.x) > CLIP_DRAG_THRESHOLD_PX ||
+    Math.abs(event.clientY - clipPress.y) > CLIP_DRAG_THRESHOLD_PX
+  ) {
+    clipPress.dragging = true;
+    suppressClipClick = true;
+    void appWindow.startDragging();
+  }
+});
+
+window.addEventListener("mouseup", () => {
+  clipPress = null;
+});
+
+// Right-click anywhere on the stack offers a single action: hide it.
+window.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  openContextMenu(event.clientX, event.clientY);
+});
+
+window.addEventListener("mousedown", (event) => {
+  if (contextMenu && !contextMenu.contains(event.target as Node)) {
+    closeContextMenu();
+  }
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeContextMenu();
+});
+
+window.addEventListener("blur", closeContextMenu);
+
+// Recording previews update the live bubble only while the stack is already
+// open; they never summon it.
+void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
   if (event.payload.finalPreview) {
     resetLiveTranscript();
     return;
   }
-  showLiveTranscript(event.payload.text);
-  await showShelf();
+  if (shelfVisible) {
+    showLiveTranscript(event.payload.text);
+  }
 });
 
-void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", async (event) => {
+// A finished transcript is recorded into the stack in the background; it does
+// not pop the stack open.
+void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event) => {
   resetLiveTranscript();
   addOrReplaceTranscriptItem(event.payload.item);
+});
+
+// The only thing that opens the stack: a summon from the pill (click or
+// shortcut). Toggling again dismisses it.
+void listen("transcript-shelf-toggle", async () => {
+  if (shelfVisible) {
+    await hideShelf();
+    return;
+  }
+  await loadTranscriptHistory();
   await showShelf();
 });
 

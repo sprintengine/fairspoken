@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { isRegistered, register } from "@tauri-apps/plugin-global-shortcut";
+import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isRegistered, register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
 
 type AppState = "idle" | "recording" | "transcribing" | "error";
@@ -37,8 +38,12 @@ interface TranscriptHistoryUpdatedEvent {
 
 const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
 const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
+const STACK_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit2", "CommandOrControl+Shift+2", "Command+Shift+Digit2", "Command+Shift+2"];
+const STACK_SHORTCUT_DEFAULT_CANDIDATES = ["Ctrl+Alt+Digit2", "Ctrl+Alt+2"];
+const PILL_DRAG_THRESHOLD_PX = 4;
 
 const app = required<HTMLElement>("app");
+const titlebar = required<HTMLElement>("titlebar");
 const recordBtn = required<HTMLButtonElement>("recordBtn");
 const settingsBtn = required<HTMLButtonElement>("settingsBtn");
 const settingsEventBadge = required<HTMLElement>("settingsEventBadge");
@@ -434,6 +439,44 @@ async function cancelTranscription(): Promise<void> {
   }
 }
 
+async function toggleTranscriptStack(): Promise<void> {
+  try {
+    await emit("transcript-shelf-toggle");
+  } catch (error) {
+    addEvent("warning", error instanceof Error ? error.message : String(error));
+  }
+}
+
+// The pill is a frameless, always-on-top HUD. A press that moves drags the
+// window; a press that stays put is a click that toggles the copied-message
+// stack. We drive both from JS (rather than a CSS drag region) so the click
+// is delivered reliably on macOS instead of being swallowed by the OS drag.
+function wirePillPointer(): void {
+  const appWindow = getCurrentWindow();
+  let press: { x: number; y: number; dragging: boolean } | null = null;
+
+  titlebar.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest(".logo-btn, .settings-btn")) return;
+    press = { x: event.clientX, y: event.clientY, dragging: false };
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (press === null || press.dragging) return;
+    if (Math.abs(event.clientX - press.x) > PILL_DRAG_THRESHOLD_PX || Math.abs(event.clientY - press.y) > PILL_DRAG_THRESHOLD_PX) {
+      press.dragging = true;
+      void appWindow.startDragging();
+    }
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (press === null) return;
+    const wasClick = !press.dragging;
+    press = null;
+    if (wasClick) void toggleTranscriptStack();
+  });
+}
+
 function isMacOS(): boolean {
   return navigator.platform.toLowerCase().includes("mac");
 }
@@ -463,6 +506,44 @@ async function registerRecordingShortcut(): Promise<void> {
   }
 
   addEvent("warning", `Recording shortcut is unavailable: ${failures.join("; ")}`);
+}
+
+async function registerStackShortcut(): Promise<void> {
+  const shortcuts = isMacOS() ? STACK_SHORTCUT_MACOS_CANDIDATES : STACK_SHORTCUT_DEFAULT_CANDIDATES;
+  const failures: string[] = [];
+
+  for (const shortcut of shortcuts) {
+    try {
+      await register(shortcut, (event) => {
+        if (event.state === "Pressed") {
+          void toggleTranscriptStack();
+        }
+      });
+
+      const registered = await isRegistered(shortcut);
+      if (registered) {
+        addEvent("info", `Copied-messages shortcut registered: ${shortcut}`);
+        return;
+      }
+
+      failures.push(`${shortcut}: registration was not confirmed`);
+    } catch (error) {
+      failures.push(`${shortcut}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  addEvent("warning", `Copied-messages shortcut is unavailable: ${failures.join("; ")}`);
+}
+
+async function registerGlobalShortcuts(): Promise<void> {
+  try {
+    await unregisterAll();
+  } catch (error) {
+    addEvent("warning", `Could not clear existing shortcuts before registration: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  await registerRecordingShortcut();
+  await registerStackShortcut();
 }
 
 recordBtn.addEventListener("click", () => {
@@ -504,5 +585,6 @@ void loadBackendStatus().catch((error) => {
   setState("error", "Error");
 });
 void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
-void registerRecordingShortcut();
+void registerGlobalShortcuts();
+wirePillPointer();
 updateSettingsEventBadge();

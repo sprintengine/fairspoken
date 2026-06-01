@@ -9,6 +9,8 @@ use crate::transcription::TranscriptionService;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::env;
+use std::sync::{Arc, Mutex, TryLockError};
+use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -24,16 +26,16 @@ pub fn run_transcription_host() -> Result<(), String> {
     println!("multivoice transcription host listening on http://{addr}");
 
     let models = ModelService::default();
-    let mut transcription = TranscriptionService::default();
-    let mut metrics = HostMetrics::new();
+    let transcription = Arc::new(Mutex::new(TranscriptionService::default()));
+    let metrics = Arc::new(Mutex::new(HostMetrics::new()));
 
     for request in server.incoming_requests() {
         let response = handle_request(
             request,
             token.as_deref(),
-            &models,
-            &mut transcription,
-            &mut metrics,
+            models.clone(),
+            Arc::clone(&transcription),
+            Arc::clone(&metrics),
             &addr,
         );
         if let Err(err) = response {
@@ -45,11 +47,11 @@ pub fn run_transcription_host() -> Result<(), String> {
 }
 
 fn handle_request(
-    mut request: Request,
+    request: Request,
     token: Option<&str>,
-    models: &ModelService,
-    transcription: &mut TranscriptionService,
-    metrics: &mut HostMetrics,
+    models: ModelService,
+    transcription: Arc<Mutex<TranscriptionService>>,
+    metrics: Arc<Mutex<HostMetrics>>,
     bind_addr: &str,
 ) -> Result<(), String> {
     // The dashboard HTML itself is safe to serve without auth — it contains no secrets
@@ -82,6 +84,9 @@ fn handle_request(
             )
         }
         (&Method::Get, "/v1/stats") => {
+            let metrics = metrics
+                .lock()
+                .map_err(|_| "Host metrics lock failed".to_string())?;
             let snapshot = metrics.snapshot(bind_addr);
             respond_json(
                 request,
@@ -90,87 +95,205 @@ fn handle_request(
                     .map_err(|err| format!("Failed to serialize stats response: {err}"))?,
             )
         }
-        (&Method::Post, "/v1/transcriptions") => {
-            let mut body = Vec::new();
-            if let Err(err) = request.as_reader().read_to_end(&mut body) {
-                return respond_error(
-                    request,
-                    StatusCode(400),
-                    &format!("Failed to read transcription request body: {err}"),
-                );
-            }
-            let settings = match settings_from_headers(&request) {
-                Ok(settings) => settings,
-                Err(err) => return respond_error(request, StatusCode(400), &err),
-            };
-            let recording = match decode_wav(&body) {
-                Ok(recording) => recording,
-                Err(err) => return respond_error(request, StatusCode(400), &err),
-            };
-            let duration_seconds = recording.stats().duration_seconds;
-            metrics.begin_session();
-            let text = match transcribe_recording(transcription, models, &settings, recording) {
-                Ok(text) => text,
-                Err(err) => {
-                    metrics.abort_session();
-                    return respond_error(request, StatusCode(500), &err);
-                }
-            };
-            let backend = backend_id(settings.transcription_backend).to_string();
-            let model = selected_model_id(&settings).to_string();
-            metrics.complete_session(duration_seconds, backend.clone(), model.clone(), "batch");
-            let response = RemoteTranscriptionResponse {
-                text,
-                duration_seconds,
-                backend,
-                model,
-                server_version: Some(SERVER_VERSION.to_string()),
-            };
-            respond_json(
-                request,
-                StatusCode(200),
-                serde_json::to_string(&response)
-                    .map_err(|err| format!("Failed to serialize transcription response: {err}"))?,
-            )
-        }
-        (&Method::Post, "/v1/transcriptions/stream") => {
-            let settings = match settings_from_headers(&request) {
-                Ok(settings) => settings,
-                Err(err) => return respond_error(request, StatusCode(400), &err),
-            };
-            metrics.begin_session();
-            let (text, duration_seconds) =
-                match transcribe_stream(transcription, models, &settings, &mut request) {
-                    Ok(result) => result,
-                    Err(err) => {
-                        metrics.abort_session();
-                        return respond_error(request, StatusCode(500), &err);
-                    }
-                };
-            let backend = backend_id(settings.transcription_backend).to_string();
-            let model = selected_model_id(&settings).to_string();
-            metrics.complete_session(duration_seconds, backend.clone(), model.clone(), "stream");
-            let response = RemoteTranscriptionResponse {
-                text,
-                duration_seconds,
-                backend,
-                model,
-                server_version: Some(SERVER_VERSION.to_string()),
-            };
-            respond_json(
-                request,
-                StatusCode(200),
-                serde_json::to_string(&response).map_err(|err| {
-                    format!("Failed to serialize streaming transcription response: {err}")
-                })?,
-            )
-        }
+        (&Method::Post, "/v1/transcriptions") => spawn_transcription_request(
+            request,
+            models,
+            transcription,
+            metrics,
+            TranscriptionRequestKind::Batch,
+        ),
+        (&Method::Post, "/v1/transcriptions/stream") => spawn_transcription_request(
+            request,
+            models,
+            transcription,
+            metrics,
+            TranscriptionRequestKind::Stream,
+        ),
         _ => respond_json(
             request,
             StatusCode(404),
             r#"{"error":"not_found"}"#.to_string(),
         ),
     }
+}
+
+#[derive(Clone, Copy)]
+enum TranscriptionRequestKind {
+    Batch,
+    Stream,
+}
+
+fn spawn_transcription_request(
+    request: Request,
+    models: ModelService,
+    transcription: Arc<Mutex<TranscriptionService>>,
+    metrics: Arc<Mutex<HostMetrics>>,
+    kind: TranscriptionRequestKind,
+) -> Result<(), String> {
+    thread::Builder::new()
+        .name("transcription-host-request".to_string())
+        .spawn(move || {
+            let result = match kind {
+                TranscriptionRequestKind::Batch => {
+                    handle_batch_transcription(request, models, transcription, metrics)
+                }
+                TranscriptionRequestKind::Stream => {
+                    handle_stream_transcription(request, models, transcription, metrics)
+                }
+            };
+            if let Err(err) = result {
+                eprintln!("Failed to handle transcription host request: {err}");
+            }
+        })
+        .map(|_| ())
+        .map_err(|err| format!("Failed to start transcription request worker: {err}"))
+}
+
+fn handle_batch_transcription(
+    mut request: Request,
+    models: ModelService,
+    transcription: Arc<Mutex<TranscriptionService>>,
+    metrics: Arc<Mutex<HostMetrics>>,
+) -> Result<(), String> {
+    let mut transcription = match transcription.try_lock() {
+        Ok(transcription) => transcription,
+        Err(TryLockError::WouldBlock) => {
+            return respond_error(
+                request,
+                StatusCode(429),
+                "A transcription is already running",
+            )
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Transcription service lock failed".to_string())
+        }
+    };
+
+    let mut body = Vec::new();
+    if let Err(err) = request.as_reader().read_to_end(&mut body) {
+        return respond_error(
+            request,
+            StatusCode(400),
+            &format!("Failed to read transcription request body: {err}"),
+        );
+    }
+    let settings = match settings_from_headers(&request) {
+        Ok(settings) => settings,
+        Err(err) => return respond_error(request, StatusCode(400), &err),
+    };
+    let recording = match decode_wav(&body) {
+        Ok(recording) => recording,
+        Err(err) => return respond_error(request, StatusCode(400), &err),
+    };
+    let duration_seconds = recording.stats().duration_seconds;
+    begin_host_session(&metrics)?;
+    let text = match transcribe_recording(&mut transcription, &models, &settings, recording) {
+        Ok(text) => text,
+        Err(err) => {
+            abort_host_session(&metrics)?;
+            return respond_error(request, StatusCode(500), &err);
+        }
+    };
+    complete_host_session(&metrics, duration_seconds, &settings, "batch")?;
+    let response = transcription_response(text, duration_seconds, &settings);
+    respond_json(
+        request,
+        StatusCode(200),
+        serde_json::to_string(&response)
+            .map_err(|err| format!("Failed to serialize transcription response: {err}"))?,
+    )
+}
+
+fn handle_stream_transcription(
+    mut request: Request,
+    models: ModelService,
+    transcription: Arc<Mutex<TranscriptionService>>,
+    metrics: Arc<Mutex<HostMetrics>>,
+) -> Result<(), String> {
+    let mut transcription = match transcription.try_lock() {
+        Ok(transcription) => transcription,
+        Err(TryLockError::WouldBlock) => {
+            return respond_error(
+                request,
+                StatusCode(429),
+                "A transcription is already running",
+            )
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Transcription service lock failed".to_string())
+        }
+    };
+
+    let settings = match settings_from_headers(&request) {
+        Ok(settings) => settings,
+        Err(err) => return respond_error(request, StatusCode(400), &err),
+    };
+    begin_host_session(&metrics)?;
+    let (text, duration_seconds) =
+        match transcribe_stream(&mut transcription, &models, &settings, &mut request) {
+            Ok(result) => result,
+            Err(err) => {
+                abort_host_session(&metrics)?;
+                return respond_error(request, StatusCode(500), &err);
+            }
+        };
+    complete_host_session(&metrics, duration_seconds, &settings, "stream")?;
+    let response = transcription_response(text, duration_seconds, &settings);
+    respond_json(
+        request,
+        StatusCode(200),
+        serde_json::to_string(&response).map_err(|err| {
+            format!("Failed to serialize streaming transcription response: {err}")
+        })?,
+    )
+}
+
+fn transcription_response(
+    text: String,
+    duration_seconds: f32,
+    settings: &Settings,
+) -> RemoteTranscriptionResponse {
+    RemoteTranscriptionResponse {
+        text,
+        duration_seconds,
+        backend: backend_id(settings.transcription_backend).to_string(),
+        model: selected_model_id(settings).to_string(),
+        server_version: Some(SERVER_VERSION.to_string()),
+    }
+}
+
+fn begin_host_session(metrics: &Arc<Mutex<HostMetrics>>) -> Result<(), String> {
+    metrics
+        .lock()
+        .map_err(|_| "Host metrics lock failed".to_string())?
+        .begin_session();
+    Ok(())
+}
+
+fn abort_host_session(metrics: &Arc<Mutex<HostMetrics>>) -> Result<(), String> {
+    metrics
+        .lock()
+        .map_err(|_| "Host metrics lock failed".to_string())?
+        .abort_session();
+    Ok(())
+}
+
+fn complete_host_session(
+    metrics: &Arc<Mutex<HostMetrics>>,
+    duration_seconds: f32,
+    settings: &Settings,
+    source: &'static str,
+) -> Result<(), String> {
+    metrics
+        .lock()
+        .map_err(|_| "Host metrics lock failed".to_string())?
+        .complete_session(
+            duration_seconds,
+            backend_id(settings.transcription_backend).to_string(),
+            selected_model_id(settings).to_string(),
+            source,
+        );
+    Ok(())
 }
 
 fn respond_error(request: Request, status: StatusCode, message: &str) -> Result<(), String> {
@@ -210,6 +333,7 @@ fn transcribe_stream(
     let recording = crate::audio::Recording {
         pcm_i16,
         sample_rate,
+        dropped_stream_frames: 0,
     };
     let duration_seconds = recording.stats().duration_seconds;
     let text = transcription.finish_session(&recording, settings, models)?;

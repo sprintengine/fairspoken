@@ -114,9 +114,7 @@ fn transcribe_remote_stream(
 ) -> Result<RemoteTranscriptionResponse, String> {
     let base_url = validate_remote_base_url(&settings.remote_url)?;
     let client = Client::builder()
-        .timeout(Duration::from_secs(u64::from(
-            settings.remote_timeout_seconds,
-        )))
+        .timeout(remote_stream_timeout(settings))
         .build()
         .map_err(|err| format!("Failed to create remote transcription client: {err}"))?;
     let url = base_url
@@ -144,6 +142,14 @@ fn transcribe_remote_stream(
     }
 
     Ok(result)
+}
+
+fn remote_stream_timeout(settings: &Settings) -> Duration {
+    Duration::from_secs(u64::from(
+        settings
+            .remote_timeout_seconds
+            .saturating_add(settings.max_recording_seconds),
+    ))
 }
 
 #[allow(dead_code)]
@@ -322,6 +328,7 @@ pub fn decode_wav(bytes: &[u8]) -> Result<Recording, String> {
     Ok(Recording {
         pcm_i16,
         sample_rate: spec.sample_rate,
+        dropped_stream_frames: 0,
     })
 }
 
@@ -442,15 +449,19 @@ fn host_allows_plain_http(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wav, encode_wav, read_stream_frame, validate_remote_base_url, write_stream_frame,
+        decode_wav, encode_wav, read_stream_frame, remote_stream_timeout, validate_remote_base_url,
+        write_stream_frame,
     };
     use crate::audio::{AudioFrame, Recording};
+    use crate::settings::Settings;
+    use std::time::Duration;
 
     #[test]
     fn wav_round_trip_preserves_mono_pcm() {
         let recording = Recording {
             pcm_i16: vec![0, 1000, -1000],
             sample_rate: 16_000,
+            dropped_stream_frames: 0,
         };
 
         let wav = encode_wav(&recording).expect("encode wav");
@@ -475,6 +486,17 @@ mod tests {
 
         assert_eq!(decoded.sample_rate, frame.sample_rate);
         assert_eq!(decoded.pcm_i16, frame.pcm_i16);
+    }
+
+    #[test]
+    fn remote_stream_timeout_covers_recording_and_server_processing_time() {
+        let settings = Settings {
+            remote_timeout_seconds: 15,
+            max_recording_seconds: 120,
+            ..Settings::default()
+        };
+
+        assert_eq!(remote_stream_timeout(&settings), Duration::from_secs(135));
     }
 
     #[test]
