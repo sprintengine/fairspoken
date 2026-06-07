@@ -61,7 +61,21 @@ By default it listens on `127.0.0.1:48173`. Override the bind address or require
 MULTIVOICE_HOST_ADDR=0.0.0.0:48173 MULTIVOICE_HOST_TOKEN=secret cargo run --bin transcription-host
 ```
 
+The host accepts multiple active client streams and queues completed recordings
+for one or more transcription workers. Defaults are conservative for a
+single-purpose local server:
+
+```bash
+MULTIVOICE_HOST_WORKERS=1
+MULTIVOICE_HOST_QUEUE_CAPACITY=8
+MULTIVOICE_HOST_MAX_ACTIVE_STREAMS=4
+MULTIVOICE_HOST_MAX_RECORDING_SECONDS=120
+```
+
 In the desktop settings, set `Transcription` location to `Remote host`, enter the host URL, and choose either `Whisper` or `Sherpa streaming`. The client streams mono PCM frames while recording; the host uses the requested backend/model and returns the final transcript for clipboard copy.
+
+For a dedicated Mac mini setup and benchmark checklist, see
+`docs/mac-mini-transcription-host.md`.
 
 ## Plan
 

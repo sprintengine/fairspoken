@@ -68,6 +68,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19V9M9 19V5M14 19v-7M19 19v-11" stroke-linecap="round"/></svg>
             <div class="e-title">Your stats will appear here</div>
             <div class="e-sub">Words dictated, time saved, and your daily streak — calculated as you dictate. Press the record shortcut to capture your first one.</div>
+            <button class="btn btn-primary" data-open="speedtest" type="button">Run a quick speed test</button>
           </div>
 
           <div id="homeStats" hidden>
@@ -75,6 +76,10 @@
               <div class="label">Time saved</div>
               <div class="value num" id="statTimeSaved">—</div>
               <div class="sub" id="statTimeSavedSub"></div>
+              <div class="hero-actions">
+                <button class="btn btn-ghost btn-sm" data-open="speedtest" type="button">Run a speed test</button>
+                <button class="btn btn-ghost btn-sm" data-open="voicetest" type="button">Test voice accuracy</button>
+              </div>
             </div>
             <div class="tiles">
               <div class="tile"><div class="t-label">Words dictated</div><div class="t-value num" id="statTotalWords">0</div><div class="t-meta">lifetime</div></div>
@@ -187,6 +192,11 @@
                   <span><strong>Echo cancellation</strong></span>
                   <input id="echoCancellation" type="checkbox" />
                 </label>
+
+                <div class="toggle-row capture-diagnostic">
+                  <span><strong>Voice accuracy test</strong><span class="field-hint">Read a known passage and check what the transcriber heard</span></span>
+                  <button class="btn btn-sm" data-open="voicetest" type="button">Test</button>
+                </div>
               </section>
 
               <section class="settings-section" aria-labelledby="transcriptionTitle">
@@ -327,6 +337,21 @@
                 <div class="settings-note" id="shortcutStatus" aria-live="polite">Shortcuts apply globally while MultiVoice is running.</div>
               </section>
           </form>
+        </section>
+
+        <!-- ════ SPEED TEST (type-vs-speak, driven by speedTest.ts) ════
+             A sub-route of Home, launched from the Home screen rather than the
+             sidebar nav. The controller renders all states into #speedTest. -->
+        <section class="screen" id="screen-speedtest">
+          <div class="st" id="speedTest"></div>
+        </section>
+
+        <!-- ════ VOICE ACCURACY TEST (read-aloud diagnostic, driven by voiceAccuracyTest.ts) ════
+             A sub-route of Home like the speed test, launched from the Home screen
+             and from Settings → Capture rather than the sidebar nav. The controller
+             renders all states into #voiceTest. -->
+        <section class="screen" id="screen-voicetest">
+          <div class="st" id="voiceTest"></div>
         </section>
       </div>
     </div>

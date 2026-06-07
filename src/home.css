@@ -261,6 +261,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 .field > span, .toggle-row > span { color: var(--text-secondary); }
 .toggle-row > span strong { font-weight: 500; color: var(--text-secondary); }
 .toggle-row input[type="checkbox"] { justify-self: end; }
+.capture-diagnostic .btn { justify-self: end; }
 .field-hint { display: block; color: var(--text-muted); font-size: var(--fs-micro); font-weight: 400; margin-top: 2px; }
 
 .meter-row { display: flex; align-items: center; gap: 10px; padding: 4px 0 10px; }
@@ -369,3 +370,162 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 .dict-rows-empty { padding: 8px 0; color: var(--text-muted); font-size: var(--fs-meta); }
 .dict-arrow { color: var(--text-muted); }
 .dict-row .setting-input { min-width: 0; }
+
+/* ── Speed test (type-vs-speak) ───────────────────────────────
+   A focused sub-route of Home. Single accent, the Monkeytype caret rhythm for
+   the typing leg, the existing display/body/meta scale. Results + listening
+   styles arrive with their phases — only the typing-leg states are styled. */
+.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+
+.st { max-width: 640px; }
+.st-step { color: var(--text-muted); font-size: var(--fs-micro); margin-bottom: 12px; }
+.st-h { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.18; }
+.st-h-sm { font-size: 22px; margin-top: 22px; }
+.st-sub { color: var(--text-secondary); font-size: var(--fs-meta); margin-top: 8px; max-width: 52ch; }
+.st-actions { display: flex; align-items: center; gap: 14px; margin-top: 26px; }
+.st-link { background: none; border: none; color: var(--text-secondary); font: inherit; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-strong); }
+.st-link:hover { color: var(--text); }
+.st-hint { color: var(--text-muted); font-size: var(--fs-micro); margin-top: 14px; }
+.st-paste { color: var(--warning); font-size: var(--fs-micro); margin-top: 8px; min-height: 14px; }
+
+/* Live readout above the passage during the typing leg. */
+.st-live { display: flex; align-items: baseline; gap: 18px; margin-bottom: 4px; }
+.st-live .lv { display: flex; align-items: baseline; gap: 6px; }
+.st-live .lv b { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.01em; }
+.st-live .lv span { color: var(--text-muted); font-size: var(--fs-micro); }
+
+/* The reading block; preview is muted, the live target lights up as you type. */
+.passage-wrap { position: relative; margin-top: 26px; }
+.passage { font-size: 18px; line-height: 1.85; letter-spacing: .005em; color: var(--text-muted);
+  font-family: var(--font-brand); white-space: pre-wrap; word-break: break-word; }
+.passage .ch { color: var(--text-muted); }
+.passage.live .ch.done { color: var(--text); }
+.passage.live .ch.bad { color: var(--accent); text-decoration: underline;
+  text-decoration-color: var(--accent); text-underline-offset: 3px; }
+.passage.live .ch.bad.space { background: var(--accent-quiet); text-decoration: none; }
+.passage.live .ch.cur { position: relative; }
+.passage.live .ch.cur::before { content: ""; position: absolute; left: -1px; top: .12em; bottom: .04em;
+  width: 2px; background: var(--accent); border-radius: 1px; animation: st-caret 1s steps(1) infinite; }
+@keyframes st-caret { 50% { opacity: 0; } }
+/* Invisible capture surface laid exactly over the passage. */
+.capture { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: none; outline: none;
+  background: transparent; color: transparent; caret-color: transparent;
+  font-size: 18px; line-height: 1.85; letter-spacing: .005em; font-family: var(--font-brand); padding: 0; overflow: hidden; }
+
+/* Leg-complete line, e.g. "Typed in 1:48 · 41 wpm · 98% accurate". */
+.leg-line { display: flex; align-items: center; gap: 9px; color: var(--text-secondary);
+  font-size: var(--fs-body); margin-top: 4px; }
+.leg-line .v { color: var(--text); font-weight: 600; }
+.leg-line .sep { color: var(--border-strong); }
+
+.st-spacer { flex: 1; }
+.st-best { color: var(--text-muted); font-size: var(--fs-micro); }
+.st-hint-inline { margin: 0; }
+.passage.spoken { color: var(--text); }
+
+/* Speaking leg: one earned status idiom — the 6px recording pulse. */
+.listen { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; color: var(--text-secondary); }
+.listen .rdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: st-pulse 1.4s ease-out infinite; }
+.listen .clock { margin-left: auto; font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; color: var(--text); }
+@keyframes st-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255,26,61,.45); }
+  70% { box-shadow: 0 0 0 7px rgba(255,26,61,0); }
+  100% { box-shadow: 0 0 0 0 rgba(255,26,61,0); }
+}
+.transcribe { display: flex; align-items: center; gap: 9px; color: var(--text-secondary); }
+.transcribe .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+
+/* Results: hairline-split compare + proportional bars. One accent (spoke). */
+.res-head { display: flex; align-items: center; gap: 12px; }
+.res-h { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.18; }
+.res-h em { font-style: normal; color: var(--accent); }
+.res-best { color: var(--text-secondary); font-size: var(--fs-micro); }
+
+.compare { display: grid; grid-template-columns: 1fr 1fr; margin-top: 26px;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.compare .col { padding: 16px 18px 18px; }
+.compare .col + .col { border-left: 1px solid var(--border); }
+.c-label { color: var(--text-secondary); font-size: var(--fs-meta); display: flex; align-items: center; gap: 7px; }
+.c-label .swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.swatch.typed { background: var(--track); }
+.swatch.spoke { background: var(--accent); }
+.c-time { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; margin-top: 8px; }
+.c-meta { color: var(--text-muted); font-size: var(--fs-meta); margin-top: 6px; }
+
+.bars { margin-top: 22px; display: flex; flex-direction: column; gap: 8px; }
+.bar-row { display: grid; grid-template-columns: 54px 1fr auto; align-items: center; gap: 12px; }
+.bar-row .k { color: var(--text-secondary); font-size: var(--fs-meta); }
+.bar-track { height: 10px; border-radius: 5px; background: transparent; }
+.bar-fill { height: 10px; border-radius: 5px; display: block; }
+.bar-fill.typed { background: var(--track); }
+.bar-fill.spoke { background: var(--accent); }
+.bar-row .t { color: var(--text-muted); font-size: var(--fs-meta); font-family: var(--mono); min-width: 42px; text-align: right; }
+
+.res-note { color: var(--text-muted); font-size: var(--fs-meta); margin-top: 22px; line-height: 1.6; max-width: 56ch; }
+.res-note .strong { color: var(--text-secondary); }
+
+/* Capture errors: distinct mic vs transcription copy, the dot earned by failure. */
+.err { display: flex; flex-direction: column; gap: 6px; }
+.err .e-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-bottom: 6px; }
+.err .e-dot.warn { background: var(--warning); }
+.err-h { font-size: var(--fs-title); font-weight: 600; }
+.err-sub { color: var(--text-secondary); font-size: var(--fs-meta); max-width: 48ch; }
+
+.st-link.is-saved { color: var(--dot-good); text-decoration: none; cursor: default; }
+
+/* ── Voice accuracy test ── reuses the speed-test language (.st, .passage,
+   .listen, .transcribe, .res-head, .err); these are the surface's own additions.
+   Run source: which engine/model produced the result and how preview behaved —
+   ownership made visible, not hidden in a tooltip. */
+.vt-source { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--text-secondary); font-size: var(--fs-meta); flex-wrap: wrap; }
+.vt-source .k { color: var(--text-muted); }
+.vt-source .sep { color: var(--border-strong); }
+
+/* Metrics strip: flat cells split by a single hairline, no cards — the same
+   idiom as Home's .tiles. Recording and transcription latency stay separate. */
+.vt-metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 18px;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.vt-metric { padding: 14px 16px; }
+.vt-metric + .vt-metric { border-left: 1px solid var(--border); }
+.vt-metric .m-label { color: var(--text-secondary); font-size: var(--fs-meta); }
+.vt-metric .m-value { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.01em; margin-top: 4px; }
+.vt-metric .m-meta { color: var(--text-muted); font-size: var(--fs-micro); margin-top: 4px; min-height: 14px; }
+
+/* Section labels above the two evidence panels. */
+.vt-label { color: var(--text-secondary); font-size: var(--fs-meta); margin: 24px 0 8px; }
+
+/* Target passage coloured by match state: hit = body text, omitted = muted
+   strike, substituted = the one product accent. Shared by the voice accuracy
+   test and the speed test's spoken results and low-accuracy guard. */
+.passage.compared { color: var(--text); margin-top: 0; }
+.passage.compared .w.miss { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--border-strong); }
+.passage.compared .w.sub { color: var(--accent); }
+
+/* Actual transcript: what the backend really returned. Inserted/substituted
+   words carry the same accent; everything else is plain body text. */
+.vt-transcript { font-size: 16px; line-height: 1.85; letter-spacing: .005em; color: var(--text);
+  font-family: var(--font-brand); white-space: pre-wrap; word-break: break-word; }
+.vt-transcript .w.ins, .vt-transcript .w.sub { color: var(--accent); }
+.vt-transcript .empty { color: var(--text-muted); }
+
+/* Colour-semantic legend: one quiet line. */
+.vt-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; color: var(--text-muted); font-size: var(--fs-micro); }
+.vt-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.vt-legend .sw { width: 10px; border-top: 2px solid currentColor; }
+.vt-legend .sw.miss { color: var(--text-muted); }
+.vt-legend .sw.acc { color: var(--accent); }
+
+/* Live preview ("heard so far") during recording / transcribing. Honest mode
+   label; never presented as the final score. */
+.vt-preview { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
+.vt-preview .ph { display: flex; align-items: baseline; gap: 8px; color: var(--text-secondary); font-size: var(--fs-meta); }
+.vt-preview .ph .mode { color: var(--text-muted); font-variant-numeric: tabular-nums slashed-zero; }
+.vt-preview .ph .mode-tag { margin-left: auto; color: var(--text-muted); font-size: var(--fs-micro); }
+.vt-preview .ptext { margin-top: 8px; color: var(--text-secondary); font-size: 15px; line-height: 1.7; font-family: var(--font-brand); }
+.vt-preview .ptext.empty { color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .passage.live .ch.cur::before { animation: none; }
+  .listen .rdot { animation: none; }
+}

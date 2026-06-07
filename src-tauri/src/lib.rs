@@ -6,13 +6,14 @@ mod notes;
 mod post_processing;
 mod remote_transcription;
 mod settings;
+mod speed_test;
 mod transcript_history;
 mod transcription;
 mod usage_stats;
 
 pub use host::run_transcription_host;
 
-use audio::AudioService;
+use audio::{AudioService, Recording};
 use clipboard::ClipboardService;
 use models::{
     ModelPrepareProgress, ModelService, ModelStatus, SherpaModel, TranscriptionModelStatus,
@@ -29,6 +30,9 @@ use serde::{Deserialize, Serialize};
 use settings::{
     Settings, SettingsService, Snippet, TranscriptCorrection, TranscriptionBackend,
     TranscriptionLocation,
+};
+use speed_test::{
+    build_capture_result, SpeedTestCapture, SpeedTestRecord, SpeedTestService, SpeedTestSummary,
 };
 use std::sync::atomic::AtomicU64;
 use std::sync::{
@@ -61,6 +65,7 @@ struct AppServices {
     transcript_history: Mutex<TranscriptHistoryService>,
     notes: Mutex<NotesService>,
     usage_stats: Mutex<UsageStatsService>,
+    speed_test: Mutex<SpeedTestService>,
     transcription: Mutex<TranscriptionService>,
     remote_transcription: Mutex<Option<RemoteStreamingSession>>,
     transcript_shelf_positioned: AtomicBool,
@@ -691,46 +696,8 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
-    let recording = match services
-        .audio
-        .lock()
-        .map_err(|_| "Audio service lock failed".to_string())?
-        .stop()
-    {
-        Ok(recording) => recording,
-        Err(err) => {
-            cancel_transcription_for_location(&services, settings.transcription_location)?;
-            return Err(err);
-        }
-    };
+    let recording = stop_and_validate_recording(&app, &services, &settings)?;
     let stats = recording.stats();
-    emit_backend_event(
-        &app,
-        "info",
-        format!(
-            "Recording stopped: {:.2}s, peak {:.4}, rms {:.4}, dropped stream frames {}",
-            stats.duration_seconds, stats.peak, stats.rms, stats.dropped_stream_frames
-        ),
-    );
-
-    if stats.duration_seconds < MIN_RECORDING_SECONDS {
-        emit_backend_event(&app, "warning", "Recording rejected as too short");
-        cancel_transcription_for_location(&services, settings.transcription_location)?;
-        return Err("Recording was too short".to_string());
-    }
-
-    if stats.rms < SILENCE_RMS_THRESHOLD && stats.peak < SILENCE_PEAK_THRESHOLD {
-        emit_backend_event(
-            &app,
-            "warning",
-            format!(
-                "Recording rejected as silence: peak {:.4}, rms {:.4}",
-                stats.peak, stats.rms
-            ),
-        );
-        cancel_transcription_for_location(&services, settings.transcription_location)?;
-        return Err("No speech detected - raise input gain or change microphone".to_string());
-    }
 
     emit_backend_event(
         &app,
@@ -740,46 +707,7 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
             settings.transcription_location, settings.transcription_backend
         ),
     );
-    let raw_transcript = match settings.transcription_location {
-        TranscriptionLocation::Local => {
-            let result = services
-                .transcription
-                .lock()
-                .map_err(|_| "Transcription service lock failed".to_string())?
-                .finish_session(&recording, &settings, &services.models);
-            clear_local_transcription_cancel(&services)?;
-            match result {
-                Ok(transcript) => transcript,
-                Err(_)
-                    if services
-                        .transcription_cancel_requested
-                        .load(Ordering::SeqCst) =>
-                {
-                    emit_backend_event(&app, "info", "Transcription cancelled");
-                    return Err("Transcription was cancelled".to_string());
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        TranscriptionLocation::RemoteHost => {
-            services
-                .remote_transcription
-                .lock()
-                .map_err(|_| "Remote transcription service lock failed".to_string())?
-                .take()
-                .ok_or_else(|| "No remote transcription session is active".to_string())?
-                .finish()?
-                .text
-        }
-    };
-
-    if services
-        .transcription_cancel_requested
-        .load(Ordering::SeqCst)
-    {
-        emit_backend_event(&app, "info", "Transcription cancelled");
-        return Err("Transcription was cancelled".to_string());
-    }
+    let raw_transcript = finish_transcription_raw(&app, &services, &recording, &settings)?;
 
     let processed = apply_transcript_post_processing(&raw_transcript, &settings);
     if processed.corrections_applied > 0 {
@@ -840,6 +768,225 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
     }
 
     Ok(transcript)
+}
+
+/// Stop audio capture and reject recordings that are too short or silent.
+/// Shared by the dictation commit path and the speed test so neither forks the
+/// validation. On rejection the in-flight transcription session is cancelled.
+fn stop_and_validate_recording(
+    app: &AppHandle,
+    services: &State<'_, AppServices>,
+    settings: &Settings,
+) -> Result<Recording, String> {
+    let recording = match services
+        .audio
+        .lock()
+        .map_err(|_| "Audio service lock failed".to_string())?
+        .stop()
+    {
+        Ok(recording) => recording,
+        Err(err) => {
+            cancel_transcription_for_location(services, settings.transcription_location)?;
+            return Err(err);
+        }
+    };
+    let stats = recording.stats();
+    emit_backend_event(
+        app,
+        "info",
+        format!(
+            "Recording stopped: {:.2}s, peak {:.4}, rms {:.4}, dropped stream frames {}",
+            stats.duration_seconds, stats.peak, stats.rms, stats.dropped_stream_frames
+        ),
+    );
+
+    if stats.duration_seconds < MIN_RECORDING_SECONDS {
+        emit_backend_event(app, "warning", "Recording rejected as too short");
+        cancel_transcription_for_location(services, settings.transcription_location)?;
+        return Err("Recording was too short".to_string());
+    }
+
+    if stats.rms < SILENCE_RMS_THRESHOLD && stats.peak < SILENCE_PEAK_THRESHOLD {
+        emit_backend_event(
+            app,
+            "warning",
+            format!(
+                "Recording rejected as silence: peak {:.4}, rms {:.4}",
+                stats.peak, stats.rms
+            ),
+        );
+        cancel_transcription_for_location(services, settings.transcription_location)?;
+        return Err("No speech detected - raise input gain or change microphone".to_string());
+    }
+
+    Ok(recording)
+}
+
+/// Finish the active transcription session and return the raw transcript (no
+/// post-processing). Shared by the dictation commit path and the speed test.
+fn finish_transcription_raw(
+    app: &AppHandle,
+    services: &State<'_, AppServices>,
+    recording: &Recording,
+    settings: &Settings,
+) -> Result<String, String> {
+    let raw_transcript = match settings.transcription_location {
+        TranscriptionLocation::Local => {
+            let result = services
+                .transcription
+                .lock()
+                .map_err(|_| "Transcription service lock failed".to_string())?
+                .finish_session(recording, settings, &services.models);
+            clear_local_transcription_cancel(services)?;
+            match result {
+                Ok(transcript) => transcript,
+                Err(_)
+                    if services
+                        .transcription_cancel_requested
+                        .load(Ordering::SeqCst) =>
+                {
+                    emit_backend_event(app, "info", "Transcription cancelled");
+                    return Err("Transcription was cancelled".to_string());
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        TranscriptionLocation::RemoteHost => {
+            services
+                .remote_transcription
+                .lock()
+                .map_err(|_| "Remote transcription service lock failed".to_string())?
+                .take()
+                .ok_or_else(|| "No remote transcription session is active".to_string())?
+                .finish()?
+                .text
+        }
+    };
+
+    if services
+        .transcription_cancel_requested
+        .load(Ordering::SeqCst)
+    {
+        emit_backend_event(app, "info", "Transcription cancelled");
+        return Err("Transcription was cancelled".to_string());
+    }
+
+    Ok(raw_transcript)
+}
+
+fn stop_side_effect_free_test_capture(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+) -> Result<SpeedTestCapture, String> {
+    services
+        .transcription_cancel_requested
+        .store(false, Ordering::SeqCst);
+
+    let settings = services
+        .settings
+        .lock()
+        .map_err(|_| "Settings service lock failed".to_string())?
+        .current();
+
+    let recording = stop_and_validate_recording(&app, &services, &settings)?;
+    let stats = recording.stats();
+
+    let started = std::time::Instant::now();
+    let transcript = finish_transcription_raw(&app, &services, &recording, &settings)?;
+    let transcribe_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+
+    Ok(build_capture_result(
+        transcript,
+        stats.duration_seconds,
+        transcribe_ms,
+        &settings,
+    ))
+}
+
+/// The speed test's speaking leg. Reuses the real capture + transcription path
+/// (started via `start_recording`) but commits nothing — no clipboard, history,
+/// notes, usage stats, or speed-test result persistence — so a benchmark run
+/// never pollutes real data.
+#[tauri::command]
+fn stop_speed_test_capture(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+) -> Result<SpeedTestCapture, String> {
+    stop_side_effect_free_test_capture(app, services)
+}
+
+/// The voice accuracy test capture. This intentionally shares the same
+/// side-effect-free path as the speed test while exposing a command name that
+/// does not imply speed-test result persistence.
+#[tauri::command]
+fn stop_voice_test_capture(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+) -> Result<SpeedTestCapture, String> {
+    stop_side_effect_free_test_capture(app, services)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeedTestResultInput {
+    typing_wpm: u32,
+    speaking_wpm: u32,
+    multiplier: f32,
+    accuracy: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeedTestOutcome {
+    summary: SpeedTestSummary,
+    is_best: bool,
+}
+
+#[tauri::command]
+fn save_speed_test_result(
+    input: SpeedTestResultInput,
+    services: State<'_, AppServices>,
+) -> Result<SpeedTestOutcome, String> {
+    let record = SpeedTestRecord {
+        typing_wpm: input.typing_wpm,
+        speaking_wpm: input.speaking_wpm,
+        multiplier: input.multiplier,
+        accuracy: input.accuracy,
+        recorded_at: current_epoch_seconds(),
+    };
+    let (summary, is_best) = services
+        .speed_test
+        .lock()
+        .map_err(|_| "Speed test service lock failed".to_string())?
+        .record(record)?;
+    Ok(SpeedTestOutcome { summary, is_best })
+}
+
+#[tauri::command]
+fn get_speed_test_summary(services: State<'_, AppServices>) -> Result<SpeedTestSummary, String> {
+    services
+        .speed_test
+        .lock()
+        .map_err(|_| "Speed test service lock failed".to_string())
+        .map(|service| service.summary())
+}
+
+#[tauri::command]
+fn set_measured_typing_wpm(
+    app: AppHandle,
+    wpm: f64,
+    services: State<'_, AppServices>,
+) -> Result<UsageStatsSummary, String> {
+    let summary = {
+        let mut service = services
+            .usage_stats
+            .lock()
+            .map_err(|_| "Usage stats service lock failed".to_string())?;
+        service.set_measured_typing_wpm(wpm)?;
+        service.summary(current_epoch_seconds())
+    };
+    let _ = app.emit("usage-stats-updated", &summary);
+    Ok(summary)
 }
 
 fn save_note(
@@ -1006,6 +1153,7 @@ pub fn run() {
             transcript_history: Mutex::new(TranscriptHistoryService::default()),
             notes: Mutex::new(NotesService::default()),
             usage_stats: Mutex::new(UsageStatsService::default()),
+            speed_test: Mutex::new(SpeedTestService::default()),
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
             transcript_shelf_positioned: AtomicBool::new(false),
@@ -1037,6 +1185,11 @@ pub fn run() {
             start_recording,
             stop_and_transcribe,
             cancel_transcription,
+            stop_speed_test_capture,
+            stop_voice_test_capture,
+            save_speed_test_result,
+            get_speed_test_summary,
+            set_measured_typing_wpm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

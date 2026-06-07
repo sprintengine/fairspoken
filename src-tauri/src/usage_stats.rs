@@ -32,6 +32,11 @@ struct UsageStatsData {
     total_dictations: u64,
     #[serde(default)]
     days: BTreeMap<u64, DayBucket>,
+    /// The user's measured typing speed, set from the speed test. When present
+    /// it replaces the assumed `TYPING_WPM` in the time-saved calculation, so
+    /// the headline stat reflects this user rather than a category average.
+    #[serde(default)]
+    measured_typing_wpm: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -50,6 +55,9 @@ pub struct UsageStatsSummary {
     pub total_dictations: u64,
     pub total_recording_seconds: f64,
     pub time_saved_seconds: f64,
+    /// The typing speed the time-saved figure is computed against — the
+    /// measured value when set, otherwise the `TYPING_WPM` reference.
+    pub typing_wpm: f64,
     pub speaking_wpm: u64,
     pub current_streak: u64,
     pub best_streak: u64,
@@ -108,6 +116,16 @@ impl UsageStatsService {
         summarize(&self.data, now_epoch_secs)
     }
 
+    /// Persist the user's measured typing speed (from the speed test). Clamped
+    /// to a sane range so a bad measurement cannot distort the time-saved stat.
+    pub fn set_measured_typing_wpm(&mut self, wpm: f64) -> Result<(), String> {
+        if !wpm.is_finite() || wpm <= 0.0 {
+            return Err("Typing speed must be a positive number".to_string());
+        }
+        self.data.measured_typing_wpm = Some(wpm.clamp(5.0, 400.0));
+        self.save()
+    }
+
     fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
@@ -122,7 +140,8 @@ impl UsageStatsService {
 fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
     let today = now_epoch_secs / SECONDS_PER_DAY;
 
-    let typing_seconds = data.total_words as f64 / TYPING_WPM * 60.0;
+    let typing_wpm = data.measured_typing_wpm.unwrap_or(TYPING_WPM);
+    let typing_seconds = data.total_words as f64 / typing_wpm * 60.0;
     let time_saved_seconds = (typing_seconds - data.total_recording_seconds).max(0.0);
 
     let speaking_wpm = if data.total_recording_seconds > 0.0 {
@@ -163,6 +182,7 @@ fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
         total_dictations: data.total_dictations,
         total_recording_seconds: data.total_recording_seconds,
         time_saved_seconds,
+        typing_wpm,
         speaking_wpm,
         current_streak: current_streak(today, day_active),
         best_streak: best_streak(&data.days),
@@ -303,6 +323,41 @@ mod tests {
         let summary = summarize(&data, SECONDS_PER_DAY * 100);
         assert_eq!(summary.time_saved_seconds.round() as i64, 40);
         assert_eq!(summary.speaking_wpm, 120);
+    }
+
+    #[test]
+    fn measured_typing_wpm_replaces_the_assumed_constant_in_time_saved() {
+        // 40 words dictated in 20s. At the assumed 40 wpm, typing would take 60s
+        // → 40s saved. A faster measured typist (80 wpm) types them in 30s, so
+        // the personalized saving is only 10s.
+        let mut data = UsageStatsData::default();
+        data.total_words = 40;
+        data.total_dictations = 1;
+        data.total_recording_seconds = 20.0;
+
+        let default_summary = summarize(&data, SECONDS_PER_DAY * 100);
+        assert_eq!(default_summary.typing_wpm, TYPING_WPM);
+        assert_eq!(default_summary.time_saved_seconds.round() as i64, 40);
+
+        data.measured_typing_wpm = Some(80.0);
+        let personalized = summarize(&data, SECONDS_PER_DAY * 100);
+        assert_eq!(personalized.typing_wpm, 80.0);
+        assert_eq!(personalized.time_saved_seconds.round() as i64, 10);
+    }
+
+    #[test]
+    fn set_measured_typing_wpm_clamps_and_rejects_bad_values() {
+        let mut service = UsageStatsService {
+            data: UsageStatsData::default(),
+            path: std::env::temp_dir().join("multivoice-usage-stats-wpm-test.json"),
+        };
+        assert!(service.set_measured_typing_wpm(0.0).is_err());
+        assert!(service.set_measured_typing_wpm(f64::NAN).is_err());
+        service
+            .set_measured_typing_wpm(1000.0)
+            .expect("clamps high");
+        assert_eq!(service.data.measured_typing_wpm, Some(400.0));
+        let _ = std::fs::remove_file(&service.path);
     }
 
     #[test]

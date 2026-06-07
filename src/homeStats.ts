@@ -17,6 +17,7 @@ interface UsageStatsSummary {
   totalDictations: number;
   totalRecordingSeconds: number;
   timeSavedSeconds: number;
+  typingWpm: number;
   speakingWpm: number;
   currentStreak: number;
   bestStreak: number;
@@ -104,9 +105,10 @@ function renderStats(summary: UsageStatsSummary): void {
   homeStats.hidden = false;
 
   statTimeSaved.textContent = formatDuration(summary.timeSavedSeconds);
-  const typingSeconds = (summary.totalWords / TYPING_WPM) * 60;
+  const typingWpm = Math.round(summary.typingWpm) || TYPING_WPM;
+  const typingSeconds = (summary.totalWords / typingWpm) * 60;
   statTimeSavedSub.textContent =
-    `Typing your ${summary.totalWords.toLocaleString()} words at ${TYPING_WPM} wpm would take about ` +
+    `Typing your ${summary.totalWords.toLocaleString()} words at ${typingWpm} wpm would take about ` +
     `${formatDuration(typingSeconds)}; dictating them took ${formatDuration(summary.totalRecordingSeconds)}.`;
 
   statTotalWords.textContent = summary.totalWords.toLocaleString();
@@ -202,6 +204,7 @@ function emptyStats(): UsageStatsSummary {
     totalDictations: 0,
     totalRecordingSeconds: 0,
     timeSavedSeconds: 0,
+    typingWpm: TYPING_WPM,
     speakingWpm: 0,
     currentStreak: 0,
     bestStreak: 0,
@@ -220,6 +223,13 @@ void listen("transcript-history-updated", () => {
   void refresh();
 }).catch(() => {
   /* live refresh is best-effort; the initial load still populates */
+});
+
+// Setting a measured typing speed in the speed test changes time saved.
+void listen("usage-stats-updated", () => {
+  void refresh();
+}).catch(() => {
+  /* best-effort */
 });
 
 void refresh();

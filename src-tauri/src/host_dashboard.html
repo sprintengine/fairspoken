@@ -5,314 +5,153 @@
 <title>Multivoice host</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
+  /* Multivoice host — the operator's portal for a standalone transcription
+     server. Aligned to the client home window (src/home.css): one product
+     accent, the 6px-dot status idiom (no glow), two radii, three weights, a
+     fixed display/stat/body/meta/micro scale. Structure is carried by spacing
+     + headings + a single hairline — never by stacked cards. */
   :root {
-    --bg:             #08080a;
-    --bg-card:        #0e0e10;
-    --bg-row:         rgba(255,255,255,0.025);
-    --border:         rgba(255,255,255,0.06);
-    --border-strong:  rgba(255,255,255,0.09);
-    --text-primary:   #ececee;
-    --text-secondary: #9a9aa2;
-    --text-muted:     #5a5a63;
-    --accent:         #ff1a3d;
-    --accent-glow:    rgba(255,26,61,0.45);
-    --warning:        #ffa600;
-    --success:        #30d158;
-    --gold-border:    rgba(255,206,92,0.24);
-    --gold-glow:      rgba(255,206,92,0.14);
-    --radius-card:    8px;
-    --mono:           ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    --sans:           -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    --bg:            #0d0d0f;
+    --bg-elevated:   #151517;
+    --bg-row-hover:  #1b1b1f;
+    --track:         #222226;
+
+    --border:        rgba(255,255,255,0.07);
+    --border-strong: rgba(255,255,255,0.11);
+
+    --text:          #ededee;
+    --text-secondary:#9a9aa2;
+    --text-muted:    #62626b;
+
+    --accent:        #ff1a3d;
+    --accent-quiet:  rgba(255,26,61,0.10);
+    --dot-good:      #30d158;
+    --dot-idle:      #62626b;
+    --warning:       #ffa600;
+
+    --fs-stat:       20px;
+    --fs-title:      15px;
+    --fs-body:       13px;
+    --fs-meta:       12px;
+    --fs-micro:      11px;
+
+    --r:             8px;
+    --r-sm:          6px;
+    --gutter:        24px;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --font-brand: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  html, body {
-    background: var(--bg);
-    color: var(--text-primary);
-    font-family: var(--sans);
-    font-size: 13px;
-    line-height: 1.4;
-    font-feature-settings: "ss01", "cv11", "zero";
-    -webkit-font-smoothing: antialiased;
-    min-height: 100vh;
-  }
-
+  html, body { min-height: 100%; }
   body {
-    display: flex;
-    justify-content: center;
-    padding: 48px 24px 80px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: var(--fs-body);
+    line-height: 1.42;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums slashed-zero;
   }
+  .num  { font-variant-numeric: tabular-nums slashed-zero; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums slashed-zero; }
 
-  .shell {
-    width: 100%;
-    max-width: 720px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
+  /* ── Topbar — wordmark (brand continuity) left, connection status right. ── */
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    height: 48px; padding: 0 var(--gutter);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
   }
-
-  /* Header — the gold-halo signature surface (brand object). */
-  .header {
-    position: relative;
-    background: var(--bg-card);
-    border-radius: var(--radius-card);
-    padding: 16px 18px;
-    box-shadow:
-      inset 0 0 0 1px var(--gold-border),
-      inset 0 0 12px var(--gold-glow);
-  }
-
-  .header-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
   .brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: 0.01em;
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: var(--font-brand);
+  }
+  .brand-name { font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.02em; color: var(--text); }
+  .brand-host { font-size: var(--fs-meta); font-weight: 500; color: var(--text-muted); }
+
+  .conn { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+  .conn-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex: none;
+    background: var(--dot-idle);
+    transition: background 160ms ease;
+  }
+  .conn-label { font-size: var(--fs-meta); color: var(--text-secondary); }
+  .conn[data-state="live"]         .conn-dot { background: var(--dot-good); }
+  .conn[data-state="offline"]      .conn-dot { background: var(--warning); }
+  .conn[data-state="unauthorized"] .conn-dot { background: var(--accent); }
+
+  /* ── Page column ── */
+  .page {
+    max-width: 860px; margin: 0 auto;
+    padding: 22px var(--gutter) 64px;
   }
 
-  .brand-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--success);
-    box-shadow: 0 0 4px rgba(48,209,88,0.45);
-    flex-shrink: 0;
+  /* Identity line — which host you're looking at (source of truth). */
+  .ident {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    color: var(--text-secondary); font-size: var(--fs-meta);
+    padding-bottom: 22px;
   }
+  .ident code { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text); }
+  .ident .sep { color: var(--text-muted); }
+  .ident #uptime { color: var(--text); }
 
-  .header-version {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
+  /* ── Stat strip — flat columns split by a single vertical hairline. ── */
+  .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 30px; }
+  .stat { padding: 0 18px; border-left: 1px solid var(--border); }
+  .stat:first-child { padding-left: 0; border-left: none; }
+  .stat-label { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: var(--fs-meta); }
+  .stat-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex: none;
+    background: transparent; transition: background 160ms ease;
   }
-
-  .header-meta {
-    margin-top: 4px;
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .header-meta code {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-primary);
-  }
-
-  .header-meta .sep {
-    color: var(--text-muted);
-  }
-
-  /* Stat tiles. */
-  .tiles {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-  }
+  .stat-dot[data-active="true"] { background: var(--accent); }
+  .stat-value { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.01em; margin-top: 4px; }
+  .stat-value[data-active="true"] { color: var(--accent); }
+  .stat-value .unit { font-size: var(--fs-body); font-weight: 500; color: var(--text-muted); margin-left: 1px; }
+  .stat-meta { color: var(--text-muted); font-size: var(--fs-micro); margin-top: 4px; min-height: 14px; }
 
   @media (max-width: 560px) {
-    .tiles { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: 1fr; gap: 14px; }
+    .stat { padding: 0; border-left: none; }
   }
 
-  .tile {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-card);
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-height: 84px;
-  }
+  /* ── Recent panel — heading + hairline-separated rows, no card. ── */
+  .panel-head { display: flex; align-items: baseline; gap: 12px; padding-bottom: 6px; }
+  .panel-head h2 { font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+  .panel-head .grow { flex: 1; }
+  .panel-head .count { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-muted); }
 
-  .tile-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-secondary);
-  }
-
-  .tile-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--success);
-    box-shadow: 0 0 3px rgba(48,209,88,0.4);
-    flex-shrink: 0;
-    transition: background 160ms ease, box-shadow 160ms ease;
-  }
-
-  .tile-dot[data-active="true"] {
-    background: var(--accent);
-    box-shadow: 0 0 4px var(--accent-glow);
-  }
-
-  .tile-value {
-    font-size: 22px;
-    font-weight: 600;
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
-    line-height: 1.1;
-  }
-
-  .tile-value[data-accent="true"] {
-    color: var(--accent);
-  }
-
-  .tile-value .unit {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-muted);
-    margin-left: 2px;
-  }
-
-  /* Recent list. */
-  .recent {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-card);
-    padding: 14px 16px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .recent-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .recent-head h2 {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    letter-spacing: 0.01em;
-  }
-
-  .recent-count {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .recent-list {
-    display: flex;
-    flex-direction: column;
-  }
-
+  .rows { display: flex; flex-direction: column; }
   .row {
     display: grid;
-    grid-template-columns: 78px 56px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 14px;
-    padding: 8px 0;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    line-height: 1.3;
+    grid-template-columns: 72px 52px minmax(0, 1fr) auto;
+    align-items: baseline; gap: 14px;
+    padding: 9px 0; border-top: 1px solid var(--border);
   }
+  .row:first-child { border-top: none; }
+  .row.fresh { animation: fresh 1.2s ease-out 1; }
+  @keyframes fresh { 0% { background: var(--accent-quiet); } 100% { background: transparent; } }
 
-  .row:first-child {
-    border-top: 0;
-  }
+  .row-time     { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); }
+  .row-source   { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-muted); }
+  .row-model    { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-model .sep { color: var(--text-muted); margin: 0 4px; }
+  .row-duration { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text-secondary); text-align: right; white-space: nowrap; }
 
-  .row.fresh {
-    animation: fresh-fade 1.2s ease-out 1;
-  }
+  .placeholder { padding: 14px 0 4px; color: var(--text-muted); font-size: var(--fs-meta); }
 
-  @keyframes fresh-fade {
-    0%   { background: rgba(48,209,88,0.06); }
-    100% { background: transparent; }
+  /* Inline notice — recovery copy for states that need an operator action. */
+  .notice {
+    display: none; margin-top: 18px;
+    padding: 11px 13px; border-radius: var(--r-sm);
+    background: var(--accent-quiet); border: 1px solid rgba(255,26,61,0.18);
+    color: var(--text); font-size: var(--fs-meta);
   }
-
-  .row-time {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .row-source {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  .row-model {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .row-model .sep {
-    color: var(--text-muted);
-    margin: 0 4px;
-  }
-
-  .row-duration {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    white-space: nowrap;
-  }
-
-  .empty {
-    padding: 14px 0 6px;
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .error {
-    padding: 12px 14px;
-    margin-top: 4px;
-    border-radius: 6px;
-    background: rgba(255,26,61,0.07);
-    border: 1px solid rgba(255,26,61,0.18);
-    color: var(--text-primary);
-    font-size: 12px;
-    display: none;
-  }
-
-  .error[data-visible="true"] {
-    display: block;
-  }
-
-  .error code {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-
-  .footnote {
-    font-size: 11px;
-    color: var(--text-muted);
-    text-align: center;
-    padding-top: 6px;
-  }
+  .notice[data-visible="true"] { display: block; }
+  .notice code { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); }
 
   @media (prefers-reduced-motion: reduce) {
     .row.fresh { animation: none; }
@@ -320,59 +159,76 @@
 </style>
 </head>
 <body>
-  <main class="shell" data-state="idle">
-    <section class="header" aria-label="Host status">
-      <div class="header-row">
-        <div class="brand">
-          <span class="brand-dot" aria-hidden="true"></span>
-          <span>Multivoice host</span>
+  <header class="topbar">
+    <span class="brand">
+      <span class="brand-name">multivoice</span>
+      <span class="brand-host">host</span>
+    </span>
+    <span class="conn" id="conn" data-state="connecting">
+      <span class="conn-dot" aria-hidden="true"></span>
+      <span class="conn-label" id="connLabel" role="status" aria-live="polite">Connecting…</span>
+    </span>
+  </header>
+
+  <main class="page">
+    <section class="ident" aria-label="Host identity">
+      <code id="bindAddr">—</code>
+      <span class="sep">·</span>
+      <span id="version">—</span>
+      <span class="sep">·</span>
+      <span>up <span id="uptime">—</span></span>
+    </section>
+
+    <section class="stats" aria-label="Live metrics">
+      <div class="stat" role="group" aria-labelledby="activeLabel">
+        <div class="stat-label" id="activeLabel">
+          <span class="stat-dot" id="activeDot" aria-hidden="true"></span>
+          <span>Streams</span>
         </div>
-        <span class="header-version" id="version">—</span>
+        <div class="stat-value" id="activeValue">0</div>
+        <div class="stat-meta" id="activeMeta">active</div>
       </div>
-      <div class="header-meta">
-        <code id="bindAddr">—</code>
-        <span class="sep">·</span>
-        <span>up <span id="uptime">—</span></span>
+      <div class="stat" role="group" aria-labelledby="queuedLabel">
+        <div class="stat-label" id="queuedLabel">Queued</div>
+        <div class="stat-value" id="queuedValue">0</div>
+        <div class="stat-meta" id="queuedMeta">waiting</div>
+      </div>
+      <div class="stat" role="group" aria-labelledby="runningLabel">
+        <div class="stat-label" id="runningLabel">Running</div>
+        <div class="stat-value" id="runningValue">0</div>
+        <div class="stat-meta" id="runningMeta">workers</div>
+      </div>
+      <div class="stat" role="group" aria-labelledby="totalLabel">
+        <div class="stat-label" id="totalLabel">Transcriptions</div>
+        <div class="stat-value" id="totalValue">0</div>
+        <div class="stat-meta">lifetime</div>
+      </div>
+      <div class="stat" role="group" aria-labelledby="audioLabel">
+        <div class="stat-label" id="audioLabel">Audio processed</div>
+        <div class="stat-value" id="audioValue">0<span class="unit">s</span></div>
+        <div class="stat-meta">lifetime</div>
+      </div>
+      <div class="stat" role="group" aria-labelledby="healthLabel">
+        <div class="stat-label" id="healthLabel">Rejected</div>
+        <div class="stat-value" id="rejectedValue">0</div>
+        <div class="stat-meta" id="healthMeta">0 failed</div>
       </div>
     </section>
 
-    <section class="tiles" aria-label="Live metrics">
-      <div class="tile" role="group" aria-labelledby="activeLabel">
-        <div class="tile-label" id="activeLabel">
-          <span class="tile-dot" id="activeDot" aria-hidden="true"></span>
-          <span>Active sessions</span>
-        </div>
-        <div class="tile-value" id="activeValue">0</div>
-      </div>
-      <div class="tile" role="group" aria-labelledby="totalLabel">
-        <div class="tile-label" id="totalLabel">
-          <span>Transcriptions</span>
-        </div>
-        <div class="tile-value" id="totalValue">0</div>
-      </div>
-      <div class="tile" role="group" aria-labelledby="audioLabel">
-        <div class="tile-label" id="audioLabel">
-          <span>Audio processed</span>
-        </div>
-        <div class="tile-value" id="audioValue">0<span class="unit">s</span></div>
-      </div>
-    </section>
-
-    <section class="recent" aria-label="Recent transcriptions">
-      <div class="recent-head">
+    <section class="panel" aria-label="Recent transcriptions">
+      <div class="panel-head">
         <h2>Recent transcriptions</h2>
-        <span class="recent-count" id="recentCount">0</span>
+        <span class="grow"></span>
+        <span class="count" id="recentCount">0</span>
       </div>
-      <div class="recent-list" id="recentList" role="list">
-        <p class="empty" id="emptyState">No transcriptions yet.</p>
+      <div class="rows" id="recentList" role="list">
+        <p class="placeholder" id="placeholder">Connecting to host…</p>
       </div>
     </section>
 
-    <div class="error" id="errorPanel" role="status" aria-live="polite">
-      <span id="errorMessage">Unable to read host stats.</span>
+    <div class="notice" id="notice" role="status" aria-live="polite">
+      <span id="noticeMessage"></span>
     </div>
-
-    <p class="footnote">Updates every 2 s.</p>
   </main>
 
 <script>
@@ -381,23 +237,32 @@
   const token = params.get("token") || "";
 
   const el = {
-    shell:        document.querySelector(".shell"),
-    version:      document.getElementById("version"),
-    bindAddr:     document.getElementById("bindAddr"),
-    uptime:       document.getElementById("uptime"),
-    activeDot:    document.getElementById("activeDot"),
-    activeValue:  document.getElementById("activeValue"),
-    totalValue:   document.getElementById("totalValue"),
-    audioValue:   document.getElementById("audioValue"),
-    recentCount:  document.getElementById("recentCount"),
-    recentList:   document.getElementById("recentList"),
-    emptyState:   document.getElementById("emptyState"),
-    errorPanel:   document.getElementById("errorPanel"),
-    errorMessage: document.getElementById("errorMessage"),
+    conn:        document.getElementById("conn"),
+    connLabel:   document.getElementById("connLabel"),
+    bindAddr:    document.getElementById("bindAddr"),
+    version:     document.getElementById("version"),
+    uptime:      document.getElementById("uptime"),
+    activeDot:   document.getElementById("activeDot"),
+    activeValue: document.getElementById("activeValue"),
+    activeMeta:  document.getElementById("activeMeta"),
+    queuedValue: document.getElementById("queuedValue"),
+    queuedMeta:  document.getElementById("queuedMeta"),
+    runningValue:document.getElementById("runningValue"),
+    runningMeta: document.getElementById("runningMeta"),
+    totalValue:  document.getElementById("totalValue"),
+    audioValue:  document.getElementById("audioValue"),
+    rejectedValue: document.getElementById("rejectedValue"),
+    healthMeta:  document.getElementById("healthMeta"),
+    recentCount: document.getElementById("recentCount"),
+    recentList:  document.getElementById("recentList"),
+    placeholder: document.getElementById("placeholder"),
+    notice:      document.getElementById("notice"),
+    noticeMsg:   document.getElementById("noticeMessage"),
   };
 
   let seenIds = new Set();
-  let firstLoad = true;
+  let loadedOnce = false;
+  let connState = "";
 
   const pad2 = n => String(n).padStart(2, "0");
 
@@ -442,29 +307,39 @@
     return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   };
 
-  const formatSource = (s) => {
-    if (s === "stream") return "stream";
-    if (s === "batch") return "batch";
-    return s || "—";
+  // Connection state drives the single status indicator. Recovery copy that
+  // needs an operator action lives in the inline notice; the topbar label is
+  // the short canonical state, so the two never restate the same value.
+  const setConnection = (state, label) => {
+    if (state !== connState) {
+      el.conn.setAttribute("data-state", state);
+      el.connLabel.textContent = label;
+      connState = state;
+    }
+    const showNotice = state === "unauthorized";
+    el.notice.setAttribute("data-visible", showNotice ? "true" : "false");
+    if (state === "unauthorized") {
+      el.noticeMsg.innerHTML =
+        'Unauthorized. Append <code>?token=…</code> to the URL with the host token.';
+    }
   };
 
   const renderRecent = (records) => {
     if (!records || records.length === 0) {
       el.recentList.innerHTML = "";
-      el.recentList.appendChild(el.emptyState);
-      el.emptyState.hidden = false;
+      el.placeholder.textContent = "No transcriptions yet.";
+      el.recentList.appendChild(el.placeholder);
       el.recentCount.textContent = "0";
       seenIds = new Set();
       return;
     }
-    el.emptyState.hidden = true;
     el.recentCount.textContent = String(records.length);
 
     const frag = document.createDocumentFragment();
     const nextSeen = new Set();
     for (const r of records) {
       nextSeen.add(r.id);
-      const isFresh = !firstLoad && !seenIds.has(r.id);
+      const isFresh = loadedOnce && !seenIds.has(r.id);
       const row = document.createElement("div");
       row.className = "row" + (isFresh ? " fresh" : "");
       row.setAttribute("role", "listitem");
@@ -475,54 +350,60 @@
 
       const source = document.createElement("span");
       source.className = "row-source";
-      source.textContent = formatSource(r.source);
+      source.textContent = r.source || "—";
 
       const model = document.createElement("span");
       model.className = "row-model";
       const sep = document.createElement("span");
       sep.className = "sep";
-      sep.textContent = " · ";
-      const backendText = document.createTextNode(r.backend || "—");
-      const modelText = document.createTextNode(r.model || "—");
-      model.appendChild(backendText);
+      sep.textContent = "·";
+      model.appendChild(document.createTextNode(r.backend || "—"));
       model.appendChild(sep);
-      model.appendChild(modelText);
+      model.appendChild(document.createTextNode(r.model || "—"));
 
       const duration = document.createElement("span");
       duration.className = "row-duration";
       duration.textContent = formatDuration(r.durationSeconds || 0);
 
-      row.appendChild(time);
-      row.appendChild(source);
-      row.appendChild(model);
-      row.appendChild(duration);
+      row.append(time, source, model, duration);
       frag.appendChild(row);
     }
 
     el.recentList.innerHTML = "";
     el.recentList.appendChild(frag);
     seenIds = nextSeen;
-    firstLoad = false;
-  };
-
-  const showError = (message) => {
-    el.errorMessage.textContent = message;
-    el.errorPanel.setAttribute("data-visible", "true");
-  };
-
-  const clearError = () => {
-    el.errorPanel.setAttribute("data-visible", "false");
   };
 
   const apply = (stats) => {
-    el.version.textContent = stats.serverVersion ? `v${stats.serverVersion}` : "";
     el.bindAddr.textContent = stats.bindAddr || "—";
+    el.version.textContent = stats.serverVersion ? `v${stats.serverVersion}` : "—";
     el.uptime.textContent = formatUptime(stats.uptimeSeconds || 0);
 
-    const active = stats.activeSessions || 0;
-    el.activeValue.textContent = String(active);
-    el.activeValue.setAttribute("data-accent", active > 0 ? "true" : "false");
-    el.activeDot.setAttribute("data-active", active > 0 ? "true" : "false");
+    const streams = stats.activeStreams ?? stats.activeSessions ?? 0;
+    const queued = stats.queuedJobs || 0;
+    const running = stats.runningJobs || 0;
+    const workers = stats.workerCount || 0;
+    const capacity = stats.queueCapacity || 0;
+    const rejected = stats.rejectedJobs || 0;
+    const failed = stats.failedJobs || 0;
+    const live = streams > 0 || queued > 0 || running > 0;
+
+    el.activeValue.textContent = String(streams);
+    el.activeValue.setAttribute("data-active", streams > 0 ? "true" : "false");
+    el.activeDot.setAttribute("data-active", live ? "true" : "false");
+    el.activeMeta.textContent = running > 0 ? `${running} running` : "active";
+
+    el.queuedValue.textContent = String(queued);
+    el.queuedValue.setAttribute("data-active", queued > 0 ? "true" : "false");
+    el.queuedMeta.textContent = capacity ? `capacity ${capacity}` : "waiting";
+
+    el.runningValue.textContent = String(running);
+    el.runningValue.setAttribute("data-active", running > 0 ? "true" : "false");
+    el.runningMeta.textContent = workers === 1 ? "1 worker" : `${workers} workers`;
+
+    el.rejectedValue.textContent = String(rejected);
+    el.rejectedValue.setAttribute("data-active", rejected > 0 || failed > 0 ? "true" : "false");
+    el.healthMeta.textContent = `${failed} failed`;
 
     el.totalValue.textContent = String(stats.totalTranscriptions || 0);
 
@@ -537,6 +418,7 @@
     }
 
     renderRecent(stats.recent || []);
+    loadedOnce = true;
   };
 
   const fetchStats = async () => {
@@ -545,18 +427,18 @@
       if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch("/v1/stats", { headers, cache: "no-store" });
       if (res.status === 401) {
-        showError("Unauthorized. Append ?token=… to the URL with the host token.");
+        setConnection("unauthorized", "Unauthorized");
         return;
       }
       if (!res.ok) {
-        showError(`Host returned ${res.status}.`);
+        setConnection("offline", `Host error ${res.status}`);
         return;
       }
       const data = await res.json();
-      clearError();
+      setConnection("live", "Live");
       apply(data);
-    } catch (err) {
-      showError("Lost connection to host. Retrying…");
+    } catch {
+      setConnection("offline", "Reconnecting…");
     }
   };
 
