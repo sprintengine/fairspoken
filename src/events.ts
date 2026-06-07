@@ -18,6 +18,15 @@ export function addEventWithId(id: string, level: EventLevel, message: string): 
   const normalized = message.replace(/\s+/g, " ").trim();
   if (!normalized) return;
 
+  // Info-level breadcrumbs are logs, not activity: they go to the console for
+  // debugging and are deliberately never persisted to UI state. Only warnings
+  // and errors — the things worth a user's attention — reach the Activity feed.
+  if (level === "info") {
+    console.info(`[multivoice] ${normalized}`);
+    return;
+  }
+  (level === "error" ? console.error : console.warn)(`[multivoice] ${normalized}`);
+
   const events = readEvents();
   if (events.some((event) => event.id === id)) return;
 

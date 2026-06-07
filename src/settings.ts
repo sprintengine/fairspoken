@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { addEvent, addEventWithId, clearEvents, eventSeverity, readEvents, type AppEvent, type EventLevel } from "./events";
+import { addEvent } from "./events";
 
 type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3" | "large-v3-turbo";
 type TranscriptionBackend = "whisper" | "sherpa-streaming";
 type TranscriptionLocation = "local" | "remote-host";
 type SherpaModel = "streaming-zipformer-en-2023-06-26-int8";
+type RecordingShortcutMode = "toggle" | "push-to-talk";
 
 interface TranscriptCorrection {
   enabled: boolean;
@@ -34,6 +35,9 @@ interface Settings {
   postProcess?: boolean;
   vocabularyHints?: string[];
   transcriptCorrections?: TranscriptCorrection[];
+  recordingShortcut: string;
+  recordingShortcutMode: RecordingShortcutMode;
+  transcriptStackShortcut: string;
 }
 
 interface ModelStatus {
@@ -62,12 +66,6 @@ interface ModelPrepareProgressEvent {
   status?: ModelStatus | null;
 }
 
-interface BackendLogEvent {
-  id: string;
-  level: EventLevel;
-  message: string;
-}
-
 const DEFAULTS: Settings = {
   transcriptionLocation: "local",
   transcriptionBackend: "whisper",
@@ -87,9 +85,11 @@ const DEFAULTS: Settings = {
   postProcess: true,
   vocabularyHints: [],
   transcriptCorrections: [],
+  recordingShortcut: "CommandOrControl+Shift+Digit1",
+  recordingShortcutMode: "toggle",
+  transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
 };
 
-const closeBtn = required<HTMLButtonElement>("settingsClose");
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
 const locationSelect = required<HTMLSelectElement>("locationSelect");
 const engineSelect = required<HTMLSelectElement>("engineSelect");
@@ -100,11 +100,14 @@ const noiseSuppression = required<HTMLInputElement>("noiseSuppression");
 const echoCancellation = required<HTMLInputElement>("echoCancellation");
 const inputGain = required<HTMLSelectElement>("inputGain");
 const postProcess = required<HTMLInputElement>("postProcess");
-const vocabularyHints = required<HTMLTextAreaElement>("vocabularyHints");
-const addCorrection = required<HTMLButtonElement>("addCorrection");
-const correctionList = required<HTMLElement>("correctionList");
 const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
 const maxRecordingSeconds = required<HTMLInputElement>("maxRecordingSeconds");
+const recordingShortcutMode = required<HTMLSelectElement>("recordingShortcutMode");
+const recordingShortcut = required<HTMLInputElement>("recordingShortcut");
+const recordingShortcutCapture = required<HTMLButtonElement>("recordingShortcutCapture");
+const transcriptStackShortcut = required<HTMLInputElement>("transcriptStackShortcut");
+const transcriptStackShortcutCapture = required<HTMLButtonElement>("transcriptStackShortcutCapture");
+const shortcutStatus = required<HTMLElement>("shortcutStatus");
 const whisperChunkField = required<HTMLElement>("whisperChunkField");
 const whisperChunkSeconds = required<HTMLInputElement>("whisperChunkSeconds");
 const inputMeter = required<HTMLElement>("inputMeter");
@@ -119,12 +122,6 @@ const remoteAuthToken = required<HTMLInputElement>("remoteAuthToken");
 const remoteTimeoutSeconds = required<HTMLInputElement>("remoteTimeoutSeconds");
 const remoteStatus = required<HTMLElement>("remoteStatus");
 const remoteTest = required<HTMLButtonElement>("remoteTest");
-const eventLog = required<HTMLElement>("eventLog");
-const eventCount = required<HTMLElement>("eventCount");
-const eventSummary = required<HTMLElement>("eventSummary");
-const clearEventsButton = required<HTMLButtonElement>("clearEventsButton");
-const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".settings-tab"));
-const tabPanels = Array.from(document.querySelectorAll<HTMLElement>(".settings-tab-panel"));
 
 const MODEL_MEMORY_FOOTPRINTS: Record<WhisperModel, string> = {
   tiny: "RAM ~0.7G",
@@ -179,6 +176,9 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
+    recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
+    recordingShortcutMode: settings.recordingShortcutMode === "push-to-talk" ? "push-to-talk" : "toggle",
+    transcriptStackShortcut: normalizeShortcut(settings.transcriptStackShortcut ?? DEFAULTS.transcriptStackShortcut, DEFAULTS.transcriptStackShortcut),
   };
 }
 
@@ -197,10 +197,11 @@ function applyToForm(settings: Settings): void {
   echoCancellation.checked = settings.echoCancellation ?? true;
   inputGain.value = String(settings.inputGain ?? 2);
   postProcess.checked = settings.postProcess ?? true;
-  vocabularyHints.value = (settings.vocabularyHints ?? []).join("\n");
-  renderCorrectionList(settings.transcriptCorrections ?? []);
   alwaysOnTop.checked = settings.alwaysOnTop;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
+  recordingShortcutMode.value = settings.recordingShortcutMode;
+  recordingShortcut.value = settings.recordingShortcut;
+  transcriptStackShortcut.value = settings.transcriptStackShortcut;
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
   updateWhisperChunkUi(settings.transcriptionBackend);
   updateTranscriptionLocationUi(settings.transcriptionLocation);
@@ -222,10 +223,11 @@ function readFromForm(): Settings {
     echoCancellation: echoCancellation.checked,
     inputGain: Number(inputGain.value),
     postProcess: postProcess.checked,
-    vocabularyHints: readVocabularyHints(),
-    transcriptCorrections: readCorrectionsFromList(),
     alwaysOnTop: alwaysOnTop.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
+    recordingShortcutMode: recordingShortcutMode.value as RecordingShortcutMode,
+    recordingShortcut: recordingShortcut.value,
+    transcriptStackShortcut: transcriptStackShortcut.value,
     whisperChunkSeconds: Number(whisperChunkSeconds.value),
   });
 }
@@ -263,8 +265,103 @@ function cleanSettingText(value: string, maxLength: number): string {
   return value.replace(/\0/g, "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
-function readVocabularyHints(): string[] {
-  return normalizeVocabularyHints(vocabularyHints.value.split(/\r?\n|,/));
+function normalizeShortcut(value: string, fallback: string): string {
+  const normalized = value
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("+")
+    .slice(0, 80);
+  return normalized || fallback;
+}
+
+function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+  if (event.key === "Escape") return null;
+  if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return "";
+
+  const key = shortcutKeyName(event);
+  if (!key) return "";
+
+  const modifiers: string[] = [];
+  if (event.metaKey || event.ctrlKey) modifiers.push("CommandOrControl");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+
+  const modifierlessAllowed = /^F(?:[1-9]|1[0-9]|2[0-4])$/.test(key);
+  if (modifiers.length === 0 && !modifierlessAllowed) {
+    return "";
+  }
+
+  return [...modifiers, key].join("+");
+}
+
+function shortcutKeyName(event: KeyboardEvent): string {
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
+  if (/^Digit[0-9]$/.test(event.code)) return event.code;
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(event.code)) return event.code;
+  if (/^Numpad[0-9]$/.test(event.code)) return event.code;
+
+  const aliases: Record<string, string> = {
+    Space: "Space",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Insert: "Insert",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+    ArrowUp: "ArrowUp",
+    ArrowDown: "ArrowDown",
+    ArrowLeft: "ArrowLeft",
+    ArrowRight: "ArrowRight",
+    Minus: "Minus",
+    Equal: "Equal",
+    BracketLeft: "BracketLeft",
+    BracketRight: "BracketRight",
+    Backslash: "Backslash",
+    Semicolon: "Semicolon",
+    Quote: "Quote",
+    Comma: "Comma",
+    Period: "Period",
+    Slash: "Slash",
+    Backquote: "Backquote",
+  };
+  return aliases[event.code] ?? "";
+}
+
+function beginShortcutCapture(target: HTMLInputElement, button: HTMLButtonElement, label: string): void {
+  shortcutStatus.textContent = "Press a key combination, or Esc to cancel.";
+  button.textContent = "Listening";
+  button.disabled = true;
+
+  const stopCapture = (message?: string) => {
+    window.removeEventListener("keydown", onKeyDown, true);
+    button.textContent = "Record";
+    button.disabled = false;
+    if (message) shortcutStatus.textContent = message;
+  };
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const shortcut = shortcutFromKeyboardEvent(event);
+    if (shortcut === null) {
+      stopCapture("Shortcut capture canceled.");
+      return;
+    }
+    if (!shortcut) {
+      shortcutStatus.textContent = "Use a modifier key or a function key.";
+      return;
+    }
+
+    target.value = shortcut;
+    stopCapture(`${label} shortcut set to ${shortcut}.`);
+    void persistSettings().catch(reportAsyncError);
+  };
+
+  window.addEventListener("keydown", onKeyDown, true);
 }
 
 async function persistSettings(): Promise<boolean> {
@@ -443,79 +540,6 @@ function modelRequest(backend: TranscriptionBackend, model: WhisperModel | Sherp
   };
 }
 
-function renderCorrectionList(corrections: TranscriptCorrection[]): void {
-  correctionList.replaceChildren();
-  const entries = corrections.length > 0 ? corrections : [];
-  entries.forEach((correction) => correctionList.append(renderCorrectionRow(correction)));
-}
-
-function renderCorrectionRow(correction: TranscriptCorrection): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "correction-row";
-
-  const enabled = document.createElement("input");
-  enabled.type = "checkbox";
-  enabled.className = "correction-enabled";
-  enabled.checked = correction.enabled !== false;
-  enabled.setAttribute("aria-label", "Enable correction");
-
-  const from = document.createElement("input");
-  from.className = "setting-input correction-input";
-  from.dataset.field = "from";
-  from.type = "text";
-  from.placeholder = "Mistake";
-  from.value = correction.from;
-
-  const to = document.createElement("input");
-  to.className = "setting-input correction-input";
-  to.dataset.field = "to";
-  to.type = "text";
-  to.placeholder = "Replacement";
-  to.value = correction.to;
-
-  const caseSensitive = document.createElement("input");
-  caseSensitive.type = "checkbox";
-  caseSensitive.className = "correction-case";
-  caseSensitive.checked = correction.caseSensitive === true;
-  caseSensitive.title = "Case sensitive";
-  caseSensitive.setAttribute("aria-label", "Case sensitive");
-
-  const remove = document.createElement("button");
-  remove.className = "icon-btn correction-remove";
-  remove.type = "button";
-  remove.textContent = "x";
-  remove.title = "Delete correction";
-  remove.setAttribute("aria-label", "Delete correction");
-
-  row.append(enabled, from, to, caseSensitive, remove);
-  row.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-  from.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-  to.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-  remove.addEventListener("click", () => {
-    row.remove();
-    void persistSettings().catch(reportAsyncError);
-  });
-
-  return row;
-}
-
-function readCorrectionsFromList(): TranscriptCorrection[] {
-  const rows = Array.from(correctionList.querySelectorAll<HTMLElement>(".correction-row"));
-  return normalizeTranscriptCorrections(rows.map((row) => {
-    const enabled = row.querySelector<HTMLInputElement>(".correction-enabled");
-    const from = row.querySelector<HTMLInputElement>('[data-field="from"]');
-    const to = row.querySelector<HTMLInputElement>('[data-field="to"]');
-    const caseSensitive = row.querySelector<HTMLInputElement>(".correction-case");
-    return {
-      enabled: enabled?.checked ?? true,
-      from: from?.value ?? "",
-      to: to?.value ?? "",
-      caseSensitive: caseSensitive?.checked ?? false,
-      wholePhrase: true,
-    };
-  }));
-}
-
 async function loadAudioDevices(): Promise<void> {
   const selected = audioDeviceSelect.value || currentSettings.audioDevice || "";
   const devices = await navigator.mediaDevices?.enumerateDevices().catch(() => []) ?? [];
@@ -598,86 +622,32 @@ function stopMeter(): void {
   meterContext = null;
 }
 
+let meterScreenVisible = false;
+
+// The mic meter is the one always-on cost on this window: getUserMedia holds the
+// microphone open and a rAF loop runs every frame. Scope it to when the Settings
+// screen is actually on-screen and the window is visible, so navigating to
+// another screen — or hiding the window — releases the mic and stops the loop.
+function refreshMeter(): void {
+  if (meterScreenVisible && document.visibilityState === "visible") {
+    void startMeter();
+  } else {
+    stopMeter();
+  }
+}
+
 async function loadSettings(): Promise<void> {
   currentSettings = normalizeSettings(await invoke<Settings>("get_settings"));
   applyToForm(currentSettings);
   await loadAudioDevices();
-  await startMeter();
   if (currentSettings.transcriptionLocation === "local") {
     await requestModelStatus();
   }
-  renderEventLog();
 }
-
-function renderEventLog(): void {
-  const events = readEvents();
-  eventCount.textContent = String(events.length);
-  const severity = eventSeverity(events);
-  eventCount.dataset.severity = severity ?? "none";
-  eventSummary.textContent = eventSummaryText(events);
-  eventLog.replaceChildren(...events.slice(0, 50).map(renderEvent));
-  if (events.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "event-empty";
-    empty.textContent = "No events recorded.";
-    eventLog.appendChild(empty);
-  }
-}
-
-function renderEvent(event: AppEvent): HTMLElement {
-  const row = document.createElement("article");
-  row.className = `event-row ${event.level}`;
-
-  const meta = document.createElement("span");
-  meta.className = "event-meta";
-  const time = document.createElement("span");
-  time.className = "event-time";
-  time.textContent = formatEventTime(event.timestamp);
-  const level = document.createElement("span");
-  level.className = "event-level";
-  level.textContent = event.level;
-  meta.append(time, level);
-
-  const message = document.createElement("span");
-  message.className = "event-message";
-  message.textContent = event.message;
-
-  row.append(meta, message);
-  return row;
-}
-
-function eventSummaryText(events: AppEvent[]): string {
-  const errors = events.filter((event) => event.level === "error").length;
-  const warnings = events.filter((event) => event.level === "warning").length;
-  if (errors > 0) return `${errors} error${errors === 1 ? "" : "s"} recorded`;
-  if (warnings > 0) return `${warnings} warning${warnings === 1 ? "" : "s"} recorded`;
-  return events.length === 0 ? "No events recorded" : "No warnings or errors";
-}
-
-function selectTab(tabName: string): void {
-  tabButtons.forEach((button) => {
-    const selected = button.dataset.tab === tabName;
-    button.setAttribute("aria-selected", String(selected));
-  });
-  tabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === tabName);
-  });
-}
-
-function formatEventTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-closeBtn.addEventListener("click", () => {
-  stopMeter();
-  void invoke("close_settings_window");
-});
 
 refreshBtn.addEventListener("click", () => {
   void loadAudioDevices();
-  void startMeter();
+  refreshMeter();
 });
 
 locationSelect.addEventListener("change", () => {
@@ -726,75 +696,64 @@ remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().cat
 audioDeviceSelect.addEventListener("change", () => {
   void persistSettings()
     .then((saved) => {
-      if (saved) return startMeter();
+      if (saved) refreshMeter();
     })
     .catch(reportAsyncError);
 });
 noiseSuppression.addEventListener("change", () => {
   void persistSettings()
     .then((saved) => {
-      if (saved) return startMeter();
+      if (saved) refreshMeter();
     })
     .catch(reportAsyncError);
 });
 echoCancellation.addEventListener("change", () => {
   void persistSettings()
     .then((saved) => {
-      if (saved) return startMeter();
+      if (saved) refreshMeter();
     })
     .catch(reportAsyncError);
 });
 inputGain.addEventListener("change", () => {
   void persistSettings()
     .then((saved) => {
-      if (saved) return startMeter();
+      if (saved) refreshMeter();
     })
     .catch(reportAsyncError);
 });
 langSelect.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 postProcess.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-vocabularyHints.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-addCorrection.addEventListener("click", () => {
-  correctionList.append(renderCorrectionRow({
-    enabled: true,
-    from: "",
-    to: "",
-    caseSensitive: false,
-    wholePhrase: true,
-  }));
-});
 alwaysOnTop.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
+recordingShortcutMode.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+recordingShortcutCapture.addEventListener("click", () => {
+  beginShortcutCapture(recordingShortcut, recordingShortcutCapture, "Recording");
+});
+transcriptStackShortcutCapture.addEventListener("click", () => {
+  beginShortcutCapture(transcriptStackShortcut, transcriptStackShortcutCapture, "Copied messages");
+});
 whisperChunkSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 whisperChunkSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
 
-window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    stopMeter();
-    void invoke("close_settings_window");
-  }
-});
+// Settings auto-persist on change; the form must never submit/navigate, which
+// in the home window would reload the whole webview.
+document.getElementById("settingsForm")?.addEventListener("submit", (event) => event.preventDefault());
+
+// Run the meter only while the Settings screen is on-screen. IntersectionObserver
+// reports the screen as not-intersecting whenever home.ts toggles it to
+// display:none, which releases the mic; navigating back restarts it.
+const settingsScreen = required<HTMLElement>("screen-settings");
+new IntersectionObserver((entries) => {
+  meterScreenVisible = entries.some((entry) => entry.isIntersecting);
+  refreshMeter();
+}).observe(settingsScreen);
+
+document.addEventListener("visibilitychange", refreshMeter);
 window.addEventListener("beforeunload", stopMeter);
-window.addEventListener("multivoice-events-updated", renderEventLog);
-window.addEventListener("storage", (event) => {
-  if (event.key === "multivoice-tauri-events") {
-    renderEventLog();
-  }
-});
-clearEventsButton.addEventListener("click", () => {
-  clearEvents();
-  renderEventLog();
-});
-tabButtons.forEach((button) => {
-  button.addEventListener("click", () => selectTab(button.dataset.tab ?? "general"));
-});
 
 void listen<ModelPrepareProgressEvent>("model-prepare-progress", (event) => {
   handleModelPrepareProgress(event.payload);
-}).catch(reportAsyncError);
-void listen<BackendLogEvent>("backend-event", (event) => {
-  addEventWithId(event.payload.id, event.payload.level, event.payload.message);
 }).catch(reportAsyncError);
 
 void loadSettings().catch((error) => {
@@ -803,5 +762,4 @@ void loadSettings().catch((error) => {
   modelDownload.dataset.state = "error";
   modelDownloadStatus.textContent = "Settings failed to load";
   modelDownloadStatus.title = message;
-  renderEventLog();
 });

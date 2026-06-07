@@ -30,12 +30,11 @@
   --bar-h:          44px;
   --bar-w:          214px;
 
-  /* Transparent halo around the pill so the .window drop shadow has room
-     to render without being cropped at the OS window boundary. Sized to
-     the exact shadow extent so clicks on adjacent UI aren't swallowed. */
-  --shadow-pad-x:      24px;
-  --shadow-pad-top:    18px;
-  --shadow-pad-bottom: 34px;
+  /* Keep the native transparent window close to the visible pill. Any padding
+     here is still part of the always-on-top hit area and blocks apps below. */
+  --shadow-pad-x:      6px;
+  --shadow-pad-top:    5px;
+  --shadow-pad-bottom: 7px;
 
   --window-w:       calc(var(--bar-w) + var(--shadow-pad-x) * 2);
   --window-h:       calc(var(--bar-h) + var(--shadow-pad-top) + var(--shadow-pad-bottom));

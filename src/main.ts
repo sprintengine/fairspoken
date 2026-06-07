@@ -36,10 +36,23 @@ interface TranscriptHistoryUpdatedEvent {
   item: TranscriptHistoryItem;
 }
 
+type RecordingShortcutMode = "toggle" | "push-to-talk";
+
+interface ShortcutSettings {
+  recordingShortcut: string;
+  recordingShortcutMode: RecordingShortcutMode;
+  transcriptStackShortcut: string;
+}
+
 const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
-const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
+const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
 const STACK_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit2", "CommandOrControl+Shift+2", "Command+Shift+Digit2", "Command+Shift+2"];
-const STACK_SHORTCUT_DEFAULT_CANDIDATES = ["Ctrl+Alt+Digit2", "Ctrl+Alt+2"];
+const STACK_SHORTCUT_DEFAULT_CANDIDATES = ["CommandOrControl+Shift+Digit2", "CommandOrControl+Shift+2", "Ctrl+Alt+Digit2", "Ctrl+Alt+2"];
+const DEFAULT_SHORTCUT_SETTINGS: ShortcutSettings = {
+  recordingShortcut: "CommandOrControl+Shift+Digit1",
+  recordingShortcutMode: "toggle",
+  transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
+};
 const PILL_DRAG_THRESHOLD_PX = 4;
 
 const app = required<HTMLElement>("app");
@@ -67,6 +80,9 @@ let transcriptHistory: TranscriptHistoryItem[] = [];
 let copiedTranscriptId: string | null = null;
 let shelfHideTimer: ReturnType<typeof setTimeout> | null = null;
 let shelfVisible = false;
+let shortcutSettings: ShortcutSettings = { ...DEFAULT_SHORTCUT_SETTINGS };
+let pushToTalkReleasePending = false;
+let shortcutRegistrationVersion = 0;
 
 const SHELF_VISIBLE_MS = 18_000;
 
@@ -111,6 +127,20 @@ function stateLabel(state: AppState): string {
   if (state === "transcribing") return "Transcribing";
   if (state === "error") return "Error";
   return "Ready";
+}
+
+function currentAppState(): AppState {
+  return appState;
+}
+
+function canStartRecording(): boolean {
+  return (appState === "idle" || appState === "error")
+    && !startRecordingRequestPending
+    && !stopRecordingRequestPending;
+}
+
+function isRecoverableRecordingStopError(message: string): boolean {
+  return message === "Recording was too short" || message.startsWith("No speech detected");
 }
 
 function startTimer(): void {
@@ -348,15 +378,20 @@ async function toggleRecording(): Promise<void> {
     await cancelTranscription();
     return;
   }
-  if (appState === "idle" && startRecordingRequestPending) return;
   if (stopRecordingRequestPending) return;
 
-  try {
-    if (appState === "recording") {
-      await stopAndTranscribe();
-      return;
-    }
+  if (appState === "recording") {
+    await stopAndTranscribe();
+    return;
+  }
 
+  await startRecording();
+}
+
+async function startRecording(): Promise<boolean> {
+  if (!canStartRecording()) return false;
+
+  try {
     startRecordingRequestPending = true;
     const maxRecordingSeconds = await invoke<number>("start_recording");
     startRecordingRequestPending = false;
@@ -364,12 +399,35 @@ async function toggleRecording(): Promise<void> {
     setState("recording");
     resetLiveTranscript();
     scheduleMaxRecordingStop(maxRecordingSeconds);
+    return true;
   } catch (error) {
     startRecordingRequestPending = false;
     stopRecordingRequestPending = false;
     const message = error instanceof Error ? error.message : String(error);
     addEvent("error", message);
     await refreshStateAfterStartError();
+    return false;
+  }
+}
+
+async function startPushToTalkRecording(): Promise<void> {
+  if (!canStartRecording()) return;
+  pushToTalkReleasePending = false;
+  const started = await startRecording();
+  if (started && pushToTalkReleasePending && currentAppState() === "recording") {
+    pushToTalkReleasePending = false;
+    await stopAndTranscribe();
+  }
+}
+
+async function stopPushToTalkRecording(): Promise<void> {
+  if (startRecordingRequestPending) {
+    pushToTalkReleasePending = true;
+    return;
+  }
+  pushToTalkReleasePending = false;
+  if (appState === "recording" && !stopRecordingRequestPending) {
+    await stopAndTranscribe();
   }
 }
 
@@ -415,6 +473,10 @@ async function stopAndTranscribe(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "Transcription was cancelled") {
       addEvent("info", "Transcription cancelled");
+      resetLiveTranscript();
+      setState("idle", "Ready");
+    } else if (isRecoverableRecordingStopError(message)) {
+      addEvent("warning", message);
       resetLiveTranscript();
       setState("idle", "Ready");
     } else {
@@ -481,21 +543,43 @@ function isMacOS(): boolean {
   return navigator.platform.toLowerCase().includes("mac");
 }
 
-async function registerRecordingShortcut(): Promise<void> {
-  const shortcuts = isMacOS() ? RECORD_SHORTCUT_MACOS_CANDIDATES : RECORD_SHORTCUT_DEFAULT_CANDIDATES;
+function normalizeShortcutSettings(settings: Partial<ShortcutSettings>): ShortcutSettings {
+  return {
+    recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULT_SHORTCUT_SETTINGS.recordingShortcut),
+    recordingShortcutMode: settings.recordingShortcutMode === "push-to-talk" ? "push-to-talk" : "toggle",
+    transcriptStackShortcut: normalizeShortcut(settings.transcriptStackShortcut ?? DEFAULT_SHORTCUT_SETTINGS.transcriptStackShortcut),
+  };
+}
+
+function normalizeShortcut(shortcut: string): string {
+  return shortcut
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("+");
+}
+
+function shortcutCandidates(configured: string, defaults: string[]): string[] {
+  const normalized = normalizeShortcut(configured);
+  if (!normalized) return defaults;
+  if (defaults.includes(normalized)) return defaults;
+  return [normalized];
+}
+
+async function registerShortcut(
+  label: string,
+  shortcuts: string[],
+  handler: Parameters<typeof register>[1],
+): Promise<void> {
   const failures: string[] = [];
 
   for (const shortcut of shortcuts) {
     try {
-      await register(shortcut, (event) => {
-        if (event.state === "Pressed") {
-          void toggleRecording();
-        }
-      });
+      await register(shortcut, handler);
 
       const registered = await isRegistered(shortcut);
       if (registered) {
-        addEvent("info", `Recording shortcut registered: ${shortcut}`);
+        addEvent("info", `${label} shortcut registered: ${shortcut}`);
         return;
       }
 
@@ -505,45 +589,62 @@ async function registerRecordingShortcut(): Promise<void> {
     }
   }
 
-  addEvent("warning", `Recording shortcut is unavailable: ${failures.join("; ")}`);
+  addEvent("warning", `${label} shortcut is unavailable: ${failures.join("; ")}`);
 }
 
-async function registerStackShortcut(): Promise<void> {
-  const shortcuts = isMacOS() ? STACK_SHORTCUT_MACOS_CANDIDATES : STACK_SHORTCUT_DEFAULT_CANDIDATES;
-  const failures: string[] = [];
-
-  for (const shortcut of shortcuts) {
-    try {
-      await register(shortcut, (event) => {
-        if (event.state === "Pressed") {
-          void toggleTranscriptStack();
-        }
-      });
-
-      const registered = await isRegistered(shortcut);
-      if (registered) {
-        addEvent("info", `Copied-messages shortcut registered: ${shortcut}`);
-        return;
+async function registerRecordingShortcut(settings: ShortcutSettings): Promise<void> {
+  const defaults = isMacOS() ? RECORD_SHORTCUT_MACOS_CANDIDATES : RECORD_SHORTCUT_DEFAULT_CANDIDATES;
+  const shortcuts = shortcutCandidates(settings.recordingShortcut, defaults);
+  await registerShortcut("Recording", shortcuts, (event) => {
+    if (settings.recordingShortcutMode === "push-to-talk") {
+      if (event.state === "Pressed") {
+        void startPushToTalkRecording();
+      } else {
+        void stopPushToTalkRecording();
       }
-
-      failures.push(`${shortcut}: registration was not confirmed`);
-    } catch (error) {
-      failures.push(`${shortcut}: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
-  }
 
-  addEvent("warning", `Copied-messages shortcut is unavailable: ${failures.join("; ")}`);
+    if (event.state === "Pressed") {
+      void toggleRecording();
+    }
+  });
 }
 
-async function registerGlobalShortcuts(): Promise<void> {
+async function registerStackShortcut(settings: ShortcutSettings): Promise<void> {
+  const defaults = isMacOS() ? STACK_SHORTCUT_MACOS_CANDIDATES : STACK_SHORTCUT_DEFAULT_CANDIDATES;
+  const shortcuts = shortcutCandidates(settings.transcriptStackShortcut, defaults);
+  await registerShortcut("Copied-messages", shortcuts, (event) => {
+    if (event.state === "Pressed") {
+      void toggleTranscriptStack();
+    }
+  });
+}
+
+async function registerGlobalShortcuts(settings = shortcutSettings): Promise<void> {
+  const version = ++shortcutRegistrationVersion;
+  const normalized = normalizeShortcutSettings(settings);
+  shortcutSettings = normalized;
+
   try {
     await unregisterAll();
   } catch (error) {
     addEvent("warning", `Could not clear existing shortcuts before registration: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  await registerRecordingShortcut();
-  await registerStackShortcut();
+  if (version !== shortcutRegistrationVersion) return;
+  await registerRecordingShortcut(normalized);
+  if (version !== shortcutRegistrationVersion) return;
+  await registerStackShortcut(normalized);
+}
+
+async function loadShortcutSettings(): Promise<ShortcutSettings> {
+  try {
+    return normalizeShortcutSettings(await invoke<ShortcutSettings>("get_settings"));
+  } catch (error) {
+    addEvent("warning", `Could not load shortcut settings; using defaults: ${error instanceof Error ? error.message : String(error)}`);
+    return { ...DEFAULT_SHORTCUT_SETTINGS };
+  }
 }
 
 recordBtn.addEventListener("click", () => {
@@ -551,7 +652,7 @@ recordBtn.addEventListener("click", () => {
 });
 
 settingsBtn.addEventListener("click", () => {
-  void invoke("open_settings_window");
+  void invoke("open_home_window", { screen: "settings" });
 });
 
 window.addEventListener("multivoice-events-updated", updateSettingsEventBadge);
@@ -580,11 +681,17 @@ void listen<TranscriptHistoryItem>("transcript-copied", (event) => {
   showCopyIndicator();
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
+void listen<ShortcutSettings>("settings-updated", (event) => {
+  void registerGlobalShortcuts(event.payload);
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
 void loadBackendStatus().catch((error) => {
   addEvent("error", error instanceof Error ? error.message : String(error));
   setState("error", "Error");
 });
 void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
-void registerGlobalShortcuts();
+void loadShortcutSettings()
+  .then((settings) => registerGlobalShortcuts(settings))
+  .catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 wirePillPointer();
 updateSettingsEventBadge();

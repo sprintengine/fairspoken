@@ -32,7 +32,7 @@ export default defineConfig(async () => ({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        settings: resolve(__dirname, "settings.html"),
+        home: resolve(__dirname, "home.html"),
         "transcript-shelf": resolve(__dirname, "transcript-shelf.html"),
       },
     },

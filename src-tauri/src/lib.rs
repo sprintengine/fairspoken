@@ -2,11 +2,13 @@ mod audio;
 mod clipboard;
 mod host;
 mod models;
+mod notes;
 mod post_processing;
 mod remote_transcription;
 mod settings;
 mod transcript_history;
 mod transcription;
+mod usage_stats;
 
 pub use host::run_transcription_host;
 
@@ -16,6 +18,7 @@ use models::{
     ModelPrepareProgress, ModelService, ModelStatus, SherpaModel, TranscriptionModelStatus,
     WhisperModel,
 };
+use notes::{NewNote, Note, NotesService};
 use post_processing::apply_transcript_post_processing;
 use remote_transcription::{
     start_remote_streaming_session,
@@ -23,20 +26,24 @@ use remote_transcription::{
     RemoteStreamingSession,
 };
 use serde::{Deserialize, Serialize};
-use settings::{Settings, SettingsService, TranscriptionBackend, TranscriptionLocation};
+use settings::{
+    Settings, SettingsService, Snippet, TranscriptCorrection, TranscriptionBackend,
+    TranscriptionLocation,
+};
 use std::sync::atomic::AtomicU64;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State, WindowEvent};
 use transcript_history::{
     NewTranscriptHistoryItem, TranscriptHistoryItem, TranscriptHistoryService,
 };
 use transcription::{
     TranscriptPreview, TranscriptionCancelHandle, TranscriptionPreviewSender, TranscriptionService,
 };
+use usage_stats::{UsageStatsService, UsageStatsSummary};
 
 const MIN_RECORDING_SECONDS: f32 = 0.35;
 const SILENCE_RMS_THRESHOLD: f32 = 0.001;
@@ -52,6 +59,8 @@ struct AppServices {
     local_transcription_cancel: Mutex<Option<TranscriptionCancelHandle>>,
     settings: Mutex<SettingsService>,
     transcript_history: Mutex<TranscriptHistoryService>,
+    notes: Mutex<NotesService>,
+    usage_stats: Mutex<UsageStatsService>,
     transcription: Mutex<TranscriptionService>,
     remote_transcription: Mutex<Option<RemoteStreamingSession>>,
     transcript_shelf_positioned: AtomicBool,
@@ -93,12 +102,23 @@ fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-fn save_settings(settings: Settings, services: State<'_, AppServices>) -> Result<(), String> {
+fn save_settings(
+    app: AppHandle,
+    mut settings: Settings,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
     let current_settings = services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
+
+    // The dictionary (vocabulary, corrections, snippets) is owned by the
+    // Dictionary screen via save_dictionary; the Settings screen must not be
+    // able to clear it, so preserve those fields regardless of the payload.
+    settings.vocabulary_hints = current_settings.vocabulary_hints.clone();
+    settings.transcript_corrections = current_settings.transcript_corrections.clone();
+    settings.snippets = current_settings.snippets.clone();
 
     if services
         .audio
@@ -117,6 +137,43 @@ fn save_settings(settings: Settings, services: State<'_, AppServices>) -> Result
             .unload();
     }
 
+    let normalized = {
+        let mut service = services
+            .settings
+            .lock()
+            .map_err(|_| "Settings service lock failed".to_string())?;
+        service.save(settings)?;
+        service.current()
+    };
+
+    let _ = app.emit("settings-updated", &normalized);
+    Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DictionaryUpdate {
+    #[serde(default)]
+    vocabulary_hints: Vec<String>,
+    #[serde(default)]
+    transcript_corrections: Vec<TranscriptCorrection>,
+    #[serde(default)]
+    snippets: Vec<Snippet>,
+}
+
+#[tauri::command]
+fn save_dictionary(
+    update: DictionaryUpdate,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    let mut settings = services
+        .settings
+        .lock()
+        .map_err(|_| "Settings service lock failed".to_string())?
+        .current();
+    settings.vocabulary_hints = update.vocabulary_hints;
+    settings.transcript_corrections = update.transcript_corrections;
+    settings.snippets = update.snippets;
     services
         .settings
         .lock()
@@ -358,20 +415,18 @@ fn test_remote_transcription_host(
 }
 
 #[tauri::command]
-fn open_settings_window(app: AppHandle) -> Result<(), String> {
+fn open_home_window(app: AppHandle, screen: Option<String>) -> Result<(), String> {
     let window = app
-        .get_webview_window("settings")
-        .ok_or_else(|| "Settings window is not configured".to_string())?;
+        .get_webview_window("home")
+        .ok_or_else(|| "Home window is not configured".to_string())?;
 
     window.show().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;
-    Ok(())
-}
 
-#[tauri::command]
-fn close_settings_window(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("settings") {
-        window.hide().map_err(|err| err.to_string())?;
+    // The window is created hidden at startup, so its webview listeners are
+    // already live before the first show; emitting here lands reliably.
+    if let Some(screen) = screen {
+        let _ = app.emit("home-navigate", screen);
     }
     Ok(())
 }
@@ -413,6 +468,67 @@ fn hide_transcript_shelf_window(app: AppHandle) -> Result<(), String> {
         window.hide().map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn get_notes(services: State<'_, AppServices>) -> Result<Vec<Note>, String> {
+    services
+        .notes
+        .lock()
+        .map_err(|_| "Notes service lock failed".to_string())
+        .map(|notes| notes.list())
+}
+
+#[tauri::command]
+fn update_note(id: String, text: String, services: State<'_, AppServices>) -> Result<Note, String> {
+    services
+        .notes
+        .lock()
+        .map_err(|_| "Notes service lock failed".to_string())?
+        .update_text(&id, &text)
+}
+
+#[tauri::command]
+fn set_note_pinned(
+    id: String,
+    pinned: bool,
+    services: State<'_, AppServices>,
+) -> Result<Note, String> {
+    services
+        .notes
+        .lock()
+        .map_err(|_| "Notes service lock failed".to_string())?
+        .set_pinned(&id, pinned)
+}
+
+#[tauri::command]
+fn delete_note(id: String, services: State<'_, AppServices>) -> Result<(), String> {
+    services
+        .notes
+        .lock()
+        .map_err(|_| "Notes service lock failed".to_string())?
+        .delete(&id)
+}
+
+#[tauri::command]
+fn copy_note(id: String, services: State<'_, AppServices>) -> Result<Note, String> {
+    let note = services
+        .notes
+        .lock()
+        .map_err(|_| "Notes service lock failed".to_string())?
+        .find(&id)
+        .ok_or_else(|| "Note was not found".to_string())?;
+    services.clipboard.write_text(&note.text)?;
+    Ok(note)
+}
+
+#[tauri::command]
+fn get_usage_stats(services: State<'_, AppServices>) -> Result<UsageStatsSummary, String> {
+    services
+        .usage_stats
+        .lock()
+        .map_err(|_| "Usage stats service lock failed".to_string())
+        .map(|service| service.summary(current_epoch_seconds()))
 }
 
 #[tauri::command]
@@ -702,7 +818,62 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         },
     );
     emit_backend_event(&app, "info", "Transcript copied to clipboard");
+
+    // Usage stats are best-effort: a stats write must never fail the dictation
+    // the user just completed.
+    let word_count = transcript.split_whitespace().count() as u64;
+    if let Err(err) = record_usage_stats(&services, word_count, stats.duration_seconds) {
+        emit_backend_event(
+            &app,
+            "warning",
+            format!("Could not update usage stats: {err}"),
+        );
+    }
+
+    // Save to the durable notes library (also best-effort), then notify the
+    // home window so the Notes screen refreshes live.
+    match save_note(&services, transcript.clone(), stats.duration_seconds) {
+        Ok(note) => {
+            let _ = app.emit("notes-updated", &note);
+        }
+        Err(err) => emit_backend_event(&app, "warning", format!("Could not save note: {err}")),
+    }
+
     Ok(transcript)
+}
+
+fn save_note(
+    services: &State<'_, AppServices>,
+    text: String,
+    duration_seconds: f32,
+) -> Result<Note, String> {
+    services
+        .notes
+        .lock()
+        .map_err(|_| "Notes service lock failed".to_string())?
+        .add(NewNote {
+            text,
+            duration_seconds,
+        })
+}
+
+fn record_usage_stats(
+    services: &State<'_, AppServices>,
+    words: u64,
+    recording_seconds: f32,
+) -> Result<(), String> {
+    services
+        .usage_stats
+        .lock()
+        .map_err(|_| "Usage stats service lock failed".to_string())?
+        .record(words, recording_seconds, current_epoch_seconds())
+}
+
+fn current_epoch_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -814,6 +985,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            // The home window is a real app window: closing it should hide it
+            // (keeping it reopenable from the pill), not tear it down.
+            if window.label() == "home" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .manage(AppServices {
             audio: Mutex::new(AudioService::default()),
             clipboard: ClipboardService::default(),
@@ -823,6 +1004,8 @@ pub fn run() {
             local_transcription_cancel: Mutex::new(None),
             settings: Mutex::new(SettingsService::default()),
             transcript_history: Mutex::new(TranscriptHistoryService::default()),
+            notes: Mutex::new(NotesService::default()),
+            usage_stats: Mutex::new(UsageStatsService::default()),
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
             transcript_shelf_positioned: AtomicBool::new(false),
@@ -831,16 +1014,22 @@ pub fn run() {
             get_app_status,
             get_settings,
             save_settings,
+            save_dictionary,
             get_model_status,
             prepare_model,
             get_transcription_model_status,
             prepare_transcription_model,
             begin_prepare_transcription_model,
             test_remote_transcription_host,
-            open_settings_window,
-            close_settings_window,
+            open_home_window,
             show_transcript_shelf_window,
             hide_transcript_shelf_window,
+            get_usage_stats,
+            get_notes,
+            update_note,
+            set_note_pinned,
+            delete_note,
+            copy_note,
             get_transcript_history,
             clear_transcript_history,
             copy_transcript_history_item,

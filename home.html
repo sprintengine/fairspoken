@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MultiVoice</title>
+  <link rel="stylesheet" href="/src/home.css" />
+  <script type="module" src="/src/home.ts" defer></script>
+  <script type="module" src="/src/settings.ts" defer></script>
+</head>
+<body>
+  <div class="app">
+    <!-- ── Title strip ── window-drag region carrying the wordmark; under the
+         macOS Overlay title-bar style the native traffic lights float over its
+         left edge, so nothing is rendered there. -->
+    <header class="titlebar" data-tauri-drag-region>
+      <span class="wordmark" data-tauri-drag-region>
+        <span class="wordmark-mark" aria-hidden="true">
+          <img src="/logo.png" alt="" draggable="false" />
+        </span>
+        <span class="wordmark-name">multivoice</span>
+      </span>
+    </header>
+
+    <div class="workspace">
+      <!-- ── Sidebar ── -->
+      <aside class="sidebar">
+      <nav class="nav" aria-label="Primary">
+        <button class="nav-item" data-screen="home" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 11.5 12 5l8 6.5M6 10v9h12v-9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Home
+        </button>
+        <button class="nav-item" data-screen="notes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="3.5" width="14" height="17" rx="2.5"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4" stroke-linecap="round"/></svg>
+          Notes
+        </button>
+        <button class="nav-item" data-screen="dictionary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 4h9a3 3 0 0 1 3 3v13H8a2 2 0 0 1-2-2V4Z"/><path d="M6 4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2"/></svg>
+          Dictionary
+        </button>
+        <button class="nav-item" data-screen="activity">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h4l2.5 7 5-14L17 12h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Activity
+        </button>
+        <button class="nav-item" data-screen="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M18.4 18.4l-2.1-2.1M7.7 7.7 5.6 5.6" stroke-linecap="round"/></svg>
+          Settings
+        </button>
+      </nav>
+      <div class="nav-spacer"></div>
+      <div class="sidebar-foot"><span class="dot good"></span> Ready · local whisper</div>
+    </aside>
+
+    <!-- ── Main ── -->
+    <div class="main">
+      <header class="topbar">
+        <h1 id="screenTitle">Home</h1>
+        <div class="search" id="notesSearch" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
+          <input id="notesSearchInput" type="search" placeholder="Search notes" aria-label="Search notes" />
+        </div>
+      </header>
+
+      <div class="content">
+        <!-- ════ HOME (stats, driven by homeStats.ts) ════ -->
+        <section class="screen active" id="screen-home">
+          <div class="empty" id="homeEmpty" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19V9M9 19V5M14 19v-7M19 19v-11" stroke-linecap="round"/></svg>
+            <div class="e-title">Your stats will appear here</div>
+            <div class="e-sub">Words dictated, time saved, and your daily streak — calculated as you dictate. Press the record shortcut to capture your first one.</div>
+          </div>
+
+          <div id="homeStats" hidden>
+            <div class="hero">
+              <div class="label">Time saved</div>
+              <div class="value num" id="statTimeSaved">—</div>
+              <div class="sub" id="statTimeSavedSub"></div>
+            </div>
+            <div class="tiles">
+              <div class="tile"><div class="t-label">Words dictated</div><div class="t-value num" id="statTotalWords">0</div><div class="t-meta">lifetime</div></div>
+              <div class="tile"><div class="t-label">This week</div><div class="t-value num" id="statThisWeek">0</div><div class="t-meta" id="statWeekDelta"></div></div>
+              <div class="tile"><div class="t-label">Day streak</div><div class="t-value num" id="statStreak">0</div><div class="t-meta" id="statBestStreak"></div></div>
+              <div class="tile"><div class="t-label">Speaking pace</div><div class="t-value num" id="statWpm">0</div><div class="t-meta">wpm avg</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>This week</h2><div class="grow"></div><span class="hint">words per day</span></div>
+              <div class="chart" id="statChart"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Recent dictations</h2><div class="grow"></div><button class="btn btn-ghost" id="statViewAll" type="button">View all</button></div>
+              <div id="statRecent"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ════ NOTES (library, driven by notes.ts) ════ -->
+        <section class="screen" id="screen-notes">
+          <div class="notes">
+            <div class="note-list" id="noteList" role="listbox" aria-label="Notes"></div>
+            <div class="note-detail" id="noteDetail"></div>
+          </div>
+        </section>
+
+        <!-- ════ DICTIONARY (vocab + corrections + snippets, driven by dictionary.ts) ════ -->
+        <section class="screen" id="screen-dictionary">
+          <div class="dict-stack">
+            <div class="panel">
+              <div class="panel-head"><h2>Vocabulary</h2><div class="grow"></div><span class="hint">Names and terms to bias transcription</span></div>
+              <form class="dict-add" id="vocabAdd">
+                <input id="vocabInput" class="setting-input" type="text" placeholder="Add a word or name" aria-label="Add vocabulary word" autocomplete="off" />
+                <button class="btn" type="submit">Add</button>
+              </form>
+              <div class="chips" id="vocabChips"></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>Corrections</h2><div class="grow"></div><button class="btn" id="addCorrection" type="button">Add</button></div>
+              <p class="dict-note">Replace a commonly mis-heard phrase with the right text.</p>
+              <div id="correctionRows"></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>Snippets</h2><div class="grow"></div><button class="btn" id="addSnippet" type="button">Add</button></div>
+              <p class="dict-note">Say a short trigger to expand it into longer text.</p>
+              <div id="snippetRows"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ════ ACTIVITY (warnings + errors, driven by activity.ts) ════ -->
+        <section class="screen" id="screen-activity">
+          <div class="activity">
+            <div class="activity-head">
+              <p id="activitySummary">All clear</p>
+              <button class="btn btn-ghost" id="clearActivityButton" type="button">Clear</button>
+            </div>
+            <div class="activity-list" id="activityList" aria-live="polite" aria-label="Activity"></div>
+          </div>
+        </section>
+
+        <!-- ════ SETTINGS (driven by settings.ts) ════ -->
+        <section class="screen" id="screen-settings">
+          <form class="settings-form" id="settingsForm">
+              <section class="settings-section" aria-labelledby="captureTitle">
+                <div class="section-head">
+                  <h2 id="captureTitle">Capture</h2>
+                  <button class="icon-btn" id="refreshDevices" type="button" aria-label="Refresh microphones" title="Refresh microphones">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12A8 8 0 0 1 17.7 6.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                      <path d="M20 5v5h-5M4 19v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
+
+                <label class="field">
+                  <span>Microphone</span>
+                  <select id="audioDeviceSelect" class="setting-select">
+                    <option value="">Default microphone</option>
+                  </select>
+                </label>
+
+                <div class="meter-row" aria-hidden="true">
+                  <span class="meter-dot"></span>
+                  <div class="meter-track">
+                    <span class="meter-bar" id="inputMeter"></span>
+                  </div>
+                </div>
+
+                <label class="field compact-field">
+                  <span>Input gain</span>
+                  <select id="inputGain" class="setting-select">
+                    <option value="1">1x</option>
+                    <option value="2">2x</option>
+                    <option value="3">3x</option>
+                    <option value="4">4x</option>
+                    <option value="6">6x</option>
+                  </select>
+                </label>
+
+                <label class="toggle-row">
+                  <span><strong>Noise suppression</strong></span>
+                  <input id="noiseSuppression" type="checkbox" />
+                </label>
+
+                <label class="toggle-row">
+                  <span><strong>Echo cancellation</strong></span>
+                  <input id="echoCancellation" type="checkbox" />
+                </label>
+              </section>
+
+              <section class="settings-section" aria-labelledby="transcriptionTitle">
+                <div class="section-head">
+                  <h2 id="transcriptionTitle">Transcription</h2>
+                </div>
+
+                <label class="field">
+                  <span>Location</span>
+                  <select id="locationSelect" class="setting-select">
+                    <option value="local">Local</option>
+                    <option value="remote-host">Remote host</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span>Engine</span>
+                  <select id="engineSelect" class="setting-select">
+                    <option value="whisper">Whisper</option>
+                    <option value="sherpa-streaming">Sherpa streaming</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span>Model</span>
+                  <div class="model-select-row">
+                    <select id="modelSelect" class="setting-select">
+                      <option value="tiny">Tiny</option>
+                      <option value="base">Base</option>
+                      <option value="small">Small</option>
+                      <option value="medium">Medium</option>
+                      <option value="large-v2">Large v2</option>
+                      <option value="large-v3">Large v3</option>
+                      <option value="large-v3-turbo">Large v3 Turbo</option>
+                    </select>
+                    <span class="model-size" id="modelSize">~80 MB</span>
+                  </div>
+                </label>
+
+                <div class="model-download" id="modelDownload" aria-live="polite">
+                  <span class="model-download-status" id="modelDownloadStatus">Model not loaded</span>
+                  <div class="model-download-track">
+                    <span class="model-download-bar" id="modelDownloadBar"></span>
+                  </div>
+                  <button class="model-prepare-btn" id="modelPrepare" type="button">Prepare</button>
+                </div>
+
+                <div class="remote-host-panel" id="remoteHostPanel" aria-live="polite" hidden>
+                  <label class="field">
+                    <span>Host URL</span>
+                    <input id="remoteUrl" class="setting-input" type="url" placeholder="https://host.example.com" />
+                  </label>
+                  <label class="field">
+                    <span>Token</span>
+                    <input id="remoteAuthToken" class="setting-input" type="password" autocomplete="off" />
+                  </label>
+                  <label class="field compact-field">
+                    <span>Timeout</span>
+                    <input id="remoteTimeoutSeconds" class="setting-input" type="number" min="5" max="300" step="5" />
+                  </label>
+                  <div class="remote-host-actions">
+                    <span class="model-download-status" id="remoteStatus">Remote host not checked</span>
+                    <button class="model-prepare-btn" id="remoteTest" type="button">Test</button>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>Language</span>
+                  <select id="langSelect" class="setting-select">
+                    <option value="auto">Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ja">Japanese</option>
+                  </select>
+                </label>
+
+                <label class="field compact-field" id="whisperChunkField">
+                  <span>Whisper chunk</span>
+                  <input id="whisperChunkSeconds" class="setting-input" type="number" min="5" max="60" step="5" />
+                </label>
+
+                <label class="toggle-row">
+                  <span><strong>Clean up text</strong><span class="field-hint">Apply your dictionary corrections and snippets</span></span>
+                  <input id="postProcess" type="checkbox" />
+                </label>
+              </section>
+
+              <section class="settings-section" aria-labelledby="windowTitle">
+                <div class="section-head">
+                  <h2 id="windowTitle">Window</h2>
+                </div>
+
+                <label class="toggle-row">
+                  <span><strong>Keep pill on top</strong></span>
+                  <input id="alwaysOnTop" type="checkbox" />
+                </label>
+
+                <label class="field compact-field">
+                  <span>Max recording</span>
+                  <input id="maxRecordingSeconds" class="setting-input" type="number" min="10" max="300" step="5" />
+                </label>
+              </section>
+
+              <section class="settings-section" aria-labelledby="keyBindingsTitle">
+                <div class="section-head">
+                  <h2 id="keyBindingsTitle">Key Bindings</h2>
+                </div>
+
+                <label class="field">
+                  <span>Recording mode</span>
+                  <select id="recordingShortcutMode" class="setting-select">
+                    <option value="toggle">Toggle</option>
+                    <option value="push-to-talk">Push to talk</option>
+                  </select>
+                </label>
+
+                <div class="field">
+                  <span>Recording shortcut</span>
+                  <div class="shortcut-row">
+                    <input id="recordingShortcut" class="setting-input mono" type="text" readonly aria-label="Recording shortcut" />
+                    <button class="btn btn-ghost" id="recordingShortcutCapture" type="button">Record</button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <span>Copied messages</span>
+                  <div class="shortcut-row">
+                    <input id="transcriptStackShortcut" class="setting-input mono" type="text" readonly aria-label="Copied messages shortcut" />
+                    <button class="btn btn-ghost" id="transcriptStackShortcutCapture" type="button">Record</button>
+                  </div>
+                </div>
+
+                <div class="settings-note" id="shortcutStatus" aria-live="polite">Shortcuts apply globally while MultiVoice is running.</div>
+              </section>
+          </form>
+        </section>
+      </div>
+    </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -35,6 +35,22 @@ pub fn apply_transcript_post_processing(
         corrections_applied += count;
     }
 
+    // Snippets expand a dictated trigger phrase into longer text.
+    for snippet in &settings.snippets {
+        if !snippet.enabled {
+            continue;
+        }
+        let (next_text, count) = replace_phrase(
+            &text,
+            snippet.trigger.trim(),
+            &snippet.expansion,
+            false,
+            true,
+        );
+        text = next_text;
+        corrections_applied += count;
+    }
+
     TranscriptPostProcessResult {
         text,
         corrections_applied,
@@ -110,7 +126,7 @@ fn is_word_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::apply_transcript_post_processing;
-    use crate::settings::{Settings, TranscriptCorrection};
+    use crate::settings::{Settings, Snippet, TranscriptCorrection};
 
     #[test]
     fn applies_case_insensitive_phrase_correction() {
@@ -158,6 +174,40 @@ mod tests {
         let result = apply_transcript_post_processing("toury app", &settings);
 
         assert_eq!(result.text, "toury app");
+        assert_eq!(result.corrections_applied, 0);
+    }
+
+    #[test]
+    fn expands_snippet_trigger_phrase() {
+        let settings = Settings {
+            snippets: vec![Snippet {
+                enabled: true,
+                trigger: "my email".to_string(),
+                expansion: "jane@example.com".to_string(),
+            }],
+            ..Settings::default()
+        };
+
+        let result = apply_transcript_post_processing("Send it to my email please.", &settings);
+
+        assert_eq!(result.text, "Send it to jane@example.com please.");
+        assert_eq!(result.corrections_applied, 1);
+    }
+
+    #[test]
+    fn disabled_snippet_is_not_expanded() {
+        let settings = Settings {
+            snippets: vec![Snippet {
+                enabled: false,
+                trigger: "my email".to_string(),
+                expansion: "jane@example.com".to_string(),
+            }],
+            ..Settings::default()
+        };
+
+        let result = apply_transcript_post_processing("Send it to my email please.", &settings);
+
+        assert_eq!(result.text, "Send it to my email please.");
         assert_eq!(result.corrections_applied, 0);
     }
 

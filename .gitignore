@@ -21,6 +21,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Local MCP/browser automation artifacts
+.playwright-mcp/
+
 # Switchboard runtime state
 .multi-code/switchboard/
 

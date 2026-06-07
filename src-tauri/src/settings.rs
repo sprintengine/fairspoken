@@ -18,6 +18,13 @@ pub enum TranscriptionLocation {
     RemoteHost,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingShortcutMode {
+    Toggle,
+    PushToTalk,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -44,10 +51,18 @@ pub struct Settings {
     pub vocabulary_hints: Vec<String>,
     #[serde(default)]
     pub transcript_corrections: Vec<TranscriptCorrection>,
+    #[serde(default)]
+    pub snippets: Vec<Snippet>,
     pub always_on_top: bool,
     pub max_recording_seconds: u16,
     #[serde(default = "default_whisper_chunk_seconds")]
     pub whisper_chunk_seconds: u16,
+    #[serde(default = "default_recording_shortcut")]
+    pub recording_shortcut: String,
+    #[serde(default)]
+    pub recording_shortcut_mode: RecordingShortcutMode,
+    #[serde(default = "default_transcript_stack_shortcut")]
+    pub transcript_stack_shortcut: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,6 +78,19 @@ pub struct TranscriptCorrection {
     pub case_sensitive: bool,
     #[serde(default = "default_correction_whole_phrase")]
     pub whole_phrase: bool,
+}
+
+/// A text-expansion shortcut: when `trigger` is dictated, it is replaced with
+/// `expansion` during post-processing (whole-phrase, case-insensitive).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    #[serde(default = "default_correction_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub trigger: String,
+    #[serde(default)]
+    pub expansion: String,
 }
 
 impl Default for Settings {
@@ -83,9 +111,13 @@ impl Default for Settings {
             post_process: true,
             vocabulary_hints: Vec::new(),
             transcript_corrections: Vec::new(),
+            snippets: Vec::new(),
             always_on_top: true,
             max_recording_seconds: 120,
             whisper_chunk_seconds: default_whisper_chunk_seconds(),
+            recording_shortcut: default_recording_shortcut(),
+            recording_shortcut_mode: RecordingShortcutMode::Toggle,
+            transcript_stack_shortcut: default_transcript_stack_shortcut(),
         }
     }
 }
@@ -99,6 +131,12 @@ impl Default for TranscriptionBackend {
 impl Default for TranscriptionLocation {
     fn default() -> Self {
         Self::Local
+    }
+}
+
+impl Default for RecordingShortcutMode {
+    fn default() -> Self {
+        Self::Toggle
     }
 }
 
@@ -182,6 +220,15 @@ fn normalize(settings: Settings) -> Settings {
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
         vocabulary_hints: normalize_vocabulary_hints(settings.vocabulary_hints),
         transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
+        snippets: normalize_snippets(settings.snippets),
+        recording_shortcut: normalize_shortcut(
+            &settings.recording_shortcut,
+            &default_recording_shortcut(),
+        ),
+        transcript_stack_shortcut: normalize_shortcut(
+            &settings.transcript_stack_shortcut,
+            &default_transcript_stack_shortcut(),
+        ),
         ..settings
     }
 }
@@ -192,6 +239,14 @@ fn default_whisper_chunk_seconds() -> u16 {
 
 fn default_remote_timeout_seconds() -> u16 {
     60
+}
+
+fn default_recording_shortcut() -> String {
+    "CommandOrControl+Shift+Digit1".to_string()
+}
+
+fn default_transcript_stack_shortcut() -> String {
+    "CommandOrControl+Shift+Digit2".to_string()
 }
 
 fn default_correction_enabled() -> bool {
@@ -241,6 +296,26 @@ fn normalize_transcript_corrections(
     normalized
 }
 
+fn normalize_snippets(snippets: Vec<Snippet>) -> Vec<Snippet> {
+    let mut normalized = Vec::new();
+    for snippet in snippets {
+        let trigger = clean_text_setting(&snippet.trigger, 120);
+        let expansion = clean_text_setting(&snippet.expansion, 500);
+        if trigger.is_empty() || expansion.is_empty() {
+            continue;
+        }
+        normalized.push(Snippet {
+            enabled: snippet.enabled,
+            trigger,
+            expansion,
+        });
+        if normalized.len() >= 100 {
+            break;
+        }
+    }
+    normalized
+}
+
 fn clean_text_setting(value: &str, max_chars: usize) -> String {
     value
         .replace('\0', "")
@@ -254,6 +329,20 @@ fn clean_text_setting(value: &str, max_chars: usize) -> String {
 
 fn normalize_remote_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_string()
+}
+
+fn normalize_shortcut(shortcut: &str, fallback: &str) -> String {
+    let normalized = shortcut
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("+");
+    if normalized.is_empty() {
+        fallback.to_string()
+    } else {
+        normalized.chars().take(80).collect()
+    }
 }
 
 fn default_settings_path() -> PathBuf {
@@ -275,4 +364,39 @@ fn default_settings_path() -> PathBuf {
     }
 
     PathBuf::from("settings.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_shortcuts_are_persisted_settings() {
+        let settings = Settings::default();
+
+        assert_eq!(settings.recording_shortcut, "CommandOrControl+Shift+Digit1");
+        assert_eq!(
+            settings.recording_shortcut_mode,
+            RecordingShortcutMode::Toggle
+        );
+        assert_eq!(
+            settings.transcript_stack_shortcut,
+            "CommandOrControl+Shift+Digit2"
+        );
+    }
+
+    #[test]
+    fn normalize_shortcuts_trims_and_falls_back_when_empty() {
+        let mut settings = Settings::default();
+        settings.recording_shortcut = "  CommandOrControl + Shift + A  ".to_string();
+        settings.transcript_stack_shortcut = "   ".to_string();
+
+        let normalized = normalize(settings);
+
+        assert_eq!(normalized.recording_shortcut, "CommandOrControl+Shift+A");
+        assert_eq!(
+            normalized.transcript_stack_shortcut,
+            "CommandOrControl+Shift+Digit2"
+        );
+    }
 }
