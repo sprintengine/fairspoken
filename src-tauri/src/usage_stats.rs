@@ -274,8 +274,11 @@ mod tests {
 
         assert_eq!(service.data.total_words, 35);
         assert_eq!(service.data.total_dictations, 3);
+        assert_eq!(service.data.total_recording_seconds, 105.0);
         assert_eq!(service.data.days.get(&100).unwrap().words, 15);
+        assert_eq!(service.data.days.get(&100).unwrap().recording_seconds, 45.0);
         assert_eq!(service.data.days.get(&101).unwrap().words, 20);
+        assert_eq!(service.data.days.get(&101).unwrap().recording_seconds, 60.0);
     }
 
     #[test]

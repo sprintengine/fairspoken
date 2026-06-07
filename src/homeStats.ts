@@ -40,6 +40,7 @@ const homeStats = byId("homeStats");
 const statTimeSaved = byId("statTimeSaved");
 const statTimeSavedSub = byId("statTimeSavedSub");
 const statTotalWords = byId("statTotalWords");
+const statSpokenTime = byId("statSpokenTime");
 const statThisWeek = byId("statThisWeek");
 const statWeekDelta = byId("statWeekDelta");
 const statStreak = byId("statStreak");
@@ -109,6 +110,7 @@ function renderStats(summary: UsageStatsSummary): void {
     `${formatDuration(typingSeconds)}; dictating them took ${formatDuration(summary.totalRecordingSeconds)}.`;
 
   statTotalWords.textContent = summary.totalWords.toLocaleString();
+  statSpokenTime.textContent = formatDuration(summary.totalRecordingSeconds);
   statThisWeek.textContent = summary.thisWeekWords.toLocaleString();
   statWeekDelta.textContent = weekDeltaLabel(summary.thisWeekWords, summary.lastWeekWords);
   statStreak.textContent = String(summary.currentStreak);
