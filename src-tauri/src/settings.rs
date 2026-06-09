@@ -54,6 +54,8 @@ pub struct Settings {
     #[serde(default)]
     pub snippets: Vec<Snippet>,
     pub always_on_top: bool,
+    #[serde(default = "default_interaction_sounds")]
+    pub interaction_sounds: bool,
     pub max_recording_seconds: u16,
     #[serde(default = "default_whisper_chunk_seconds")]
     pub whisper_chunk_seconds: u16,
@@ -113,6 +115,7 @@ impl Default for Settings {
             transcript_corrections: Vec::new(),
             snippets: Vec::new(),
             always_on_top: true,
+            interaction_sounds: true,
             max_recording_seconds: 120,
             whisper_chunk_seconds: default_whisper_chunk_seconds(),
             recording_shortcut: default_recording_shortcut(),
@@ -250,6 +253,10 @@ fn default_transcript_stack_shortcut() -> String {
 }
 
 fn default_correction_enabled() -> bool {
+    true
+}
+
+fn default_interaction_sounds() -> bool {
     true
 }
 
