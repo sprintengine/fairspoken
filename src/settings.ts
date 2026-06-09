@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
+import { playRecordingStartSound, setInteractionSoundsEnabled } from "./sounds";
 
 type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3" | "large-v3-turbo";
 type TranscriptionBackend = "whisper" | "sherpa-streaming";
@@ -26,6 +27,7 @@ interface Settings {
   remoteTimeoutSeconds: number;
   language: string;
   alwaysOnTop: boolean;
+  interactionSounds: boolean;
   maxRecordingSeconds: number;
   whisperChunkSeconds: number;
   audioDevice?: string;
@@ -76,6 +78,7 @@ const DEFAULTS: Settings = {
   remoteTimeoutSeconds: 60,
   language: "en",
   alwaysOnTop: true,
+  interactionSounds: true,
   maxRecordingSeconds: 120,
   whisperChunkSeconds: 20,
   audioDevice: "",
@@ -101,6 +104,7 @@ const echoCancellation = required<HTMLInputElement>("echoCancellation");
 const inputGain = required<HTMLSelectElement>("inputGain");
 const postProcess = required<HTMLInputElement>("postProcess");
 const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
+const interactionSounds = required<HTMLInputElement>("interactionSounds");
 const maxRecordingSeconds = required<HTMLInputElement>("maxRecordingSeconds");
 const recordingShortcutMode = required<HTMLSelectElement>("recordingShortcutMode");
 const recordingShortcut = required<HTMLInputElement>("recordingShortcut");
@@ -198,6 +202,7 @@ function applyToForm(settings: Settings): void {
   inputGain.value = String(settings.inputGain ?? 2);
   postProcess.checked = settings.postProcess ?? true;
   alwaysOnTop.checked = settings.alwaysOnTop;
+  interactionSounds.checked = settings.interactionSounds ?? true;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
   recordingShortcutMode.value = settings.recordingShortcutMode;
   recordingShortcut.value = settings.recordingShortcut;
@@ -224,6 +229,7 @@ function readFromForm(): Settings {
     inputGain: Number(inputGain.value),
     postProcess: postProcess.checked,
     alwaysOnTop: alwaysOnTop.checked,
+    interactionSounds: interactionSounds.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
     recordingShortcutMode: recordingShortcutMode.value as RecordingShortcutMode,
     recordingShortcut: recordingShortcut.value,
@@ -724,6 +730,16 @@ inputGain.addEventListener("change", () => {
 langSelect.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 postProcess.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 alwaysOnTop.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+interactionSounds.addEventListener("change", () => {
+  void persistSettings()
+    .then((saved) => {
+      if (saved && interactionSounds.checked) {
+        setInteractionSoundsEnabled(true);
+        playRecordingStartSound();
+      }
+    })
+    .catch(reportAsyncError);
+});
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 maxRecordingSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
 recordingShortcutMode.addEventListener("change", () => void persistSettings().catch(reportAsyncError));

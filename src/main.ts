@@ -3,6 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isRegistered, register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
+import { playRecordingStartSound, playRecordingStopSound, preloadInteractionSounds, setInteractionSoundsEnabled } from "./sounds";
 
 type AppState = "idle" | "recording" | "transcribing" | "error";
 
@@ -42,6 +43,7 @@ interface ShortcutSettings {
   recordingShortcut: string;
   recordingShortcutMode: RecordingShortcutMode;
   transcriptStackShortcut: string;
+  interactionSounds: boolean;
 }
 
 const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
@@ -52,6 +54,7 @@ const DEFAULT_SHORTCUT_SETTINGS: ShortcutSettings = {
   recordingShortcut: "CommandOrControl+Shift+Digit1",
   recordingShortcutMode: "toggle",
   transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
+  interactionSounds: true,
 };
 const PILL_DRAG_THRESHOLD_PX = 4;
 
@@ -396,6 +399,7 @@ async function startRecording(): Promise<boolean> {
     const maxRecordingSeconds = await invoke<number>("start_recording");
     startRecordingRequestPending = false;
     cancelTranscriptionRequestPending = false;
+    playRecordingStartSound();
     setState("recording");
     resetLiveTranscript();
     scheduleMaxRecordingStop(maxRecordingSeconds);
@@ -450,6 +454,7 @@ async function stopAndTranscribe(): Promise<void> {
   stopRecordingRequestPending = true;
   cancelTranscriptionRequestPending = false;
   clearMaxRecordingTimer();
+  playRecordingStopSound();
   setState("transcribing");
   await waitForPaint();
 
@@ -548,6 +553,7 @@ function normalizeShortcutSettings(settings: Partial<ShortcutSettings>): Shortcu
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULT_SHORTCUT_SETTINGS.recordingShortcut),
     recordingShortcutMode: settings.recordingShortcutMode === "push-to-talk" ? "push-to-talk" : "toggle",
     transcriptStackShortcut: normalizeShortcut(settings.transcriptStackShortcut ?? DEFAULT_SHORTCUT_SETTINGS.transcriptStackShortcut),
+    interactionSounds: settings.interactionSounds !== false,
   };
 }
 
@@ -625,6 +631,7 @@ async function registerGlobalShortcuts(settings = shortcutSettings): Promise<voi
   const version = ++shortcutRegistrationVersion;
   const normalized = normalizeShortcutSettings(settings);
   shortcutSettings = normalized;
+  setInteractionSoundsEnabled(normalized.interactionSounds);
 
   try {
     await unregisterAll();
@@ -695,3 +702,4 @@ void loadShortcutSettings()
   .catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 wirePillPointer();
 updateSettingsEventBadge();
+preloadInteractionSounds();
