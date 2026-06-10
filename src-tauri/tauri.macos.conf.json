@@ -1,10 +1,1 @@
-{
-  "bundle": {
-    "resources": [
-      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-osx-arm64-shared-lib/lib/libsherpa-onnx-c-api.dylib",
-      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-osx-arm64-shared-lib/lib/libsherpa-onnx-cxx-api.dylib",
-      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-osx-arm64-shared-lib/lib/libonnxruntime.dylib",
-      "target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.0-osx-arm64-shared-lib/lib/libonnxruntime.1.24.4.dylib"
-    ]
-  }
-}
+{}
