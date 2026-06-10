@@ -87,6 +87,15 @@ impl TranscriptionService {
         })
     }
 
+    /// Loads (or reuses) the Whisper context for the given settings without
+    /// starting a session, so a host worker can hold the model warm before
+    /// the first job arrives.
+    pub fn preload(&mut self, settings: &Settings, models: &ModelService) -> Result<(), String> {
+        let transcriber = self.active.get_or_insert_with(WhisperTranscriber::default);
+        let model_path = models.path_for(settings.model);
+        transcriber.ensure_context(settings.model, &model_path, settings.use_gpu)
+    }
+
     pub fn finish_session(
         &mut self,
         recording: &Recording,
@@ -563,6 +572,9 @@ fn transcribe_whisper_pcm(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_no_context(true);
+    // Suppress non-speech tokens so silence or background noise does not emit
+    // bracketed annotations like "[BLANK_AUDIO]" or "(background noise)".
+    params.set_suppress_nst(true);
     if let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         params.set_initial_prompt(initial_prompt);
     }

@@ -795,21 +795,34 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
             duration_seconds: stats.duration_seconds,
         })?;
 
-    services
-        .clipboard
-        .write_text(&transcript_clipboard_text(&transcript))?;
+    let clipboard_text = transcript_clipboard_text(&transcript);
+    #[cfg(target_os = "macos")]
+    let will_insert_at_cursor = settings.insert_at_cursor && !transcript.is_empty();
+    // Capture the user's clipboard before the transcript overwrites it, so a
+    // successful insert-at-cursor can put it back afterwards.
+    #[cfg(target_os = "macos")]
+    let prior_clipboard = if will_insert_at_cursor {
+        services.clipboard.read_text()
+    } else {
+        None
+    };
+
+    services.clipboard.write_text(&clipboard_text)?;
     let _ = app.emit(
         "transcript-history-updated",
         TranscriptHistoryUpdatedEvent {
             item: stored_item.clone(),
         },
     );
-    emit_backend_event(&app, "info", "Transcript copied to clipboard");
 
     #[cfg(target_os = "macos")]
-    if settings.insert_at_cursor && !transcript.is_empty() {
-        deliver_transcript_at_cursor(&app);
+    if will_insert_at_cursor {
+        deliver_transcript_at_cursor(&app, prior_clipboard, clipboard_text);
+    } else {
+        emit_backend_event(&app, "info", "Transcript copied to clipboard");
     }
+    #[cfg(not(target_os = "macos"))]
+    emit_backend_event(&app, "info", "Transcript copied to clipboard");
 
     // Usage stats are best-effort: a stats write must never fail the dictation
     // the user just completed.
@@ -839,8 +852,16 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
 /// would land in Multivoice itself); every other failure is surfaced as a
 /// backend event because the user is otherwise left wondering why no text
 /// appeared.
+///
+/// Only a successful paste restores `prior_clipboard`. When insertion fails
+/// or is skipped, the transcript deliberately stays on the clipboard so the
+/// user can paste it by hand.
 #[cfg(target_os = "macos")]
-fn deliver_transcript_at_cursor(app: &AppHandle) {
+fn deliver_transcript_at_cursor(
+    app: &AppHandle,
+    prior_clipboard: Option<String>,
+    transcript_clipboard_text: String,
+) {
     let our_window_focused = app
         .webview_windows()
         .values()
@@ -855,13 +876,70 @@ fn deliver_transcript_at_cursor(app: &AppHandle) {
     }
 
     match macos_input::paste_clipboard_at_cursor() {
-        Ok(()) => emit_backend_event(app, "info", "Transcript inserted at cursor"),
+        Ok(()) => {
+            emit_backend_event(app, "info", "Transcript inserted at cursor");
+            schedule_clipboard_restore(app.clone(), prior_clipboard, transcript_clipboard_text);
+        }
         Err(err) => emit_backend_event(
             app,
             "warning",
             format!("Insert at cursor failed ({err}); transcript is on the clipboard"),
         ),
     }
+}
+
+/// How long to wait after the synthesized ⌘V before putting the user's
+/// previous clipboard back. The focused app reads the pasteboard while
+/// handling the key event; restoring before that read makes it paste the old
+/// contents instead of the transcript, so this errs on the generous side.
+#[cfg(target_os = "macos")]
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(500);
+
+/// Restores the clipboard captured before the transcript overwrote it, off
+/// the command thread so dictation completion is not delayed. The restore is
+/// skipped when the clipboard no longer holds our transcript — the user (or
+/// another app) copied something newer and must keep it.
+#[cfg(target_os = "macos")]
+fn schedule_clipboard_restore(
+    app: AppHandle,
+    prior_clipboard: Option<String>,
+    transcript_clipboard_text: String,
+) {
+    let Some(prior) = prior_clipboard else {
+        return;
+    };
+    thread::spawn(move || {
+        thread::sleep(CLIPBOARD_RESTORE_DELAY);
+        let clipboard = ClipboardService;
+        let current = clipboard.read_text();
+        let Some(payload) =
+            clipboard_restore_payload(prior, current.as_deref(), &transcript_clipboard_text)
+        else {
+            return;
+        };
+        if let Err(err) = clipboard.write_text(&payload) {
+            emit_backend_event(
+                &app,
+                "warning",
+                format!("Could not restore the previous clipboard contents: {err}"),
+            );
+        }
+    });
+}
+
+/// Decides what to write back to the clipboard after a successful paste.
+/// Returns `None` when the clipboard must be left alone: it no longer holds
+/// the transcript we wrote (including `None` for non-text content), meaning
+/// something newer arrived in the meantime.
+fn clipboard_restore_payload(
+    prior: String,
+    current: Option<&str>,
+    transcript_clipboard_text: &str,
+) -> Option<String> {
+    if current != Some(transcript_clipboard_text) {
+        return None;
+    }
+    Some(prior)
 }
 
 fn transcript_clipboard_text(transcript: &str) -> String {
@@ -875,7 +953,7 @@ fn transcript_clipboard_text(transcript: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::transcript_clipboard_text;
+    use super::{clipboard_restore_payload, transcript_clipboard_text};
 
     #[test]
     fn transcript_clipboard_text_adds_single_trailing_space() {
@@ -892,6 +970,40 @@ mod tests {
     #[test]
     fn transcript_clipboard_text_preserves_empty_transcript() {
         assert_eq!(transcript_clipboard_text("   "), "");
+    }
+
+    #[test]
+    fn clipboard_restore_payload_restores_when_transcript_still_on_clipboard() {
+        assert_eq!(
+            clipboard_restore_payload(
+                "copied url".to_string(),
+                Some("Dictated text. "),
+                "Dictated text. "
+            ),
+            Some("copied url".to_string())
+        );
+    }
+
+    #[test]
+    fn clipboard_restore_payload_keeps_newer_user_copy() {
+        assert_eq!(
+            clipboard_restore_payload(
+                "copied url".to_string(),
+                Some("something the user copied after"),
+                "Dictated text. "
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn clipboard_restore_payload_keeps_non_text_clipboard() {
+        // `None` means the clipboard now holds content we cannot read as
+        // text (an image, files) — never overwrite it with the old text.
+        assert_eq!(
+            clipboard_restore_payload("copied url".to_string(), None, "Dictated text. "),
+            None
+        );
     }
 }
 

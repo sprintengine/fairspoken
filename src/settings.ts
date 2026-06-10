@@ -121,6 +121,7 @@ const useGpu = required<HTMLInputElement>("useGpu");
 const useGpuRow = required<HTMLElement>("useGpuRow");
 const inputMeter = required<HTMLElement>("inputMeter");
 const modelDownload = required<HTMLElement>("modelDownload");
+const modelField = required<HTMLElement>("modelField");
 const modelDownloadStatus = required<HTMLElement>("modelDownloadStatus");
 const modelDownloadBar = required<HTMLElement>("modelDownloadBar");
 const modelSize = required<HTMLElement>("modelSize");
@@ -509,6 +510,9 @@ function updateUseGpuUi(): void {
 
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
   const remote = location === "remote-host";
+  // The model choice and its download state are local-transcription concerns;
+  // a remote host serves the model its operator configured.
+  modelField.hidden = remote;
   modelDownload.hidden = remote;
   remoteHostPanel.hidden = !remote;
   if (remote) {

@@ -1,8 +1,7 @@
 use crate::audio::{AudioFrame, Recording};
 use crate::models::{ModelService, WhisperModel};
 use crate::remote_transcription::{
-    decode_wav, read_stream_frame, selected_model_id, RemoteHealth, RemoteTranscriptionResponse,
-    BACKEND_ID,
+    decode_wav, read_stream_frame, RemoteHealth, RemoteTranscriptionResponse, BACKEND_ID,
 };
 use crate::settings::Settings;
 use crate::transcription::TranscriptionService;
@@ -10,10 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::env;
+use std::fs;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -35,21 +36,33 @@ const MIN_HOST_MAX_ACTIVE_STREAMS: u32 = 1;
 const MAX_HOST_MAX_ACTIVE_STREAMS: u32 = 32;
 const MIN_HOST_MAX_RECORDING_SECONDS: u16 = 10;
 const MAX_HOST_MAX_RECORDING_SECONDS: u16 = 600;
+const DEFAULT_HOST_MODEL: WhisperModel = WhisperModel::Base;
+// How long an idle worker blocks on the job queue before re-checking its
+// assigned model, so runtime model changes and freshly downloaded model files
+// are picked up without a job arriving.
+const WORKER_IDLE_POLL: Duration = Duration::from_millis(250);
 
 pub fn run_transcription_host() -> Result<(), String> {
     let addr = env::var("MULTIVOICE_HOST_ADDR").unwrap_or_else(|_| "127.0.0.1:48173".to_string());
     let token = env::var("MULTIVOICE_HOST_TOKEN").ok();
+    let mut config = HostRuntimeConfig::from_env()?;
+    // Dashboard edits are the durable configuration; the environment only
+    // seeds the first boot (or a deleted config file).
+    let config_path = default_host_config_path();
+    if let Some(persisted) = load_persisted_config(&config_path)? {
+        overlay_persisted_config(&mut config, persisted);
+    }
     let server = Server::http(&addr)
         .map_err(|err| format!("Failed to start transcription host on {addr}: {err}"))?;
     println!("multivoice transcription host listening on http://{addr}");
 
     let models = ModelService::default();
-    let config = HostRuntimeConfig::from_env();
     let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
     let runtime = Arc::new(HostRuntime::start(
         models.clone(),
         config,
         Arc::clone(&metrics),
+        config_path,
     )?);
 
     for request in server.incoming_requests() {
@@ -102,7 +115,7 @@ fn handle_request(
             let health = RemoteHealth {
                 ok: true,
                 mode: "standalone-host".to_string(),
-                backend: "client-selected".to_string(),
+                backend: BACKEND_ID.to_string(),
                 server_version: Some(SERVER_VERSION.to_string()),
             };
             respond_json(
@@ -116,7 +129,7 @@ fn handle_request(
             let metrics = metrics
                 .lock()
                 .map_err(|_| "Host metrics lock failed".to_string())?;
-            let snapshot = metrics.snapshot(bind_addr, &runtime.live);
+            let snapshot = metrics.snapshot(bind_addr, &runtime.live, &runtime.models);
             respond_json(
                 request,
                 StatusCode(200),
@@ -125,6 +138,7 @@ fn handle_request(
             )
         }
         (&Method::Post, "/v1/config") => handle_config_update(request, runtime),
+        (&Method::Post, "/v1/models/download") => handle_model_download(request, runtime),
         (&Method::Post, "/v1/transcriptions") => {
             spawn_transcription_request(request, runtime, TranscriptionRequestKind::Batch)
         }
@@ -198,8 +212,8 @@ fn handle_batch_transcription(
         runtime.record_rejection(client.as_deref());
         return respond_error(request, StatusCode(413), &err);
     }
-    let text = match runtime.transcribe(recording, settings.clone(), "batch", client) {
-        Ok(text) => text,
+    let outcome = match runtime.transcribe(recording, settings, "batch", client) {
+        Ok(outcome) => outcome,
         Err(HostRuntimeError::QueueFull(message)) => {
             return respond_error(request, StatusCode(429), &message)
         }
@@ -207,7 +221,7 @@ fn handle_batch_transcription(
             return respond_error(request, StatusCode(500), &message)
         }
     };
-    let response = transcription_response(text, duration_seconds, &settings);
+    let response = transcription_response(outcome, duration_seconds);
     respond_json(
         request,
         StatusCode(200),
@@ -240,8 +254,8 @@ fn handle_stream_transcription(
     drop(stream_guard);
 
     let duration_seconds = recording.stats().duration_seconds;
-    let text = match runtime.transcribe(recording, settings.clone(), "stream", client) {
-        Ok(text) => text,
+    let outcome = match runtime.transcribe(recording, settings, "stream", client) {
+        Ok(outcome) => outcome,
         Err(HostRuntimeError::QueueFull(message)) => {
             return respond_error(request, StatusCode(429), &message)
         }
@@ -249,7 +263,7 @@ fn handle_stream_transcription(
             return respond_error(request, StatusCode(500), &message)
         }
     };
-    let response = transcription_response(text, duration_seconds, &settings);
+    let response = transcription_response(outcome, duration_seconds);
     respond_json(
         request,
         StatusCode(200),
@@ -259,19 +273,26 @@ fn handle_stream_transcription(
     )
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct HostRuntimeConfig {
     worker_count: usize,
     queue_capacity: usize,
     max_active_streams: u32,
     max_recording_seconds: u16,
     use_gpu: bool,
+    worker_models: Vec<WhisperModel>,
 }
 
 impl HostRuntimeConfig {
-    fn from_env() -> Self {
-        Self {
-            worker_count: env_usize("MULTIVOICE_HOST_WORKERS", DEFAULT_HOST_WORKERS).clamp(1, 4),
+    fn from_env() -> Result<Self, String> {
+        let worker_count =
+            env_usize("MULTIVOICE_HOST_WORKERS", DEFAULT_HOST_WORKERS).clamp(1, 4);
+        let worker_models = parse_worker_models(
+            env::var("MULTIVOICE_HOST_MODEL").ok().as_deref(),
+            worker_count,
+        )?;
+        Ok(Self {
+            worker_count,
             queue_capacity: env_usize(
                 "MULTIVOICE_HOST_QUEUE_CAPACITY",
                 DEFAULT_HOST_QUEUE_CAPACITY,
@@ -291,17 +312,161 @@ impl HostRuntimeConfig {
                 MAX_HOST_MAX_RECORDING_SECONDS,
             ),
             use_gpu: env_bool("MULTIVOICE_HOST_USE_GPU", true),
-        }
+            worker_models,
+        })
     }
+}
+
+/// Parses `MULTIVOICE_HOST_MODEL`: a single model id serves on every worker,
+/// while a comma-separated list assigns exactly one model per worker. The
+/// served model is operator configuration, so an invalid value fails startup
+/// instead of silently serving a default.
+fn parse_worker_models(
+    raw: Option<&str>,
+    worker_count: usize,
+) -> Result<Vec<WhisperModel>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(vec![DEFAULT_HOST_MODEL; worker_count]);
+    };
+    let models = raw
+        .split(',')
+        .map(|id| {
+            let id = id.trim();
+            WhisperModel::from_model_id(id).ok_or_else(|| {
+                format!("MULTIVOICE_HOST_MODEL has an unsupported Whisper model: {id}")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if models.len() == 1 {
+        return Ok(vec![models[0]; worker_count]);
+    }
+    if models.len() != worker_count {
+        return Err(format!(
+            "MULTIVOICE_HOST_MODEL lists {} models for {worker_count} workers; provide one model or exactly one per worker",
+            models.len()
+        ));
+    }
+    Ok(models)
+}
+
+/// The dashboard-edited configuration persisted on the host, mirroring how
+/// the desktop app persists its settings: the operator configures the served
+/// model in the UI and it survives restarts. Environment variables only seed
+/// the first boot.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedHostConfig {
+    max_active_streams: u32,
+    max_recording_seconds: u16,
+    use_gpu: bool,
+    worker_models: Vec<WhisperModel>,
+}
+
+fn default_host_config_path() -> PathBuf {
+    if let Some(path) = env::var_os("MULTIVOICE_HOST_CONFIG_PATH") {
+        return PathBuf::from(path);
+    }
+
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data)
+            .join("Multivoice Tauri")
+            .join("host-config.json");
+    }
+
+    if let Some(home) = env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".config")
+            .join("multivoice-tauri")
+            .join("host-config.json");
+    }
+
+    PathBuf::from("host-config.json")
+}
+
+/// A missing file is a normal first boot. An unreadable or invalid file fails
+/// startup so the host never silently serves a configuration the operator
+/// didn't choose.
+fn load_persisted_config(path: &Path) -> Result<Option<PersistedHostConfig>, String> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "Failed to read host config {}: {err}",
+                path.display()
+            ))
+        }
+    };
+    serde_json::from_str(&raw).map(Some).map_err(|err| {
+        format!(
+            "Invalid host config {} (fix or delete it): {err}",
+            path.display()
+        )
+    })
+}
+
+/// Applies the persisted dashboard configuration over the env-seeded startup
+/// values. Worker count stays env-owned: a persisted model list that no
+/// longer matches it falls back to its first model on every worker, with a
+/// logged warning instead of a silent partial assignment.
+fn overlay_persisted_config(config: &mut HostRuntimeConfig, persisted: PersistedHostConfig) {
+    config.max_active_streams = persisted
+        .max_active_streams
+        .clamp(MIN_HOST_MAX_ACTIVE_STREAMS, MAX_HOST_MAX_ACTIVE_STREAMS);
+    config.max_recording_seconds = persisted
+        .max_recording_seconds
+        .clamp(MIN_HOST_MAX_RECORDING_SECONDS, MAX_HOST_MAX_RECORDING_SECONDS);
+    config.use_gpu = persisted.use_gpu;
+    if persisted.worker_models.len() == config.worker_count {
+        config.worker_models = persisted.worker_models;
+    } else if let Some(first) = persisted.worker_models.first().copied() {
+        if persisted.worker_models.len() != 1 {
+            eprintln!(
+                "Host config lists {} models for {} workers; serving {} on every worker",
+                persisted.worker_models.len(),
+                config.worker_count,
+                first.model_id()
+            );
+        }
+        config.worker_models = vec![first; config.worker_count];
+    } else {
+        eprintln!(
+            "Host config lists no worker models; serving {} on every worker",
+            config
+                .worker_models
+                .first()
+                .copied()
+                .unwrap_or(DEFAULT_HOST_MODEL)
+                .model_id()
+        );
+    }
+}
+
+fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<(), String> {
+    let persisted = PersistedHostConfig {
+        max_active_streams: live.max_active_streams(),
+        max_recording_seconds: live.max_recording_seconds(),
+        use_gpu: live.use_gpu(),
+        worker_models: live.worker_models(),
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed to create host config directory: {err}"))?;
+    }
+    let payload = serde_json::to_string_pretty(&persisted)
+        .map_err(|err| format!("Failed to serialize host config: {err}"))?;
+    fs::write(path, payload).map_err(|err| format!("Failed to write host config: {err}"))
 }
 
 /// Knobs an operator may change at runtime through `POST /v1/config`.
 /// Worker count and queue capacity stay restart-only because they size the
-/// worker threads and the bounded job channel at startup.
+/// worker threads and the bounded job channel at startup; the served model is
+/// per-worker host configuration, never a per-request client choice.
 struct HostLiveConfig {
     max_active_streams: AtomicU32,
     max_recording_seconds: AtomicU32,
     use_gpu: AtomicBool,
+    worker_models: Mutex<Vec<WhisperModel>>,
 }
 
 impl HostLiveConfig {
@@ -310,6 +475,7 @@ impl HostLiveConfig {
             max_active_streams: AtomicU32::new(config.max_active_streams),
             max_recording_seconds: AtomicU32::new(u32::from(config.max_recording_seconds)),
             use_gpu: AtomicBool::new(config.use_gpu),
+            worker_models: Mutex::new(config.worker_models.clone()),
         }
     }
 
@@ -324,6 +490,42 @@ impl HostLiveConfig {
     fn use_gpu(&self) -> bool {
         self.use_gpu.load(Ordering::Relaxed)
     }
+
+    fn worker_models_lock(&self) -> MutexGuard<'_, Vec<WhisperModel>> {
+        // The critical sections only read or swap the Vec, so a poisoned lock
+        // still holds a usable value.
+        self.worker_models
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn worker_model(&self, worker_index: usize) -> WhisperModel {
+        self.worker_models_lock()
+            .get(worker_index)
+            .copied()
+            .unwrap_or(DEFAULT_HOST_MODEL)
+    }
+
+    fn worker_models(&self) -> Vec<WhisperModel> {
+        self.worker_models_lock().clone()
+    }
+
+    fn set_worker_models(&self, next: Vec<WhisperModel>) {
+        *self.worker_models_lock() = next;
+    }
+
+    /// One model id when every worker serves the same model, otherwise
+    /// "mixed" — used where a job cannot know which worker will run it.
+    fn model_summary(&self) -> String {
+        let models = self.worker_models_lock();
+        match models.split_first() {
+            Some((first, rest)) if rest.iter().all(|model| model == first) => {
+                first.model_id().to_string()
+            }
+            Some(_) => "mixed".to_string(),
+            None => DEFAULT_HOST_MODEL.model_id().to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -332,6 +534,10 @@ struct HostConfigUpdate {
     max_active_streams: Option<u32>,
     max_recording_seconds: Option<u16>,
     use_gpu: Option<bool>,
+    /// One model id applied to every worker.
+    model: Option<String>,
+    /// One model id per worker; length must match the worker count.
+    worker_models: Option<Vec<String>>,
 }
 
 const MAX_CONFIG_BODY_BYTES: u64 = 4 * 1024;
@@ -355,11 +561,28 @@ fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Resu
     if let Err(message) = apply_config_update(&update, &runtime.live) {
         return respond_error(request, StatusCode(400), &message);
     }
+    // The dashboard is the durable configuration surface: a successful edit
+    // must survive a restart, so a failed write is an explicit error rather
+    // than a silently session-only change.
+    if let Err(err) = persist_live_config(&runtime.config_path, &runtime.live) {
+        return respond_error(
+            request,
+            StatusCode(500),
+            &format!("Config applied for this session only — saving it failed: {err}"),
+        );
+    }
 
     let body = serde_json::json!({
         "maxActiveStreams": runtime.live.max_active_streams(),
         "maxRecordingSeconds": runtime.live.max_recording_seconds(),
         "useGpu": runtime.live.use_gpu(),
+        "model": runtime.live.model_summary(),
+        "workerModels": runtime
+            .live
+            .worker_models()
+            .iter()
+            .map(|model| model.model_id())
+            .collect::<Vec<_>>(),
     })
     .to_string();
     respond_json(request, StatusCode(200), body)
@@ -382,6 +605,33 @@ fn apply_config_update(update: &HostConfigUpdate, live: &HostLiveConfig) -> Resu
             ));
         }
     }
+    let worker_count = live.worker_models_lock().len();
+    let next_worker_models = match (&update.model, &update.worker_models) {
+        (Some(_), Some(_)) => {
+            return Err("Provide either model or workerModels, not both".to_string())
+        }
+        (Some(id), None) => {
+            let model = WhisperModel::from_model_id(id)
+                .ok_or_else(|| format!("Unsupported Whisper model: {id}"))?;
+            Some(vec![model; worker_count])
+        }
+        (None, Some(ids)) => {
+            if ids.len() != worker_count {
+                return Err(format!(
+                    "workerModels must list exactly {worker_count} models (one per worker)"
+                ));
+            }
+            Some(
+                ids.iter()
+                    .map(|id| {
+                        WhisperModel::from_model_id(id)
+                            .ok_or_else(|| format!("Unsupported Whisper model: {id}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        }
+        (None, None) => None,
+    };
 
     if let Some(value) = update.max_active_streams {
         live.max_active_streams.store(value, Ordering::Relaxed);
@@ -393,7 +643,120 @@ fn apply_config_update(update: &HostConfigUpdate, live: &HostLiveConfig) -> Resu
     if let Some(value) = update.use_gpu {
         live.use_gpu.store(value, Ordering::Relaxed);
     }
+    if let Some(models) = next_worker_models {
+        live.set_worker_models(models);
+    }
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelDownloadRequest {
+    model: String,
+}
+
+/// Downloads a model file onto the host so a missing configured model is
+/// recoverable from the dashboard instead of requiring the desktop app or a
+/// manual file copy on the host machine. One download runs at a time and its
+/// progress is published through `/v1/stats`.
+fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Result<(), String> {
+    let body = match read_limited_body(&mut request.as_reader(), MAX_CONFIG_BODY_BYTES) {
+        Ok(body) => body,
+        Err(err) => return respond_error(request, StatusCode(413), &err),
+    };
+    let download: ModelDownloadRequest = match serde_json::from_slice(&body) {
+        Ok(download) => download,
+        Err(err) => {
+            return respond_error(
+                request,
+                StatusCode(400),
+                &format!("Invalid model download request: {err}"),
+            )
+        }
+    };
+    let Some(model) = WhisperModel::from_model_id(&download.model) else {
+        return respond_error(
+            request,
+            StatusCode(400),
+            &format!("Unsupported Whisper model: {}", download.model),
+        );
+    };
+
+    {
+        let mut metrics = runtime
+            .metrics
+            .lock()
+            .map_err(|_| "Host metrics lock failed".to_string())?;
+        if metrics
+            .model_download
+            .as_ref()
+            .is_some_and(ModelDownloadState::in_progress)
+        {
+            return respond_error(
+                request,
+                StatusCode(409),
+                "A model download is already in progress",
+            );
+        }
+        metrics.model_download = Some(ModelDownloadState {
+            model: model.model_id().to_string(),
+            stage: "starting".to_string(),
+            percentage: 0,
+            error: None,
+        });
+    }
+
+    let models = runtime.models.clone();
+    let metrics = Arc::clone(&runtime.metrics);
+    let spawned = thread::Builder::new()
+        .name("transcription-host-model-download".to_string())
+        .spawn(move || {
+            let progress_metrics = Arc::clone(&metrics);
+            let result = models.prepare_with_progress(model, move |progress| {
+                if let Ok(mut metrics) = progress_metrics.lock() {
+                    metrics.model_download = Some(ModelDownloadState {
+                        model: model.model_id().to_string(),
+                        stage: progress.stage.to_string(),
+                        percentage: progress.percentage,
+                        error: None,
+                    });
+                }
+            });
+            if let Err(err) = result {
+                if let Ok(mut metrics) = metrics.lock() {
+                    metrics.model_download = Some(ModelDownloadState {
+                        model: model.model_id().to_string(),
+                        stage: "error".to_string(),
+                        percentage: 0,
+                        error: Some(err),
+                    });
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        // Clear the in-progress marker so the failure doesn't wedge every
+        // future download behind a permanent 409.
+        if let Ok(mut metrics) = runtime.metrics.lock() {
+            metrics.model_download = Some(ModelDownloadState {
+                model: model.model_id().to_string(),
+                stage: "error".to_string(),
+                percentage: 0,
+                error: Some(format!("Failed to start model download worker: {err}")),
+            });
+        }
+        return respond_error(
+            request,
+            StatusCode(500),
+            "Failed to start the model download",
+        );
+    }
+
+    let body = serde_json::json!({
+        "model": model.model_id(),
+        "status": "downloading",
+    })
+    .to_string();
+    respond_json(request, StatusCode(202), body)
 }
 
 fn client_ip(request: &Request) -> Option<String> {
@@ -439,7 +802,9 @@ fn parse_bool(value: &str) -> Option<bool> {
 struct HostRuntime {
     job_tx: SyncSender<TranscriptionJob>,
     metrics: Arc<Mutex<HostMetrics>>,
-    live: HostLiveConfig,
+    live: Arc<HostLiveConfig>,
+    models: ModelService,
+    config_path: PathBuf,
     next_job_id: AtomicU64,
 }
 
@@ -449,8 +814,17 @@ struct TranscriptionJob {
     recording: Recording,
     source: &'static str,
     client: Option<String>,
-    result_tx: mpsc::Sender<Result<String, String>>,
+    result_tx: mpsc::Sender<Result<TranscriptionOutcome, String>>,
     accepted_at: Instant,
+}
+
+/// What a worker hands back for a completed job. The model is the worker's
+/// assigned model — the host's choice, not the client's — and is reported in
+/// the response so clients always learn what actually ran.
+#[derive(Debug)]
+struct TranscriptionOutcome {
+    text: String,
+    model: String,
 }
 
 #[derive(Debug)]
@@ -477,18 +851,27 @@ impl HostRuntime {
         models: ModelService,
         config: HostRuntimeConfig,
         metrics: Arc<Mutex<HostMetrics>>,
+        config_path: PathBuf,
     ) -> Result<Self, String> {
         let (job_tx, job_rx) = mpsc::sync_channel::<TranscriptionJob>(config.queue_capacity);
         let job_rx = Arc::new(Mutex::new(job_rx));
+        let live = Arc::new(HostLiveConfig::new(&config));
 
         for worker_index in 0..config.worker_count {
             let worker_rx = Arc::clone(&job_rx);
             let worker_models = models.clone();
             let worker_metrics = Arc::clone(&metrics);
+            let worker_live = Arc::clone(&live);
             thread::Builder::new()
                 .name(format!("transcription-host-worker-{worker_index}"))
                 .spawn(move || {
-                    run_host_worker(worker_index, worker_rx, worker_models, worker_metrics);
+                    run_host_worker(
+                        worker_index,
+                        worker_rx,
+                        worker_models,
+                        worker_metrics,
+                        worker_live,
+                    );
                 })
                 .map_err(|err| format!("Failed to start transcription host worker: {err}"))?;
         }
@@ -496,7 +879,9 @@ impl HostRuntime {
         Ok(Self {
             job_tx,
             metrics,
-            live: HostLiveConfig::new(&config),
+            live,
+            models,
+            config_path,
             next_job_id: AtomicU64::new(1),
         })
     }
@@ -549,7 +934,7 @@ impl HostRuntime {
         mut settings: Settings,
         source: &'static str,
         client: Option<String>,
-    ) -> Result<String, HostRuntimeError> {
+    ) -> Result<TranscriptionOutcome, HostRuntimeError> {
         // GPU use is an operator decision for the whole host, not a
         // per-request client choice.
         settings.use_gpu = self.live.use_gpu();
@@ -563,7 +948,7 @@ impl HostRuntime {
         }
 
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
-        let (result_tx, result_rx) = mpsc::channel::<Result<String, String>>();
+        let (result_tx, result_rx) = mpsc::channel::<Result<TranscriptionOutcome, String>>();
         let job = TranscriptionJob {
             id: job_id,
             settings: settings.clone(),
@@ -577,7 +962,9 @@ impl HostRuntime {
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.enqueue_job(QueuedJobInfo {
                 id: job_id,
-                model: selected_model_id(&settings).to_string(),
+                // The serving worker isn't known yet; report the host's
+                // configured model (or "mixed" when workers differ).
+                model: self.live.model_summary(),
                 source,
                 client: client.clone(),
                 audio_seconds: duration_seconds,
@@ -622,13 +1009,75 @@ fn run_host_worker(
     job_rx: Arc<Mutex<Receiver<TranscriptionJob>>>,
     models: ModelService,
     metrics: Arc<Mutex<HostMetrics>>,
+    live: Arc<HostLiveConfig>,
 ) {
     let mut transcription = TranscriptionService::default();
     // Mirrors the model/GPU pair held by this worker's Whisper context, so
-    // the dashboard can show a "loading model" phase when a job forces a
-    // context reload.
+    // the dashboard can show a "loading model" phase when a context (re)load
+    // is in flight.
     let mut loaded: Option<(WhisperModel, bool)> = None;
+    // Last (model, GPU, file mtime) whose load failed; retried only when the
+    // target or the file on disk changes, so a corrupt model file is not
+    // re-read on every idle poll.
+    let mut last_failed: Option<(WhisperModel, bool, Option<SystemTime>)> = None;
     loop {
+        // The served model is host configuration: load the assigned model
+        // while idle so the first dictation never pays the load wait, and so
+        // runtime model changes apply without a job arriving.
+        let assigned_model = live.worker_model(worker_index);
+        let target = (assigned_model, live.use_gpu());
+        if loaded != Some(target) {
+            let path = models.path_for(assigned_model);
+            if !path.is_file() {
+                if loaded.is_some() {
+                    // Free the previous context: serving the old model would
+                    // be a silent fallback, so the worker holds nothing.
+                    transcription.unload();
+                    loaded = None;
+                }
+                last_failed = None;
+                if let Ok(mut metrics) = metrics.lock() {
+                    metrics.worker_model_unavailable(
+                        worker_index,
+                        format!(
+                            "Model {} is not installed on this host",
+                            assigned_model.model_id()
+                        ),
+                    );
+                }
+            } else {
+                let mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+                if last_failed != Some((target.0, target.1, mtime)) {
+                    if let Ok(mut metrics) = metrics.lock() {
+                        metrics.worker_preloading(worker_index);
+                    }
+                    let settings = Settings {
+                        model: assigned_model,
+                        use_gpu: target.1,
+                        ..Settings::default()
+                    };
+                    match transcription.preload(&settings, &models) {
+                        Ok(()) => {
+                            loaded = Some(target);
+                            last_failed = None;
+                            if let Ok(mut metrics) = metrics.lock() {
+                                metrics.worker_preload_ready(
+                                    worker_index,
+                                    assigned_model.model_id().to_string(),
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            last_failed = Some((target.0, target.1, mtime));
+                            if let Ok(mut metrics) = metrics.lock() {
+                                metrics.worker_model_unavailable(worker_index, err);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let job = {
             let receiver = match job_rx.lock() {
                 Ok(receiver) => receiver,
@@ -637,20 +1086,27 @@ fn run_host_worker(
                     break;
                 }
             };
-            match receiver.recv() {
+            match receiver.recv_timeout(WORKER_IDLE_POLL) {
                 Ok(job) => job,
-                Err(_) => break,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         };
 
         let queue_wait = job.accepted_at.elapsed();
         let duration_seconds = job.recording.stats().duration_seconds;
         let backend = BACKEND_ID.to_string();
-        let model = selected_model_id(&job.settings).to_string();
+        // The worker's assigned model serves every job it takes; the client's
+        // requested model (if any header survived) is deliberately ignored.
+        let model = assigned_model.model_id().to_string();
+        let settings = Settings {
+            model: assigned_model,
+            use_gpu: target.1,
+            ..job.settings
+        };
         let source = job.source;
         let client = job.client.clone();
-        let job_target = (job.settings.model, job.settings.use_gpu);
-        let needs_load = loaded != Some(job_target);
+        let needs_load = loaded != Some(target);
         if let Ok(mut metrics) = metrics.lock() {
             metrics.start_job(
                 worker_index,
@@ -672,7 +1128,7 @@ fn run_host_worker(
         let result = transcribe_recording(
             &mut transcription,
             &models,
-            &job.settings,
+            &settings,
             job.recording,
             || {
                 model_ready.set(true);
@@ -683,7 +1139,7 @@ fn run_host_worker(
         );
         let processing_time = started.elapsed();
         if model_ready.get() {
-            loaded = Some(job_target);
+            loaded = Some(target);
         }
 
         match &result {
@@ -708,7 +1164,11 @@ fn run_host_worker(
             }
         }
 
-        if job.result_tx.send(result).is_err() {
+        let outcome = result.map(|text| TranscriptionOutcome {
+            text,
+            model: model.clone(),
+        });
+        if job.result_tx.send(outcome).is_err() {
             eprintln!(
                 "Transcription host worker {worker_index} completed job {} after requester disconnected",
                 job.id
@@ -718,15 +1178,14 @@ fn run_host_worker(
 }
 
 fn transcription_response(
-    text: String,
+    outcome: TranscriptionOutcome,
     duration_seconds: f32,
-    settings: &Settings,
 ) -> RemoteTranscriptionResponse {
     RemoteTranscriptionResponse {
-        text,
+        text: outcome.text,
         duration_seconds,
         backend: BACKEND_ID.to_string(),
-        model: selected_model_id(settings).to_string(),
+        model: outcome.model,
         server_version: Some(SERVER_VERSION.to_string()),
     }
 }
@@ -843,7 +1302,6 @@ fn transcribe_recording(
 
 fn settings_from_headers(request: &Request) -> Result<Settings, String> {
     let backend = header_value(request, "x-multivoice-backend").unwrap_or("whisper");
-    let model = header_value(request, "x-multivoice-model").unwrap_or("base");
     let language = header_value(request, "x-multivoice-language")
         .unwrap_or("en")
         .to_string();
@@ -855,7 +1313,7 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
         .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
         .unwrap_or_default();
 
-    let mut settings = Settings {
+    let settings = Settings {
         language,
         whisper_chunk_seconds: whisper_chunk_seconds.clamp(5, 60),
         vocabulary_hints,
@@ -864,8 +1322,9 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
     if backend != "whisper" {
         return Err(format!("Unsupported transcription backend: {backend}"));
     }
-    settings.model = WhisperModel::from_model_id(model)
-        .ok_or_else(|| format!("Unsupported Whisper model: {model}"))?;
+    // The served model is host configuration. Older clients still send an
+    // x-multivoice-model header; it is deliberately ignored — never an error —
+    // and the response's `model` field reports what actually ran.
     Ok(settings)
 }
 
@@ -968,6 +1427,9 @@ enum WorkerState {
     Idle,
     Loading,
     Transcribing,
+    /// The worker's assigned model cannot be served — missing or unloadable
+    /// model file. A visible operator state, not a per-job surprise.
+    ModelUnavailable,
 }
 
 impl WorkerState {
@@ -976,6 +1438,7 @@ impl WorkerState {
             Self::Idle => "idle",
             Self::Loading => "loading",
             Self::Transcribing => "transcribing",
+            Self::ModelUnavailable => "model-unavailable",
         }
     }
 }
@@ -1072,6 +1535,24 @@ struct HostMetrics {
     next_record_id: u64,
     recent: VecDeque<TranscriptionRecord>,
     clients: HashMap<String, ClientStats>,
+    model_download: Option<ModelDownloadState>,
+}
+
+/// Progress of an operator-initiated model download, published through
+/// `/v1/stats` so the dashboard can show a missing model being recovered.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelDownloadState {
+    model: String,
+    stage: String,
+    percentage: u8,
+    error: Option<String>,
+}
+
+impl ModelDownloadState {
+    fn in_progress(&self) -> bool {
+        self.stage != "ready" && self.stage != "error"
+    }
 }
 
 impl HostMetrics {
@@ -1096,6 +1577,7 @@ impl HostMetrics {
             next_record_id: 0,
             recent: VecDeque::with_capacity(RECENT_CAPACITY),
             clients: HashMap::new(),
+            model_download: None,
         }
     }
 
@@ -1157,6 +1639,30 @@ impl HostMetrics {
         if let Some(worker) = self.workers.get_mut(worker_index) {
             worker.loaded_model = Some(model);
             worker.state = WorkerState::Transcribing;
+        }
+    }
+
+    /// Marks a worker as loading its assigned model outside a job (the warm
+    /// preload at startup or after a runtime model change).
+    fn worker_preloading(&mut self, worker_index: usize) {
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.state = WorkerState::Loading;
+        }
+    }
+
+    fn worker_preload_ready(&mut self, worker_index: usize, model: String) {
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.state = WorkerState::Idle;
+            worker.loaded_model = Some(model);
+            worker.last_error = None;
+        }
+    }
+
+    fn worker_model_unavailable(&mut self, worker_index: usize, message: String) {
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.state = WorkerState::ModelUnavailable;
+            worker.loaded_model = None;
+            worker.last_error = Some(message);
         }
     }
 
@@ -1256,24 +1762,40 @@ impl HostMetrics {
         }
     }
 
-    fn snapshot(&self, bind_addr: &str, live: &HostLiveConfig) -> StatsSnapshot<'_> {
+    fn snapshot(
+        &self,
+        bind_addr: &str,
+        live: &HostLiveConfig,
+        models: &ModelService,
+    ) -> StatsSnapshot<'_> {
+        let assigned_models = live.worker_models();
         let workers = self
             .workers
             .iter()
             .enumerate()
-            .map(|(index, worker)| WorkerSnapshot {
-                index,
-                state: worker.state.as_str(),
-                loaded_model: worker.loaded_model.clone(),
-                completed_jobs: worker.completed_jobs,
-                last_error: worker.last_error.clone(),
-                job: worker.job.as_ref().map(|job| RunningJobSnapshot {
-                    model: job.model.clone(),
-                    source: job.source,
-                    client: job.client.clone(),
-                    audio_seconds: job.audio_seconds,
-                    elapsed_ms: job.started_at.elapsed().as_millis() as u64,
-                }),
+            .map(|(index, worker)| {
+                let assigned = assigned_models
+                    .get(index)
+                    .copied()
+                    .unwrap_or(DEFAULT_HOST_MODEL);
+                WorkerSnapshot {
+                    index,
+                    state: worker.state.as_str(),
+                    assigned_model: assigned.model_id(),
+                    // A cheap existence check: load/checksum failures surface
+                    // through the worker state and last error instead.
+                    model_available: models.path_for(assigned).is_file(),
+                    loaded_model: worker.loaded_model.clone(),
+                    completed_jobs: worker.completed_jobs,
+                    last_error: worker.last_error.clone(),
+                    job: worker.job.as_ref().map(|job| RunningJobSnapshot {
+                        model: job.model.clone(),
+                        source: job.source,
+                        client: job.client.clone(),
+                        audio_seconds: job.audio_seconds,
+                        elapsed_ms: job.started_at.elapsed().as_millis() as u64,
+                    }),
+                }
             })
             .collect();
 
@@ -1330,6 +1852,8 @@ impl HostMetrics {
             max_active_streams: live.max_active_streams(),
             max_recording_seconds: live.max_recording_seconds(),
             use_gpu: live.use_gpu(),
+            model: live.model_summary(),
+            model_download: self.model_download.clone(),
             rejected_jobs: self.rejected_jobs,
             failed_jobs: self.failed_jobs,
             total_transcriptions: self.total_transcriptions,
@@ -1372,6 +1896,8 @@ struct TranscriptionRecord {
 struct WorkerSnapshot {
     index: usize,
     state: &'static str,
+    assigned_model: &'static str,
+    model_available: bool,
     loaded_model: Option<String>,
     completed_jobs: u64,
     last_error: Option<String>,
@@ -1434,6 +1960,9 @@ struct StatsSnapshot<'a> {
     max_active_streams: u32,
     max_recording_seconds: u16,
     use_gpu: bool,
+    /// The served model: one id when uniform across workers, else "mixed".
+    model: String,
+    model_download: Option<ModelDownloadState>,
     rejected_jobs: u64,
     failed_jobs: u64,
     total_transcriptions: u64,
@@ -1450,11 +1979,13 @@ struct StatsSnapshot<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        max_batch_body_bytes, read_limited_body, read_stream_recording_from_reader, request_path,
-        HostLiveConfig, HostMetrics, HostRuntime, HostRuntimeConfig, HostRuntimeError,
-        QueuedJobInfo, RunningJobInfo, MAX_TRACKED_CLIENTS,
+        max_batch_body_bytes, parse_worker_models, read_limited_body,
+        read_stream_recording_from_reader, request_path, HostLiveConfig, HostMetrics, HostRuntime,
+        HostRuntimeConfig, HostRuntimeError, ModelDownloadState, QueuedJobInfo, RunningJobInfo,
+        TranscriptionOutcome, MAX_TRACKED_CLIENTS,
     };
     use crate::audio::Recording;
+    use crate::models::{ModelService, WhisperModel};
     use crate::settings::Settings;
     use std::io::Cursor;
     use std::sync::atomic::AtomicU64;
@@ -1477,6 +2008,7 @@ mod tests {
             max_active_streams: 1,
             max_recording_seconds: 10,
             use_gpu: true,
+            worker_models: vec![WhisperModel::Base],
         }
     }
 
@@ -1488,8 +2020,20 @@ mod tests {
         HostRuntime {
             job_tx,
             metrics,
-            live: HostLiveConfig::new(&config),
+            live: Arc::new(HostLiveConfig::new(&config)),
+            models: ModelService::default(),
+            config_path: std::env::temp_dir().join(format!(
+                "multivoice-tauri-host-config-test-{}.json",
+                std::process::id()
+            )),
             next_job_id: AtomicU64::new(1),
+        }
+    }
+
+    fn test_outcome(text: &str) -> TranscriptionOutcome {
+        TranscriptionOutcome {
+            text: text.to_string(),
+            model: "base".to_string(),
         }
     }
 
@@ -1610,26 +2154,58 @@ mod tests {
 
         first_job
             .result_tx
-            .send(Ok("first transcript".to_string()))
+            .send(Ok(test_outcome("first transcript")))
             .expect("send first result");
         second_job
             .result_tx
-            .send(Ok("second transcript".to_string()))
+            .send(Ok(test_outcome("second transcript")))
             .expect("send second result");
 
         let mut results = vec![
             first
                 .join()
                 .expect("first caller joined")
-                .expect("first ok"),
+                .expect("first ok")
+                .text,
             second
                 .join()
                 .expect("second caller joined")
-                .expect("second ok"),
+                .expect("second ok")
+                .text,
         ];
         results.sort();
 
         assert_eq!(results, vec!["first transcript", "second transcript"]);
+    }
+
+    #[test]
+    fn transcribe_reports_the_model_the_worker_actually_ran() {
+        let config = test_config();
+        let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
+        let (job_tx, job_rx) = mpsc::sync_channel(1);
+        let runtime = Arc::new(test_runtime(config, job_tx, Arc::clone(&metrics)));
+
+        let caller_runtime = Arc::clone(&runtime);
+        let caller = thread::spawn(move || {
+            caller_runtime.transcribe(test_recording(1), Settings::default(), "stream", None)
+        });
+
+        let job = job_rx.recv().expect("queued job");
+        // The worker answers with its own assigned model, regardless of what
+        // the request carried.
+        job.result_tx
+            .send(Ok(TranscriptionOutcome {
+                text: "transcript".to_string(),
+                model: "large-v3-turbo".to_string(),
+            }))
+            .expect("send result");
+
+        let outcome = caller
+            .join()
+            .expect("caller joined")
+            .expect("transcribe ok");
+        assert_eq!(outcome.text, "transcript");
+        assert_eq!(outcome.model, "large-v3-turbo");
     }
 
     #[test]
@@ -1657,7 +2233,7 @@ mod tests {
         );
 
         job.result_tx
-            .send(Ok("transcript".to_string()))
+            .send(Ok(test_outcome("transcript")))
             .expect("send result");
         caller
             .join()
@@ -1743,8 +2319,10 @@ mod tests {
             max_active_streams: 3,
             max_recording_seconds: 120,
             use_gpu: true,
+            worker_models: vec![WhisperModel::LargeV3Turbo, WhisperModel::Small],
         };
         let live = HostLiveConfig::new(&config);
+        let models = ModelService::default();
         let mut metrics = HostMetrics::new(&config);
 
         metrics.begin_stream(Some("192.168.1.31".to_string()));
@@ -1769,7 +2347,7 @@ mod tests {
             Duration::from_millis(90),
         );
 
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
 
         assert_eq!(snapshot.active_streams, 1);
         assert_eq!(snapshot.queued_jobs, 0);
@@ -1787,14 +2365,17 @@ mod tests {
         assert_eq!(snapshot.recent[0].processing_ms, 90);
         assert_eq!(snapshot.recent[0].client.as_deref(), Some("192.168.1.31"));
 
+        assert_eq!(snapshot.model, "mixed");
         assert_eq!(snapshot.workers.len(), 2);
         assert_eq!(snapshot.workers[0].state, "idle");
+        assert_eq!(snapshot.workers[0].assigned_model, "large-v3-turbo");
         assert_eq!(
             snapshot.workers[0].loaded_model.as_deref(),
             Some("large-v3-turbo")
         );
         assert_eq!(snapshot.workers[0].completed_jobs, 1);
         assert_eq!(snapshot.workers[1].state, "idle");
+        assert_eq!(snapshot.workers[1].assigned_model, "small");
         assert_eq!(snapshot.workers[1].loaded_model, None);
 
         assert_eq!(snapshot.streams.len(), 1);
@@ -1863,12 +2444,13 @@ mod tests {
     fn queue_snapshot_lists_waiting_jobs_in_arrival_order() {
         let config = test_config();
         let live = HostLiveConfig::new(&config);
+        let models = ModelService::default();
         let mut metrics = HostMetrics::new(&config);
 
         metrics.enqueue_job(test_queued_job(1, Some("192.168.1.10")));
         metrics.enqueue_job(test_queued_job(2, Some("192.168.1.11")));
 
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
         assert_eq!(snapshot.queued_jobs, 2);
         assert_eq!(snapshot.queue.len(), 2);
         assert_eq!(snapshot.queue[0].id, 1);
@@ -1876,7 +2458,7 @@ mod tests {
         assert_eq!(snapshot.queue[0].client.as_deref(), Some("192.168.1.10"));
 
         metrics.dequeue_job(1);
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
         assert_eq!(snapshot.queue.len(), 1);
         assert_eq!(snapshot.queue[0].id, 2);
     }
@@ -1916,6 +2498,8 @@ mod tests {
                 max_active_streams: Some(8),
                 max_recording_seconds: Some(300),
                 use_gpu: Some(false),
+                model: None,
+                worker_models: None,
             },
             &live,
         )
@@ -1930,6 +2514,8 @@ mod tests {
                 max_active_streams: Some(2),
                 max_recording_seconds: Some(5_000),
                 use_gpu: Some(true),
+                model: None,
+                worker_models: None,
             },
             &live,
         )
@@ -1944,11 +2530,264 @@ mod tests {
                 max_active_streams: Some(0),
                 max_recording_seconds: None,
                 use_gpu: None,
+                model: None,
+                worker_models: None,
             },
             &live,
         )
         .expect_err("zero streams rejects");
         assert!(err.contains("maxActiveStreams"));
+    }
+
+    fn model_update(
+        model: Option<&str>,
+        worker_models: Option<Vec<&str>>,
+    ) -> super::HostConfigUpdate {
+        super::HostConfigUpdate {
+            max_active_streams: None,
+            max_recording_seconds: None,
+            use_gpu: None,
+            model: model.map(str::to_string),
+            worker_models: worker_models
+                .map(|models| models.into_iter().map(str::to_string).collect()),
+        }
+    }
+
+    #[test]
+    fn config_update_sets_served_model_for_all_workers() {
+        let config = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            ..test_config()
+        };
+        let live = HostLiveConfig::new(&config);
+
+        super::apply_config_update(&model_update(Some("large-v3-turbo"), None), &live)
+            .expect("model update applies");
+        assert_eq!(
+            live.worker_models(),
+            vec![WhisperModel::LargeV3Turbo, WhisperModel::LargeV3Turbo]
+        );
+        assert_eq!(live.model_summary(), "large-v3-turbo");
+
+        let err = super::apply_config_update(&model_update(Some("gpt-4"), None), &live)
+            .expect_err("unknown model rejects");
+        assert!(err.contains("Unsupported Whisper model"));
+        assert_eq!(live.model_summary(), "large-v3-turbo");
+    }
+
+    #[test]
+    fn config_update_assigns_models_per_worker() {
+        let config = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            ..test_config()
+        };
+        let live = HostLiveConfig::new(&config);
+
+        super::apply_config_update(
+            &model_update(None, Some(vec!["large-v3-turbo", "small"])),
+            &live,
+        )
+        .expect("per-worker update applies");
+        assert_eq!(
+            live.worker_models(),
+            vec![WhisperModel::LargeV3Turbo, WhisperModel::Small]
+        );
+        assert_eq!(live.model_summary(), "mixed");
+
+        let err =
+            super::apply_config_update(&model_update(None, Some(vec!["small"])), &live)
+                .expect_err("wrong list length rejects");
+        assert!(err.contains("exactly 2"));
+
+        let err = super::apply_config_update(
+            &model_update(Some("small"), Some(vec!["small", "small"])),
+            &live,
+        )
+        .expect_err("ambiguous update rejects");
+        assert!(err.contains("not both"));
+        assert_eq!(live.model_summary(), "mixed");
+    }
+
+    #[test]
+    fn parse_worker_models_expands_defaults_and_rejects_bad_values() {
+        assert_eq!(
+            parse_worker_models(None, 2).expect("default models"),
+            vec![WhisperModel::Base, WhisperModel::Base]
+        );
+        assert_eq!(
+            parse_worker_models(Some("large-v3-turbo"), 2).expect("single model expands"),
+            vec![WhisperModel::LargeV3Turbo, WhisperModel::LargeV3Turbo]
+        );
+        assert_eq!(
+            parse_worker_models(Some(" large-v3-turbo , small "), 2).expect("per-worker list"),
+            vec![WhisperModel::LargeV3Turbo, WhisperModel::Small]
+        );
+
+        let err = parse_worker_models(Some("turbo-9000"), 1).expect_err("unknown model fails");
+        assert!(err.contains("unsupported Whisper model"));
+        let err =
+            parse_worker_models(Some("small,base,tiny"), 2).expect_err("wrong count fails");
+        assert!(err.contains("3 models for 2 workers"));
+    }
+
+    #[test]
+    fn persisted_config_round_trips_dashboard_edits() {
+        let path = std::env::temp_dir().join(format!(
+            "multivoice-tauri-host-config-roundtrip-{}.json",
+            std::process::id()
+        ));
+        let config = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            ..test_config()
+        };
+        let live = HostLiveConfig::new(&config);
+        super::apply_config_update(
+            &super::HostConfigUpdate {
+                max_active_streams: Some(8),
+                max_recording_seconds: Some(120),
+                use_gpu: Some(false),
+                model: None,
+                worker_models: Some(vec!["large-v3-turbo".to_string(), "small".to_string()]),
+            },
+            &live,
+        )
+        .expect("dashboard edit applies");
+
+        super::persist_live_config(&path, &live).expect("persist");
+        let persisted = super::load_persisted_config(&path)
+            .expect("load")
+            .expect("config present after an edit");
+
+        let mut restarted = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            ..test_config()
+        };
+        super::overlay_persisted_config(&mut restarted, persisted);
+        assert_eq!(restarted.max_active_streams, 8);
+        assert_eq!(restarted.max_recording_seconds, 120);
+        assert!(!restarted.use_gpu);
+        assert_eq!(
+            restarted.worker_models,
+            vec![WhisperModel::LargeV3Turbo, WhisperModel::Small]
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn overlay_clamps_ranges_and_adapts_stale_worker_model_lists() {
+        let mut config = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            ..test_config()
+        };
+        super::overlay_persisted_config(
+            &mut config,
+            super::PersistedHostConfig {
+                max_active_streams: 999,
+                max_recording_seconds: 1,
+                use_gpu: false,
+                // Written when the host ran three workers; now it runs two.
+                worker_models: vec![
+                    WhisperModel::Small,
+                    WhisperModel::Tiny,
+                    WhisperModel::Base,
+                ],
+            },
+        );
+        assert_eq!(config.max_active_streams, 32);
+        assert_eq!(config.max_recording_seconds, 10);
+        assert!(!config.use_gpu);
+        assert_eq!(
+            config.worker_models,
+            vec![WhisperModel::Small, WhisperModel::Small]
+        );
+    }
+
+    #[test]
+    fn missing_config_file_is_first_boot_and_corrupt_file_fails() {
+        let missing = std::env::temp_dir().join(format!(
+            "multivoice-tauri-host-config-missing-{}.json",
+            std::process::id()
+        ));
+        assert!(super::load_persisted_config(&missing)
+            .expect("missing file is fine")
+            .is_none());
+
+        let corrupt = std::env::temp_dir().join(format!(
+            "multivoice-tauri-host-config-corrupt-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&corrupt, b"{not json").expect("write corrupt fixture");
+        let err = super::load_persisted_config(&corrupt).expect_err("corrupt file fails");
+        assert!(err.contains("Invalid host config"));
+        let _ = std::fs::remove_file(corrupt);
+    }
+
+    #[test]
+    fn worker_model_lifecycle_reports_unavailable_and_warm_states() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+
+        metrics.worker_model_unavailable(0, "Model base is not installed on this host".into());
+        assert!(matches!(
+            metrics.workers[0].state,
+            super::WorkerState::ModelUnavailable
+        ));
+        assert_eq!(metrics.workers[0].loaded_model, None);
+        assert!(metrics.workers[0]
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("not installed"));
+
+        metrics.worker_preloading(0);
+        assert!(matches!(
+            metrics.workers[0].state,
+            super::WorkerState::Loading
+        ));
+
+        metrics.worker_preload_ready(0, "base".to_string());
+        assert!(matches!(metrics.workers[0].state, super::WorkerState::Idle));
+        assert_eq!(metrics.workers[0].loaded_model.as_deref(), Some("base"));
+        assert_eq!(metrics.workers[0].last_error, None);
+    }
+
+    #[test]
+    fn model_download_state_reports_progress_in_snapshot() {
+        let config = test_config();
+        let live = HostLiveConfig::new(&config);
+        let models = ModelService::default();
+        let mut metrics = HostMetrics::new(&config);
+
+        assert!(metrics
+            .snapshot("127.0.0.1:48173", &live, &models)
+            .model_download
+            .is_none());
+
+        metrics.model_download = Some(ModelDownloadState {
+            model: "base".to_string(),
+            stage: "downloading".to_string(),
+            percentage: 42,
+            error: None,
+        });
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
+        let download = snapshot.model_download.expect("download state");
+        assert_eq!(download.model, "base");
+        assert_eq!(download.percentage, 42);
+        assert!(download.in_progress());
+
+        let finished = ModelDownloadState {
+            model: "base".to_string(),
+            stage: "ready".to_string(),
+            percentage: 100,
+            error: None,
+        };
+        assert!(!finished.in_progress());
     }
 
     #[test]

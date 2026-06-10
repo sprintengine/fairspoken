@@ -144,7 +144,15 @@
     color: var(--text);
     font-family: var(--mono); font-size: var(--fs-meta);
   }
-  .field input:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+  .field select {
+    padding: 4px 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font-family: var(--mono); font-size: var(--fs-meta);
+  }
+  .field input:focus-visible, .field select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
   .field-gpu { flex-direction: row; align-items: center; gap: 7px; padding-bottom: 5px; }
   .field-gpu input { accent-color: var(--accent); }
   .config-actions { display: flex; gap: 8px; padding-bottom: 1px; }
@@ -181,40 +189,51 @@
   .chip .t { color: var(--text-secondary); }
 
   .workers {
-    display: grid; gap: 10px;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     width: 100%;
   }
+  /* Model tiles. The model's display name is the face and the border is the
+     state: gray at rest, lit in the accent while transcribing, warning while
+     loading, dashed accent when the model file is missing. Clicking a tile
+     expands per-worker detail. */
   .worker {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: 11px 13px;
+    cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px;
+    min-height: 116px;
+    padding: 20px 16px;
+    background: transparent;
+    border: 1.5px solid rgba(255,255,255,0.32);
+    border-radius: 14px;
+    text-align: center;
     transition: border-color 160ms ease;
   }
-  .worker[data-state="transcribing"] { border-color: var(--accent-border); }
-  .worker-head { display: flex; align-items: center; gap: 7px; }
-  .worker-dot {
-    width: 6px; height: 6px; border-radius: 50%; flex: none;
-    background: var(--dot-idle);
-    transition: background 160ms ease;
+  .worker:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
+  .worker[data-state="loading"]           { border-color: var(--warning); }
+  .worker[data-state="transcribing"]      { border-color: var(--accent); }
+  .worker[data-state="model-unavailable"] { border-style: dashed; border-color: var(--accent-border); }
+  .worker-model-name {
+    font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.01em;
+    color: var(--text-secondary);
+    transition: color 160ms ease;
   }
-  .worker[data-state="loading"]      .worker-dot { background: var(--warning); }
-  .worker[data-state="transcribing"] .worker-dot { background: var(--accent); }
-  .worker-name { font-size: var(--fs-meta); font-weight: 600; }
-  .worker-done { margin-left: auto; font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-muted); }
-  .worker-model {
-    font-family: var(--mono); font-size: var(--fs-meta); color: var(--text);
-    margin-top: 7px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .worker-model[data-empty="true"] { color: var(--text-muted); }
-  .worker-meta {
+  .worker[data-state="transcribing"] .worker-model-name { color: var(--accent); }
+  .worker-status {
     font-size: var(--fs-micro); color: var(--text-secondary);
-    margin-top: 3px; min-height: 15px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-height: 15px;
   }
-  .worker[data-state="transcribing"] .worker-meta { color: var(--text); }
+  .worker[data-state="model-unavailable"] .worker-status { color: var(--warning); }
+  .worker-detail {
+    width: 100%; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px;
+    cursor: auto; text-align: left;
+  }
+  .worker-detail[hidden] { display: none; }
+  .worker-detail .drow { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-micro); }
+  .worker-detail .dl { color: var(--text-muted); flex: none; }
+  .worker-detail .dv { font-family: var(--mono); color: var(--text-secondary); text-align: right; overflow-wrap: anywhere; }
 
   /* ── Lifetime stat strip — flat columns split by vertical hairlines. ── */
   .stats {
@@ -280,10 +299,13 @@
   }
   .notice[data-visible="true"] { display: block; }
   .notice code { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); }
+  .notice-model { margin: 0 0 24px; }
+  .notice-model[data-visible="true"] { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .notice-model .mono { color: var(--text); }
 
   @media (prefers-reduced-motion: reduce) {
     .row.fresh { animation: none; }
-    .worker, .worker-dot, .conn-dot { transition: none; }
+    .worker, .worker-model-name, .conn-dot { transition: none; }
   }
 </style>
 </head>
@@ -318,6 +340,8 @@
       <span>max recording <span class="val" id="cfgRecording">—</span></span>
       <span class="sep">·</span>
       <span>GPU <span class="val" id="cfgGpu">—</span></span>
+      <span class="sep">·</span>
+      <span>model <span class="val" id="cfgModel">—</span></span>
       <button class="btn btn-edit" id="editConfig" aria-expanded="false" aria-controls="configEdit" disabled>Edit</button>
     </section>
 
@@ -330,6 +354,9 @@
         <label for="inRecording">Max recording (seconds)</label>
         <input id="inRecording" type="number" min="10" max="600" step="10">
       </div>
+      <!-- One select per worker; the served model is host configuration,
+           assigned per worker when the host runs more than one. -->
+      <div id="modelInputs" style="display: contents;"></div>
       <div class="field field-gpu">
         <input id="inGpu" type="checkbox">
         <label for="inGpu">Use GPU</label>
@@ -340,6 +367,11 @@
       </div>
       <p class="config-error" id="configError" role="alert"></p>
     </section>
+
+    <!-- Recovery surface for a configured-but-missing model: names the model
+         and offers the download right here instead of requiring the desktop
+         app or a manual file copy on the host machine. -->
+    <div class="notice notice-model" id="modelNotice" role="status" aria-live="polite"></div>
 
     <section class="live" aria-label="Live pipeline">
       <div class="panel-head">
@@ -433,9 +465,9 @@
   const el = {};
   for (const id of [
     "conn", "connLabel", "bindAddr", "version", "uptime",
-    "configSummary", "cfgWorkers", "cfgQueue", "cfgStreams", "cfgRecording", "cfgGpu",
-    "editConfig", "configEdit", "inStreams", "inRecording", "inGpu",
-    "applyConfig", "cancelConfig", "configError",
+    "configSummary", "cfgWorkers", "cfgQueue", "cfgStreams", "cfgRecording", "cfgGpu", "cfgModel",
+    "editConfig", "configEdit", "inStreams", "inRecording", "inGpu", "modelInputs",
+    "applyConfig", "cancelConfig", "configError", "modelNotice",
     "streamCount", "streamLane", "streamEmpty",
     "queueCount", "queueLane", "queueEmpty",
     "busyCount", "workers",
@@ -448,6 +480,19 @@
     el[id] = document.getElementById(id);
   }
 
+  // Must match the WhisperModel ids the host accepts.
+  const MODEL_IDS = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"];
+  const MODEL_NAMES = {
+    "tiny": "Whisper Tiny",
+    "base": "Whisper Base",
+    "small": "Whisper Small",
+    "medium": "Whisper Medium",
+    "large-v2": "Whisper Large V2",
+    "large-v3": "Whisper Large V3",
+    "large-v3-turbo": "Whisper V3 Turbo",
+  };
+  const modelDisplayName = (id) => MODEL_NAMES[id] || id || "No model";
+
   let seenIds = new Set();
   let loadedOnce = false;
   let connState = "";
@@ -455,6 +500,9 @@
   let lastFetchAt = 0;
   let editing = false;
   let workerEls = [];
+  let modelSelects = [];
+  // Surfaces a failed download-start (401/409/network) until the next attempt.
+  let downloadError = "";
   // Text nodes whose value advances between polls (waits, elapsed, last seen).
   let tickers = [];
 
@@ -562,6 +610,35 @@
     el.cfgStreams.textContent = String(stats.maxActiveStreams ?? "—");
     el.cfgRecording.textContent = `${stats.maxRecordingSeconds ?? "—"}s`;
     el.cfgGpu.textContent = stats.useGpu ? "on" : "off";
+    el.cfgModel.textContent = stats.model || "—";
+  };
+
+  // The served model is host configuration, assigned per worker: one select
+  // when the host runs a single worker, one labelled select per worker
+  // otherwise so mixed-model serving stays a deliberate operator decision.
+  const buildModelInputs = () => {
+    const workers = (lastStats && lastStats.workers) || [];
+    modelSelects = [];
+    el.modelInputs.replaceChildren();
+    workers.forEach((worker, i) => {
+      const field = document.createElement("div");
+      field.className = "field";
+      const label = document.createElement("label");
+      label.setAttribute("for", `inModel${i}`);
+      label.textContent = workers.length > 1 ? `Worker ${i} model` : "Model";
+      const select = document.createElement("select");
+      select.id = `inModel${i}`;
+      for (const id of MODEL_IDS) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.textContent = id;
+        select.appendChild(option);
+      }
+      select.value = worker.assignedModel || "base";
+      field.append(label, select);
+      el.modelInputs.appendChild(field);
+      modelSelects.push(select);
+    });
   };
 
   const openConfigEdit = () => {
@@ -570,6 +647,7 @@
     el.inStreams.value = String(lastStats.maxActiveStreams ?? "");
     el.inRecording.value = String(lastStats.maxRecordingSeconds ?? "");
     el.inGpu.checked = Boolean(lastStats.useGpu);
+    buildModelInputs();
     el.configError.textContent = "";
     el.configEdit.setAttribute("data-open", "true");
     el.editConfig.setAttribute("aria-expanded", "true");
@@ -607,6 +685,7 @@
           maxActiveStreams,
           maxRecordingSeconds,
           useGpu: el.inGpu.checked,
+          workerModels: modelSelects.map((select) => select.value),
         }),
       });
       if (res.status === 401) {
@@ -624,6 +703,12 @@
         lastStats.maxActiveStreams = data.maxActiveStreams;
         lastStats.maxRecordingSeconds = data.maxRecordingSeconds;
         lastStats.useGpu = data.useGpu;
+        lastStats.model = data.model;
+        if (Array.isArray(data.workerModels) && Array.isArray(lastStats.workers)) {
+          lastStats.workers.forEach((worker, i) => {
+            worker.assignedModel = data.workerModels[i] || worker.assignedModel;
+          });
+        }
         renderConfig(lastStats);
       }
       closeConfigEdit();
@@ -699,34 +784,56 @@
     }
   };
 
+  // Tiles an operator clicked open stay open across polls.
+  let expandedWorkers = new Set();
+
   const buildWorkers = (count) => {
     workerEls = [];
     el.workers.replaceChildren();
+    expandedWorkers = new Set([...expandedWorkers].filter((i) => i < count));
     for (let i = 0; i < count; i += 1) {
       const root = document.createElement("div");
       root.className = "worker";
-      root.setAttribute("role", "group");
-      root.setAttribute("aria-label", `Worker ${i}`);
+      root.setAttribute("role", "button");
+      root.setAttribute("tabindex", "0");
+      root.setAttribute("aria-label", `Worker ${i} details`);
+      root.setAttribute("aria-expanded", "false");
       root.setAttribute("data-state", "idle");
 
-      const head = document.createElement("div");
-      head.className = "worker-head";
-      const dot = document.createElement("span");
-      dot.className = "worker-dot";
-      dot.setAttribute("aria-hidden", "true");
-      const name = piece(`Worker ${i}`, "worker-name");
-      const done = piece("0 done", "worker-done num");
-      head.append(dot, name, done);
+      const name = piece("", "worker-model-name");
+      const status = piece("", "worker-status");
+      const detail = document.createElement("div");
+      detail.className = "worker-detail";
+      detail.hidden = true;
 
-      const model = document.createElement("div");
-      model.className = "worker-model";
-      const meta = document.createElement("div");
-      meta.className = "worker-meta";
+      const toggle = () => {
+        if (expandedWorkers.has(i)) expandedWorkers.delete(i);
+        else expandedWorkers.add(i);
+        if (lastStats) renderWorkers(lastStats.workers || []);
+      };
+      root.addEventListener("click", (event) => {
+        // Let the operator select/copy detail text without collapsing it.
+        if (detail.contains(event.target)) return;
+        toggle();
+      });
+      root.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle();
+        }
+      });
 
-      root.append(head, model, meta);
+      root.append(name, status, detail);
       el.workers.appendChild(root);
-      workerEls.push({ root, done, model, meta });
+      workerEls.push({ root, name, status, detail });
     }
+  };
+
+  const detailRow = (label, value) => {
+    const row = document.createElement("div");
+    row.className = "drow";
+    row.append(piece(label, "dl"), piece(value, "dv"));
+    return row;
   };
 
   const renderWorkers = (workers) => {
@@ -737,27 +844,127 @@
       const state = worker.state || "idle";
       if (worker.job) busy += 1;
       w.root.setAttribute("data-state", state);
-      w.done.textContent = `${worker.completedJobs || 0} done`;
 
-      const loadingModel = state === "loading" && worker.job ? worker.job.model : null;
-      const shownModel = loadingModel || worker.loadedModel;
-      w.model.textContent = shownModel || "no model loaded";
-      w.model.setAttribute("data-empty", shownModel ? "false" : "true");
+      // The assigned model is host configuration, so the tile always names
+      // it — even while the file is still missing or loading.
+      const modelId = (state === "loading" && worker.job ? worker.job.model : null)
+        || worker.loadedModel || worker.assignedModel;
+      w.name.textContent = modelDisplayName(modelId);
 
-      w.meta.replaceChildren();
-      if (state === "idle") {
-        w.meta.textContent = worker.lastError ? `idle · last job failed: ${worker.lastError}` : "idle";
-      } else {
-        const verb = state === "loading" ? "loading model" : "transcribing";
-        w.meta.appendChild(document.createTextNode(`${verb} · `));
-        addTicker(w.meta.appendChild(document.createTextNode("")), "elapsed",
+      // Idle tiles keep a clean face; the lit border carries the state.
+      w.status.replaceChildren();
+      if (state === "model-unavailable") {
+        w.status.textContent = "not installed";
+      } else if (state === "loading") {
+        w.status.textContent = "loading model…";
+      } else if (state === "transcribing") {
+        w.status.appendChild(document.createTextNode("transcribing · "));
+        addTicker(w.status.appendChild(document.createTextNode("")), "elapsed",
           worker.job ? worker.job.elapsedMs || 0 : 0);
-        if (worker.job && worker.job.client) {
-          w.meta.appendChild(document.createTextNode(` · ${worker.job.client}`));
+      } else if (worker.lastError) {
+        w.status.textContent = "last job failed";
+      }
+
+      const expanded = expandedWorkers.has(i);
+      w.root.setAttribute("aria-expanded", expanded ? "true" : "false");
+      w.detail.hidden = !expanded;
+      w.detail.replaceChildren();
+      if (expanded) {
+        w.detail.appendChild(detailRow("Worker", `#${i}`));
+        w.detail.appendChild(detailRow("State", state.replace(/-/g, " ")));
+        w.detail.appendChild(detailRow("Assigned model", worker.assignedModel || "—"));
+        w.detail.appendChild(detailRow("Loaded model", worker.loadedModel || "none"));
+        w.detail.appendChild(detailRow("Model file", worker.modelAvailable ? "installed" : "missing"));
+        w.detail.appendChild(detailRow("Jobs completed", String(worker.completedJobs || 0)));
+        if (worker.job) {
+          w.detail.appendChild(detailRow("Current job",
+            `${worker.job.source || "—"} · ${worker.job.client || "unknown"} · ${formatDuration(worker.job.audioSeconds || 0)} audio`));
+        }
+        if (worker.lastError) {
+          w.detail.appendChild(detailRow("Last error", worker.lastError));
         }
       }
     });
     el.busyCount.textContent = `${busy}/${workers.length}`;
+  };
+
+  /* ── Missing-model recovery ── */
+
+  const startModelDownload = async (model) => {
+    downloadError = "";
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch("/v1/models/download", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model }),
+      });
+      if (res.status === 401) {
+        setConnection("unauthorized", "Unauthorized");
+        downloadError = "Unauthorized — download was not started.";
+      } else if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        downloadError = (data && data.error) || `Host rejected the download (${res.status}).`;
+      }
+    } catch {
+      downloadError = "Host unreachable — download was not started.";
+    }
+    fetchStats();
+  };
+
+  // A configured-but-missing model is an operator state with a recovery
+  // action, not a stream of failed jobs: name the models and offer the
+  // download in place.
+  const renderModelNotice = (stats) => {
+    const workers = stats.workers || [];
+    const download = stats.modelDownload || null;
+    const downloading = download && download.stage !== "ready" && download.stage !== "error";
+    const missing = [...new Set(
+      workers.filter((w) => w.modelAvailable === false && w.assignedModel)
+        .map((w) => w.assignedModel),
+    )];
+
+    el.modelNotice.replaceChildren();
+    if (!downloading && missing.length === 0) {
+      el.modelNotice.setAttribute("data-visible", "false");
+      return;
+    }
+    el.modelNotice.setAttribute("data-visible", "true");
+
+    if (downloading) {
+      const label = document.createElement("span");
+      const stage = download.stage === "validating" ? "Validating" : "Downloading";
+      label.append(`${stage} `, piece(download.model, "mono"), ` — ${download.percentage}%`);
+      el.modelNotice.appendChild(label);
+      return;
+    }
+
+    const label = document.createElement("span");
+    label.append(
+      missing.length === 1 ? "Model " : "Models ",
+      piece(missing.join(", "), "mono"),
+      missing.length === 1
+        ? " is configured but not installed on this host."
+        : " are configured but not installed on this host.",
+    );
+    el.modelNotice.appendChild(label);
+    for (const model of missing) {
+      const button = document.createElement("button");
+      button.className = "btn";
+      button.textContent = missing.length === 1 ? "Download" : `Download ${model}`;
+      button.addEventListener("click", () => {
+        button.disabled = true;
+        startModelDownload(model);
+      });
+      el.modelNotice.appendChild(button);
+    }
+    const failure = downloadError || (download && download.stage === "error" && download.error) || "";
+    if (failure) {
+      const message = piece(`Download failed: ${failure}`, "config-error");
+      message.style.width = "100%";
+      el.modelNotice.appendChild(message);
+    }
   };
 
   /* ── Clients ── */
@@ -861,6 +1068,7 @@
 
     el.editConfig.disabled = false;
     if (!editing) renderConfig(stats);
+    renderModelNotice(stats);
 
     renderStreams(stats.streams || []);
     renderQueue(stats.queue || [], stats.queueCapacity || 0);

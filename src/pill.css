@@ -229,7 +229,13 @@ body[data-pill="transcribing"] .progress { display: block; }
   cursor: pointer;
 }
 
-body[data-pill="hover"] .settings-btn { display: flex; }
+body[data-pill="hover"] .settings-btn,
+body[data-pill="error"] .settings-btn { display: flex; }
+
+/* In the error state the capsule is the retry action, so the gear must stay
+   reachable — otherwise the user is stuck with no path to settings. Reserve
+   its width so long error labels never run underneath it. */
+body[data-pill="error"] .pill { padding-right: 36px; }
 
 .settings-btn:hover { color: var(--text-primary); }
 

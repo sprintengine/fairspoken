@@ -257,6 +257,9 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
   display: grid; grid-template-columns: 200px 1fr; align-items: center;
   gap: 14px; padding: 12px 0; border-top: 1px solid var(--border);
 }
+/* Rows hidden from script must stay hidden despite the display rules above
+   (the `hidden` attribute alone loses to an explicit `display`). */
+.field[hidden], .toggle-row[hidden], .model-download[hidden] { display: none; }
 .section-head + .field, .section-head + .toggle-row, .section-head + .meter-row { border-top: none; }
 .field > span, .toggle-row > span { color: var(--text-secondary); }
 .toggle-row > span strong { font-weight: 500; color: var(--text-secondary); }
