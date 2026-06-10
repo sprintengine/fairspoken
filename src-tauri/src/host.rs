@@ -6,11 +6,12 @@ use crate::remote_transcription::{
 };
 use crate::settings::Settings;
 use crate::transcription::TranscriptionService;
-use serde::Serialize;
-use std::collections::VecDeque;
+use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::Read;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -23,10 +24,17 @@ const RECENT_CAPACITY: usize = 50;
 const DEFAULT_HOST_WORKERS: usize = 1;
 const DEFAULT_HOST_QUEUE_CAPACITY: usize = 8;
 const DEFAULT_HOST_MAX_ACTIVE_STREAMS: u32 = 4;
-const DEFAULT_HOST_MAX_RECORDING_SECONDS: u16 = 120;
+// Matches the longest client max-recording option so the client setting is
+// the effective limit; this also sizes the host's upload-buffer bounds.
+const DEFAULT_HOST_MAX_RECORDING_SECONDS: u16 = 600;
 const MAX_STREAM_SAMPLE_RATE: u32 = 192_000;
 const MAX_BATCH_WAV_BYTES_PER_SECOND: u64 = (MAX_STREAM_SAMPLE_RATE as u64) * 2;
 const MAX_BATCH_WAV_HEADER_BYTES: u64 = 64 * 1024;
+const MAX_TRACKED_CLIENTS: usize = 32;
+const MIN_HOST_MAX_ACTIVE_STREAMS: u32 = 1;
+const MAX_HOST_MAX_ACTIVE_STREAMS: u32 = 32;
+const MIN_HOST_MAX_RECORDING_SECONDS: u16 = 10;
+const MAX_HOST_MAX_RECORDING_SECONDS: u16 = 600;
 
 pub fn run_transcription_host() -> Result<(), String> {
     let addr = env::var("MULTIVOICE_HOST_ADDR").unwrap_or_else(|_| "127.0.0.1:48173".to_string());
@@ -73,6 +81,13 @@ fn handle_request(
     if matches!((request.method(), path), (&Method::Get, "/")) {
         return respond_html(request, DASHBOARD_HTML);
     }
+    // Browsers request a favicon alongside the dashboard; answer it before
+    // auth so it never surfaces as a 401 in the operator's console.
+    if matches!((request.method(), path), (&Method::Get, "/favicon.ico")) {
+        return request
+            .respond(Response::empty(StatusCode(204)))
+            .map_err(|err| format!("Failed to send favicon response: {err}"));
+    }
 
     if !authorized(&request, token) {
         return respond_json(
@@ -101,7 +116,7 @@ fn handle_request(
             let metrics = metrics
                 .lock()
                 .map_err(|_| "Host metrics lock failed".to_string())?;
-            let snapshot = metrics.snapshot(bind_addr);
+            let snapshot = metrics.snapshot(bind_addr, &runtime.live);
             respond_json(
                 request,
                 StatusCode(200),
@@ -109,6 +124,7 @@ fn handle_request(
                     .map_err(|err| format!("Failed to serialize stats response: {err}"))?,
             )
         }
+        (&Method::Post, "/v1/config") => handle_config_update(request, runtime),
         (&Method::Post, "/v1/transcriptions") => {
             spawn_transcription_request(request, runtime, TranscriptionRequestKind::Batch)
         }
@@ -157,13 +173,15 @@ fn handle_batch_transcription(
     mut request: Request,
     runtime: Arc<HostRuntime>,
 ) -> Result<(), String> {
+    let client = client_ip(&request);
+    runtime.record_client_request(client.as_deref());
     let body = match read_limited_body(
         &mut request.as_reader(),
         max_batch_body_bytes(runtime.max_recording_seconds()),
     ) {
         Ok(body) => body,
         Err(err) => {
-            runtime.record_rejection();
+            runtime.record_rejection(client.as_deref());
             return respond_error(request, StatusCode(413), &err);
         }
     };
@@ -177,10 +195,10 @@ fn handle_batch_transcription(
     };
     let duration_seconds = recording.stats().duration_seconds;
     if let Err(err) = runtime.validate_recording_duration(duration_seconds) {
-        runtime.record_rejection();
+        runtime.record_rejection(client.as_deref());
         return respond_error(request, StatusCode(413), &err);
     }
-    let text = match runtime.transcribe(recording, settings.clone(), "batch") {
+    let text = match runtime.transcribe(recording, settings.clone(), "batch", client) {
         Ok(text) => text,
         Err(HostRuntimeError::QueueFull(message)) => {
             return respond_error(request, StatusCode(429), &message)
@@ -202,25 +220,27 @@ fn handle_stream_transcription(
     mut request: Request,
     runtime: Arc<HostRuntime>,
 ) -> Result<(), String> {
+    let client = client_ip(&request);
+    runtime.record_client_request(client.as_deref());
     let settings = match settings_from_headers(&request) {
         Ok(settings) => settings,
         Err(err) => return respond_error(request, StatusCode(400), &err),
     };
-    let stream_guard = match runtime.try_begin_stream() {
+    let stream_guard = match runtime.try_begin_stream(client.clone()) {
         Ok(guard) => guard,
         Err(message) => return respond_error(request, StatusCode(429), &message),
     };
     let recording = match read_stream_recording(&mut request, runtime.max_recording_seconds()) {
         Ok(recording) => recording,
         Err(err) => {
-            runtime.record_rejection();
+            runtime.record_rejection(client.as_deref());
             return respond_error(request, stream_recording_error_status(&err), &err);
         }
     };
     drop(stream_guard);
 
     let duration_seconds = recording.stats().duration_seconds;
-    let text = match runtime.transcribe(recording, settings.clone(), "stream") {
+    let text = match runtime.transcribe(recording, settings.clone(), "stream", client) {
         Ok(text) => text,
         Err(HostRuntimeError::QueueFull(message)) => {
             return respond_error(request, StatusCode(429), &message)
@@ -261,15 +281,123 @@ impl HostRuntimeConfig {
                 "MULTIVOICE_HOST_MAX_ACTIVE_STREAMS",
                 DEFAULT_HOST_MAX_ACTIVE_STREAMS,
             )
-            .clamp(1, 32),
+            .clamp(MIN_HOST_MAX_ACTIVE_STREAMS, MAX_HOST_MAX_ACTIVE_STREAMS),
             max_recording_seconds: env_u16(
                 "MULTIVOICE_HOST_MAX_RECORDING_SECONDS",
                 DEFAULT_HOST_MAX_RECORDING_SECONDS,
             )
-            .clamp(10, 300),
+            .clamp(
+                MIN_HOST_MAX_RECORDING_SECONDS,
+                MAX_HOST_MAX_RECORDING_SECONDS,
+            ),
             use_gpu: env_bool("MULTIVOICE_HOST_USE_GPU", true),
         }
     }
+}
+
+/// Knobs an operator may change at runtime through `POST /v1/config`.
+/// Worker count and queue capacity stay restart-only because they size the
+/// worker threads and the bounded job channel at startup.
+struct HostLiveConfig {
+    max_active_streams: AtomicU32,
+    max_recording_seconds: AtomicU32,
+    use_gpu: AtomicBool,
+}
+
+impl HostLiveConfig {
+    fn new(config: &HostRuntimeConfig) -> Self {
+        Self {
+            max_active_streams: AtomicU32::new(config.max_active_streams),
+            max_recording_seconds: AtomicU32::new(u32::from(config.max_recording_seconds)),
+            use_gpu: AtomicBool::new(config.use_gpu),
+        }
+    }
+
+    fn max_active_streams(&self) -> u32 {
+        self.max_active_streams.load(Ordering::Relaxed)
+    }
+
+    fn max_recording_seconds(&self) -> u16 {
+        self.max_recording_seconds.load(Ordering::Relaxed) as u16
+    }
+
+    fn use_gpu(&self) -> bool {
+        self.use_gpu.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HostConfigUpdate {
+    max_active_streams: Option<u32>,
+    max_recording_seconds: Option<u16>,
+    use_gpu: Option<bool>,
+}
+
+const MAX_CONFIG_BODY_BYTES: u64 = 4 * 1024;
+
+fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Result<(), String> {
+    let body = match read_limited_body(&mut request.as_reader(), MAX_CONFIG_BODY_BYTES) {
+        Ok(body) => body,
+        Err(err) => return respond_error(request, StatusCode(413), &err),
+    };
+    let update: HostConfigUpdate = match serde_json::from_slice(&body) {
+        Ok(update) => update,
+        Err(err) => {
+            return respond_error(
+                request,
+                StatusCode(400),
+                &format!("Invalid config update: {err}"),
+            )
+        }
+    };
+
+    if let Err(message) = apply_config_update(&update, &runtime.live) {
+        return respond_error(request, StatusCode(400), &message);
+    }
+
+    let body = serde_json::json!({
+        "maxActiveStreams": runtime.live.max_active_streams(),
+        "maxRecordingSeconds": runtime.live.max_recording_seconds(),
+        "useGpu": runtime.live.use_gpu(),
+    })
+    .to_string();
+    respond_json(request, StatusCode(200), body)
+}
+
+/// Validates every supplied field before applying any of them, so a rejected
+/// update never partially changes the host configuration.
+fn apply_config_update(update: &HostConfigUpdate, live: &HostLiveConfig) -> Result<(), String> {
+    if let Some(value) = update.max_active_streams {
+        if !(MIN_HOST_MAX_ACTIVE_STREAMS..=MAX_HOST_MAX_ACTIVE_STREAMS).contains(&value) {
+            return Err(format!(
+                "maxActiveStreams must be between {MIN_HOST_MAX_ACTIVE_STREAMS} and {MAX_HOST_MAX_ACTIVE_STREAMS}"
+            ));
+        }
+    }
+    if let Some(value) = update.max_recording_seconds {
+        if !(MIN_HOST_MAX_RECORDING_SECONDS..=MAX_HOST_MAX_RECORDING_SECONDS).contains(&value) {
+            return Err(format!(
+                "maxRecordingSeconds must be between {MIN_HOST_MAX_RECORDING_SECONDS} and {MAX_HOST_MAX_RECORDING_SECONDS}"
+            ));
+        }
+    }
+
+    if let Some(value) = update.max_active_streams {
+        live.max_active_streams.store(value, Ordering::Relaxed);
+    }
+    if let Some(value) = update.max_recording_seconds {
+        live.max_recording_seconds
+            .store(u32::from(value), Ordering::Relaxed);
+    }
+    if let Some(value) = update.use_gpu {
+        live.use_gpu.store(value, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+fn client_ip(request: &Request) -> Option<String> {
+    request.remote_addr().map(|addr| addr.ip().to_string())
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
@@ -311,7 +439,7 @@ fn parse_bool(value: &str) -> Option<bool> {
 struct HostRuntime {
     job_tx: SyncSender<TranscriptionJob>,
     metrics: Arc<Mutex<HostMetrics>>,
-    config: HostRuntimeConfig,
+    live: HostLiveConfig,
     next_job_id: AtomicU64,
 }
 
@@ -320,6 +448,7 @@ struct TranscriptionJob {
     settings: Settings,
     recording: Recording,
     source: &'static str,
+    client: Option<String>,
     result_tx: mpsc::Sender<Result<String, String>>,
     accepted_at: Instant,
 }
@@ -332,12 +461,13 @@ enum HostRuntimeError {
 
 struct ActiveStreamGuard {
     metrics: Arc<Mutex<HostMetrics>>,
+    stream_id: u64,
 }
 
 impl Drop for ActiveStreamGuard {
     fn drop(&mut self) {
         if let Ok(mut metrics) = self.metrics.lock() {
-            metrics.finish_stream();
+            metrics.finish_stream(self.stream_id);
         }
     }
 }
@@ -366,43 +496,50 @@ impl HostRuntime {
         Ok(Self {
             job_tx,
             metrics,
-            config,
+            live: HostLiveConfig::new(&config),
             next_job_id: AtomicU64::new(1),
         })
     }
 
     fn max_recording_seconds(&self) -> u16 {
-        self.config.max_recording_seconds
+        self.live.max_recording_seconds()
     }
 
-    fn try_begin_stream(&self) -> Result<ActiveStreamGuard, String> {
+    fn try_begin_stream(&self, client: Option<String>) -> Result<ActiveStreamGuard, String> {
         let mut metrics = self
             .metrics
             .lock()
             .map_err(|_| "Host metrics lock failed".to_string())?;
-        if metrics.active_streams >= self.config.max_active_streams {
-            metrics.reject_job();
+        if metrics.active_stream_count() >= self.live.max_active_streams() {
+            metrics.reject_job(client.as_deref());
             return Err("Server is at active stream capacity".to_string());
         }
-        metrics.begin_stream();
+        let stream_id = metrics.begin_stream(client);
         Ok(ActiveStreamGuard {
             metrics: Arc::clone(&self.metrics),
+            stream_id,
         })
     }
 
     fn validate_recording_duration(&self, duration_seconds: f32) -> Result<(), String> {
-        if duration_seconds > f32::from(self.config.max_recording_seconds) {
+        let max_recording_seconds = self.live.max_recording_seconds();
+        if duration_seconds > f32::from(max_recording_seconds) {
             return Err(format!(
-                "Recording exceeds host maximum of {} seconds",
-                self.config.max_recording_seconds
+                "Recording exceeds host maximum of {max_recording_seconds} seconds"
             ));
         }
         Ok(())
     }
 
-    fn record_rejection(&self) {
+    fn record_rejection(&self, client: Option<&str>) {
         if let Ok(mut metrics) = self.metrics.lock() {
-            metrics.reject_job();
+            metrics.reject_job(client);
+        }
+    }
+
+    fn record_client_request(&self, client: Option<&str>) {
+        if let Ok(mut metrics) = self.metrics.lock() {
+            metrics.client_request(client);
         }
     }
 
@@ -411,39 +548,49 @@ impl HostRuntime {
         recording: Recording,
         mut settings: Settings,
         source: &'static str,
+        client: Option<String>,
     ) -> Result<String, HostRuntimeError> {
         // GPU use is an operator decision for the whole host, not a
         // per-request client choice.
-        settings.use_gpu = self.config.use_gpu;
+        settings.use_gpu = self.live.use_gpu();
         let duration_seconds = recording.stats().duration_seconds;
         if let Err(err) = self.validate_recording_duration(duration_seconds) {
             self.metrics
                 .lock()
-                .map(|mut metrics| metrics.reject_job())
+                .map(|mut metrics| metrics.reject_job(client.as_deref()))
                 .ok();
             return Err(HostRuntimeError::QueueFull(err));
         }
 
+        let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let (result_tx, result_rx) = mpsc::channel::<Result<String, String>>();
         let job = TranscriptionJob {
-            id: self.next_job_id.fetch_add(1, Ordering::Relaxed),
-            settings,
+            id: job_id,
+            settings: settings.clone(),
             recording,
             source,
+            client: client.clone(),
             result_tx,
             accepted_at: Instant::now(),
         };
 
         if let Ok(mut metrics) = self.metrics.lock() {
-            metrics.enqueue_job();
+            metrics.enqueue_job(QueuedJobInfo {
+                id: job_id,
+                model: selected_model_id(&settings).to_string(),
+                source,
+                client: client.clone(),
+                audio_seconds: duration_seconds,
+                enqueued_at: Instant::now(),
+            });
         }
 
         match self.job_tx.try_send(job) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 if let Ok(mut metrics) = self.metrics.lock() {
-                    metrics.dequeue_job();
-                    metrics.reject_job();
+                    metrics.dequeue_job(job_id);
+                    metrics.reject_job(client.as_deref());
                 }
                 return Err(HostRuntimeError::QueueFull(
                     "Transcription queue is full".to_string(),
@@ -451,7 +598,7 @@ impl HostRuntime {
             }
             Err(TrySendError::Disconnected(_)) => {
                 if let Ok(mut metrics) = self.metrics.lock() {
-                    metrics.dequeue_job();
+                    metrics.dequeue_job(job_id);
                 }
                 return Err(HostRuntimeError::WorkerFailed(
                     "Transcription worker queue is unavailable".to_string(),
@@ -477,6 +624,10 @@ fn run_host_worker(
     metrics: Arc<Mutex<HostMetrics>>,
 ) {
     let mut transcription = TranscriptionService::default();
+    // Mirrors the model/GPU pair held by this worker's Whisper context, so
+    // the dashboard can show a "loading model" phase when a job forces a
+    // context reload.
+    let mut loaded: Option<(WhisperModel, bool)> = None;
     loop {
         let job = {
             let receiver = match job_rx.lock() {
@@ -493,35 +644,66 @@ fn run_host_worker(
         };
 
         let queue_wait = job.accepted_at.elapsed();
-        if let Ok(mut metrics) = metrics.lock() {
-            metrics.start_job(queue_wait);
-        }
-
-        let started = Instant::now();
         let duration_seconds = job.recording.stats().duration_seconds;
         let backend = BACKEND_ID.to_string();
         let model = selected_model_id(&job.settings).to_string();
         let source = job.source;
-        let result =
-            transcribe_recording(&mut transcription, &models, &job.settings, job.recording);
+        let client = job.client.clone();
+        let job_target = (job.settings.model, job.settings.use_gpu);
+        let needs_load = loaded != Some(job_target);
+        if let Ok(mut metrics) = metrics.lock() {
+            metrics.start_job(
+                worker_index,
+                job.id,
+                queue_wait,
+                needs_load,
+                RunningJobInfo {
+                    model: model.clone(),
+                    source,
+                    client: client.clone(),
+                    audio_seconds: duration_seconds,
+                    started_at: Instant::now(),
+                },
+            );
+        }
+
+        let started = Instant::now();
+        let model_ready = std::cell::Cell::new(false);
+        let result = transcribe_recording(
+            &mut transcription,
+            &models,
+            &job.settings,
+            job.recording,
+            || {
+                model_ready.set(true);
+                if let Ok(mut metrics) = metrics.lock() {
+                    metrics.worker_model_ready(worker_index, model.clone());
+                }
+            },
+        );
         let processing_time = started.elapsed();
+        if model_ready.get() {
+            loaded = Some(job_target);
+        }
 
         match &result {
             Ok(_) => {
                 if let Ok(mut metrics) = metrics.lock() {
                     metrics.complete_job(
+                        worker_index,
                         duration_seconds,
                         backend,
-                        model,
+                        model.clone(),
                         source,
+                        client.as_deref(),
                         queue_wait,
                         processing_time,
                     );
                 }
             }
-            Err(_) => {
+            Err(err) => {
                 if let Ok(mut metrics) = metrics.lock() {
-                    metrics.fail_job();
+                    metrics.fail_job(worker_index, client.as_deref(), err);
                 }
             }
         }
@@ -635,8 +817,12 @@ fn transcribe_recording(
     models: &ModelService,
     settings: &Settings,
     recording: crate::audio::Recording,
+    on_model_ready: impl FnOnce(),
 ) -> Result<String, String> {
+    // start_session loads (or reuses) the Whisper context, so the model is
+    // resident once it returns.
     let stream_sink = transcription.start_session(settings, models)?;
+    on_model_ready();
     if let Some(sink) = stream_sink {
         for chunk in recording.pcm_i16.chunks(3200) {
             if sink
@@ -777,14 +963,105 @@ fn respond_html(request: Request, body: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to send response: {err}"))
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum WorkerState {
+    Idle,
+    Loading,
+    Transcribing,
+}
+
+impl WorkerState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Loading => "loading",
+            Self::Transcribing => "transcribing",
+        }
+    }
+}
+
+struct WorkerStatus {
+    state: WorkerState,
+    loaded_model: Option<String>,
+    job: Option<RunningJobInfo>,
+    completed_jobs: u64,
+    last_error: Option<String>,
+}
+
+impl WorkerStatus {
+    fn new() -> Self {
+        Self {
+            state: WorkerState::Idle,
+            loaded_model: None,
+            job: None,
+            completed_jobs: 0,
+            last_error: None,
+        }
+    }
+}
+
+struct RunningJobInfo {
+    model: String,
+    source: &'static str,
+    client: Option<String>,
+    audio_seconds: f32,
+    started_at: Instant,
+}
+
+struct QueuedJobInfo {
+    id: u64,
+    model: String,
+    source: &'static str,
+    client: Option<String>,
+    audio_seconds: f32,
+    enqueued_at: Instant,
+}
+
+struct ActiveStreamInfo {
+    id: u64,
+    client: Option<String>,
+    started_at: Instant,
+}
+
+struct ClientStats {
+    requests: u64,
+    completed: u64,
+    rejected: u64,
+    failed: u64,
+    total_audio_seconds: f64,
+    last_seen_ms: u64,
+    last_model: Option<String>,
+}
+
+impl ClientStats {
+    fn new(now_ms: u64) -> Self {
+        Self {
+            requests: 0,
+            completed: 0,
+            rejected: 0,
+            failed: 0,
+            total_audio_seconds: 0.0,
+            last_seen_ms: now_ms,
+            last_model: None,
+        }
+    }
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 struct HostMetrics {
     started: Instant,
     worker_count: usize,
     queue_capacity: usize,
-    max_active_streams: u32,
-    active_streams: u32,
-    queued_jobs: u32,
-    running_jobs: u32,
+    next_stream_id: u64,
+    active_streams: Vec<ActiveStreamInfo>,
+    queued: VecDeque<QueuedJobInfo>,
+    workers: Vec<WorkerStatus>,
     rejected_jobs: u64,
     failed_jobs: u64,
     started_jobs: u64,
@@ -794,6 +1071,7 @@ struct HostMetrics {
     total_processing_ms: u128,
     next_record_id: u64,
     recent: VecDeque<TranscriptionRecord>,
+    clients: HashMap<String, ClientStats>,
 }
 
 impl HostMetrics {
@@ -802,10 +1080,12 @@ impl HostMetrics {
             started: Instant::now(),
             worker_count: config.worker_count,
             queue_capacity: config.queue_capacity,
-            max_active_streams: config.max_active_streams,
-            active_streams: 0,
-            queued_jobs: 0,
-            running_jobs: 0,
+            next_stream_id: 0,
+            active_streams: Vec::new(),
+            queued: VecDeque::new(),
+            workers: (0..config.worker_count)
+                .map(|_| WorkerStatus::new())
+                .collect(),
             rejected_jobs: 0,
             failed_jobs: 0,
             started_jobs: 0,
@@ -815,53 +1095,132 @@ impl HostMetrics {
             total_processing_ms: 0,
             next_record_id: 0,
             recent: VecDeque::with_capacity(RECENT_CAPACITY),
+            clients: HashMap::new(),
         }
     }
 
-    fn begin_stream(&mut self) {
-        self.active_streams = self.active_streams.saturating_add(1);
+    fn active_stream_count(&self) -> u32 {
+        self.active_streams.len() as u32
     }
 
-    fn finish_stream(&mut self) {
-        self.active_streams = self.active_streams.saturating_sub(1);
+    fn running_job_count(&self) -> u32 {
+        self.workers.iter().filter(|w| w.job.is_some()).count() as u32
     }
 
-    fn enqueue_job(&mut self) {
-        self.queued_jobs = self.queued_jobs.saturating_add(1);
+    fn begin_stream(&mut self, client: Option<String>) -> u64 {
+        self.next_stream_id = self.next_stream_id.saturating_add(1);
+        let id = self.next_stream_id;
+        self.active_streams.push(ActiveStreamInfo {
+            id,
+            client,
+            started_at: Instant::now(),
+        });
+        id
     }
 
-    fn dequeue_job(&mut self) {
-        self.queued_jobs = self.queued_jobs.saturating_sub(1);
+    fn finish_stream(&mut self, stream_id: u64) {
+        self.active_streams.retain(|stream| stream.id != stream_id);
     }
 
-    fn start_job(&mut self, queue_wait: Duration) {
-        self.dequeue_job();
-        self.running_jobs = self.running_jobs.saturating_add(1);
+    fn enqueue_job(&mut self, job: QueuedJobInfo) {
+        self.queued.push_back(job);
+    }
+
+    fn dequeue_job(&mut self, job_id: u64) {
+        self.queued.retain(|job| job.id != job_id);
+    }
+
+    fn start_job(
+        &mut self,
+        worker_index: usize,
+        job_id: u64,
+        queue_wait: Duration,
+        needs_load: bool,
+        job: RunningJobInfo,
+    ) {
+        self.dequeue_job(job_id);
         self.started_jobs = self.started_jobs.saturating_add(1);
         self.total_queue_wait_ms = self
             .total_queue_wait_ms
             .saturating_add(queue_wait.as_millis());
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.state = if needs_load {
+                WorkerState::Loading
+            } else {
+                WorkerState::Transcribing
+            };
+            worker.job = Some(job);
+        }
     }
 
-    fn reject_job(&mut self) {
+    fn worker_model_ready(&mut self, worker_index: usize, model: String) {
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.loaded_model = Some(model);
+            worker.state = WorkerState::Transcribing;
+        }
+    }
+
+    fn reject_job(&mut self, client: Option<&str>) {
         self.rejected_jobs = self.rejected_jobs.saturating_add(1);
+        if let Some(stats) = self.touch_client(client) {
+            stats.rejected = stats.rejected.saturating_add(1);
+        }
     }
 
-    fn fail_job(&mut self) {
-        self.running_jobs = self.running_jobs.saturating_sub(1);
+    fn client_request(&mut self, client: Option<&str>) {
+        if let Some(stats) = self.touch_client(client) {
+            stats.requests = stats.requests.saturating_add(1);
+        }
+    }
+
+    /// Returns the (created-if-needed) stats entry for a client address and
+    /// refreshes its last-seen time. Tracking is bounded: when a new address
+    /// arrives at capacity, the least recently seen entry is evicted.
+    fn touch_client(&mut self, client: Option<&str>) -> Option<&mut ClientStats> {
+        let address = client?;
+        let now_ms = now_epoch_ms();
+        if !self.clients.contains_key(address) && self.clients.len() >= MAX_TRACKED_CLIENTS {
+            if let Some(oldest) = self
+                .clients
+                .iter()
+                .min_by_key(|(_, stats)| stats.last_seen_ms)
+                .map(|(address, _)| address.clone())
+            {
+                self.clients.remove(&oldest);
+            }
+        }
+        let stats = self
+            .clients
+            .entry(address.to_string())
+            .or_insert_with(|| ClientStats::new(now_ms));
+        stats.last_seen_ms = now_ms;
+        Some(stats)
+    }
+
+    fn fail_job(&mut self, worker_index: usize, client: Option<&str>, error: &str) {
         self.failed_jobs = self.failed_jobs.saturating_add(1);
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.state = WorkerState::Idle;
+            worker.job = None;
+            worker.last_error = Some(error.to_string());
+        }
+        if let Some(stats) = self.touch_client(client) {
+            stats.failed = stats.failed.saturating_add(1);
+        }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn complete_job(
         &mut self,
+        worker_index: usize,
         duration_seconds: f32,
         backend: String,
         model: String,
         source: &'static str,
+        client: Option<&str>,
         queue_wait: Duration,
         processing_time: Duration,
     ) {
-        self.running_jobs = self.running_jobs.saturating_sub(1);
         self.total_transcriptions = self.total_transcriptions.saturating_add(1);
         self.total_audio_seconds += duration_seconds as f64;
         self.total_processing_ms = self
@@ -869,18 +1228,26 @@ impl HostMetrics {
             .saturating_add(processing_time.as_millis());
         self.next_record_id = self.next_record_id.saturating_add(1);
 
-        let completed_at_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        if let Some(worker) = self.workers.get_mut(worker_index) {
+            worker.state = WorkerState::Idle;
+            worker.job = None;
+            worker.completed_jobs = worker.completed_jobs.saturating_add(1);
+            worker.last_error = None;
+        }
+        if let Some(stats) = self.touch_client(client) {
+            stats.completed = stats.completed.saturating_add(1);
+            stats.total_audio_seconds += duration_seconds as f64;
+            stats.last_model = Some(model.clone());
+        }
 
         self.recent.push_front(TranscriptionRecord {
             id: self.next_record_id,
-            completed_at_ms,
+            completed_at_ms: now_epoch_ms(),
             duration_seconds,
             backend,
             model,
             source,
+            client: client.map(str::to_string),
             queue_wait_ms: queue_wait.as_millis() as u64,
             processing_ms: processing_time.as_millis() as u64,
         });
@@ -889,24 +1256,90 @@ impl HostMetrics {
         }
     }
 
-    fn snapshot(&self, bind_addr: &str) -> StatsSnapshot<'_> {
+    fn snapshot(&self, bind_addr: &str, live: &HostLiveConfig) -> StatsSnapshot<'_> {
+        let workers = self
+            .workers
+            .iter()
+            .enumerate()
+            .map(|(index, worker)| WorkerSnapshot {
+                index,
+                state: worker.state.as_str(),
+                loaded_model: worker.loaded_model.clone(),
+                completed_jobs: worker.completed_jobs,
+                last_error: worker.last_error.clone(),
+                job: worker.job.as_ref().map(|job| RunningJobSnapshot {
+                    model: job.model.clone(),
+                    source: job.source,
+                    client: job.client.clone(),
+                    audio_seconds: job.audio_seconds,
+                    elapsed_ms: job.started_at.elapsed().as_millis() as u64,
+                }),
+            })
+            .collect();
+
+        let queue = self
+            .queued
+            .iter()
+            .map(|job| QueuedJobSnapshot {
+                id: job.id,
+                model: job.model.clone(),
+                source: job.source,
+                client: job.client.clone(),
+                audio_seconds: job.audio_seconds,
+                waiting_ms: job.enqueued_at.elapsed().as_millis() as u64,
+            })
+            .collect();
+
+        let streams = self
+            .active_streams
+            .iter()
+            .map(|stream| StreamSnapshot {
+                client: stream.client.clone(),
+                elapsed_ms: stream.started_at.elapsed().as_millis() as u64,
+            })
+            .collect();
+
+        let mut clients: Vec<ClientSnapshot> = self
+            .clients
+            .iter()
+            .map(|(address, stats)| ClientSnapshot {
+                address: address.clone(),
+                requests: stats.requests,
+                completed: stats.completed,
+                rejected: stats.rejected,
+                failed: stats.failed,
+                total_audio_seconds: stats.total_audio_seconds,
+                last_seen_ms: stats.last_seen_ms,
+                last_model: stats.last_model.clone(),
+            })
+            .collect();
+        clients.sort_by_key(|client| Reverse(client.last_seen_ms));
+
+        let active_streams = self.active_stream_count();
+        let running_jobs = self.running_job_count();
         StatsSnapshot {
             server_version: SERVER_VERSION,
             bind_addr: bind_addr.to_string(),
             uptime_seconds: self.started.elapsed().as_secs(),
-            active_sessions: self.active_streams.saturating_add(self.running_jobs),
-            active_streams: self.active_streams,
-            queued_jobs: self.queued_jobs,
-            running_jobs: self.running_jobs,
+            active_sessions: active_streams.saturating_add(running_jobs),
+            active_streams,
+            queued_jobs: self.queued.len() as u32,
+            running_jobs,
             worker_count: self.worker_count,
             queue_capacity: self.queue_capacity,
-            max_active_streams: self.max_active_streams,
+            max_active_streams: live.max_active_streams(),
+            max_recording_seconds: live.max_recording_seconds(),
+            use_gpu: live.use_gpu(),
             rejected_jobs: self.rejected_jobs,
             failed_jobs: self.failed_jobs,
             total_transcriptions: self.total_transcriptions,
             total_audio_seconds: self.total_audio_seconds,
             average_queue_ms: average_ms(self.total_queue_wait_ms, self.started_jobs),
             average_processing_ms: average_ms(self.total_processing_ms, self.total_transcriptions),
+            workers,
+            queue,
+            streams,
+            clients,
             recent: self.recent.iter().collect(),
         }
     }
@@ -929,8 +1362,61 @@ struct TranscriptionRecord {
     backend: String,
     model: String,
     source: &'static str,
+    client: Option<String>,
     queue_wait_ms: u64,
     processing_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerSnapshot {
+    index: usize,
+    state: &'static str,
+    loaded_model: Option<String>,
+    completed_jobs: u64,
+    last_error: Option<String>,
+    job: Option<RunningJobSnapshot>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunningJobSnapshot {
+    model: String,
+    source: &'static str,
+    client: Option<String>,
+    audio_seconds: f32,
+    elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueuedJobSnapshot {
+    id: u64,
+    model: String,
+    source: &'static str,
+    client: Option<String>,
+    audio_seconds: f32,
+    waiting_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamSnapshot {
+    client: Option<String>,
+    elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientSnapshot {
+    address: String,
+    requests: u64,
+    completed: u64,
+    rejected: u64,
+    failed: u64,
+    total_audio_seconds: f64,
+    last_seen_ms: u64,
+    last_model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -946,12 +1432,18 @@ struct StatsSnapshot<'a> {
     worker_count: usize,
     queue_capacity: usize,
     max_active_streams: u32,
+    max_recording_seconds: u16,
+    use_gpu: bool,
     rejected_jobs: u64,
     failed_jobs: u64,
     total_transcriptions: u64,
     total_audio_seconds: f64,
     average_queue_ms: u64,
     average_processing_ms: u64,
+    workers: Vec<WorkerSnapshot>,
+    queue: Vec<QueuedJobSnapshot>,
+    streams: Vec<StreamSnapshot>,
+    clients: Vec<ClientSnapshot>,
     recent: Vec<&'a TranscriptionRecord>,
 }
 
@@ -959,7 +1451,8 @@ struct StatsSnapshot<'a> {
 mod tests {
     use super::{
         max_batch_body_bytes, read_limited_body, read_stream_recording_from_reader, request_path,
-        HostMetrics, HostRuntime, HostRuntimeConfig, HostRuntimeError,
+        HostLiveConfig, HostMetrics, HostRuntime, HostRuntimeConfig, HostRuntimeError,
+        QueuedJobInfo, RunningJobInfo, MAX_TRACKED_CLIENTS,
     };
     use crate::audio::Recording;
     use crate::settings::Settings;
@@ -968,7 +1461,7 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn request_path_ignores_query_string_for_route_matching() {
@@ -995,8 +1488,29 @@ mod tests {
         HostRuntime {
             job_tx,
             metrics,
-            config,
+            live: HostLiveConfig::new(&config),
             next_job_id: AtomicU64::new(1),
+        }
+    }
+
+    fn test_queued_job(id: u64, client: Option<&str>) -> QueuedJobInfo {
+        QueuedJobInfo {
+            id,
+            model: "large-v3-turbo".to_string(),
+            source: "stream",
+            client: client.map(str::to_string),
+            audio_seconds: 2.5,
+            enqueued_at: Instant::now(),
+        }
+    }
+
+    fn test_running_job(client: Option<&str>) -> RunningJobInfo {
+        RunningJobInfo {
+            model: "large-v3-turbo".to_string(),
+            source: "stream",
+            client: client.map(str::to_string),
+            audio_seconds: 2.5,
+            started_at: Instant::now(),
         }
     }
 
@@ -1023,20 +1537,22 @@ mod tests {
         let (job_tx, _job_rx) = mpsc::sync_channel(1);
         let runtime = test_runtime(config, job_tx, Arc::clone(&metrics));
 
-        let guard = runtime.try_begin_stream().expect("first stream admitted");
-        let err = match runtime.try_begin_stream() {
+        let guard = runtime
+            .try_begin_stream(None)
+            .expect("first stream admitted");
+        let err = match runtime.try_begin_stream(None) {
             Ok(_) => panic!("second stream should exceed capacity"),
             Err(err) => err,
         };
 
         assert_eq!(err, "Server is at active stream capacity");
-        assert_eq!(metrics.lock().expect("metrics").active_streams, 1);
+        assert_eq!(metrics.lock().expect("metrics").active_stream_count(), 1);
 
         drop(guard);
 
-        assert_eq!(metrics.lock().expect("metrics").active_streams, 0);
+        assert_eq!(metrics.lock().expect("metrics").active_stream_count(), 0);
         let _next_guard = runtime
-            .try_begin_stream()
+            .try_begin_stream(None)
             .expect("capacity should be released");
     }
 
@@ -1051,7 +1567,7 @@ mod tests {
         let runtime = test_runtime(config, job_tx, Arc::clone(&metrics));
 
         let err = runtime
-            .transcribe(test_recording(1), Settings::default(), "stream")
+            .transcribe(test_recording(1), Settings::default(), "stream", None)
             .expect_err("zero-capacity queue should reject");
 
         match err {
@@ -1064,9 +1580,9 @@ mod tests {
         }
 
         let metrics = metrics.lock().expect("metrics");
-        assert_eq!(metrics.queued_jobs, 0);
+        assert_eq!(metrics.queued.len(), 0);
         assert_eq!(metrics.rejected_jobs, 1);
-        assert_eq!(metrics.running_jobs, 0);
+        assert_eq!(metrics.running_job_count(), 0);
     }
 
     #[test]
@@ -1081,16 +1597,16 @@ mod tests {
 
         let first_runtime = Arc::clone(&runtime);
         let first = thread::spawn(move || {
-            first_runtime.transcribe(test_recording(1), Settings::default(), "stream")
+            first_runtime.transcribe(test_recording(1), Settings::default(), "stream", None)
         });
         let second_runtime = Arc::clone(&runtime);
         let second = thread::spawn(move || {
-            second_runtime.transcribe(test_recording(1), Settings::default(), "stream")
+            second_runtime.transcribe(test_recording(1), Settings::default(), "stream", None)
         });
 
         let first_job = job_rx.recv().expect("first queued job");
         let second_job = job_rx.recv().expect("second queued job");
-        assert_eq!(metrics.lock().expect("metrics").queued_jobs, 2);
+        assert_eq!(metrics.lock().expect("metrics").queued.len(), 2);
 
         first_job
             .result_tx
@@ -1131,7 +1647,7 @@ mod tests {
 
         let worker_runtime = Arc::clone(&runtime);
         let caller = thread::spawn(move || {
-            worker_runtime.transcribe(test_recording(1), client_settings, "batch")
+            worker_runtime.transcribe(test_recording(1), client_settings, "batch", None)
         });
 
         let job = job_rx.recv().expect("queued job");
@@ -1166,7 +1682,7 @@ mod tests {
         let runtime = test_runtime(config, job_tx, Arc::clone(&metrics));
 
         let err = runtime
-            .transcribe(test_recording(11), Settings::default(), "batch")
+            .transcribe(test_recording(11), Settings::default(), "batch", None)
             .expect_err("oversized recording should reject");
 
         match err {
@@ -1179,9 +1695,9 @@ mod tests {
         }
 
         let metrics = metrics.lock().expect("metrics");
-        assert_eq!(metrics.queued_jobs, 0);
+        assert_eq!(metrics.queued.len(), 0);
         assert_eq!(metrics.rejected_jobs, 1);
-        assert_eq!(metrics.running_jobs, 0);
+        assert_eq!(metrics.running_job_count(), 0);
     }
 
     #[test]
@@ -1228,21 +1744,32 @@ mod tests {
             max_recording_seconds: 120,
             use_gpu: true,
         };
+        let live = HostLiveConfig::new(&config);
         let mut metrics = HostMetrics::new(&config);
 
-        metrics.begin_stream();
-        metrics.enqueue_job();
-        metrics.start_job(Duration::from_millis(30));
+        metrics.begin_stream(Some("192.168.1.31".to_string()));
+        metrics.client_request(Some("192.168.1.31"));
+        metrics.enqueue_job(test_queued_job(1, Some("192.168.1.31")));
+        metrics.start_job(
+            0,
+            1,
+            Duration::from_millis(30),
+            true,
+            test_running_job(Some("192.168.1.31")),
+        );
+        metrics.worker_model_ready(0, "large-v3-turbo".to_string());
         metrics.complete_job(
+            0,
             2.5,
             "whisper".to_string(),
             "large-v3-turbo".to_string(),
             "stream",
+            Some("192.168.1.31"),
             Duration::from_millis(30),
             Duration::from_millis(90),
         );
 
-        let snapshot = metrics.snapshot("127.0.0.1:48173");
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live);
 
         assert_eq!(snapshot.active_streams, 1);
         assert_eq!(snapshot.queued_jobs, 0);
@@ -1250,12 +1777,37 @@ mod tests {
         assert_eq!(snapshot.worker_count, 2);
         assert_eq!(snapshot.queue_capacity, 4);
         assert_eq!(snapshot.max_active_streams, 3);
+        assert_eq!(snapshot.max_recording_seconds, 120);
+        assert!(snapshot.use_gpu);
         assert_eq!(snapshot.total_transcriptions, 1);
         assert_eq!(snapshot.average_queue_ms, 30);
         assert_eq!(snapshot.average_processing_ms, 90);
         assert_eq!(snapshot.recent.len(), 1);
         assert_eq!(snapshot.recent[0].queue_wait_ms, 30);
         assert_eq!(snapshot.recent[0].processing_ms, 90);
+        assert_eq!(snapshot.recent[0].client.as_deref(), Some("192.168.1.31"));
+
+        assert_eq!(snapshot.workers.len(), 2);
+        assert_eq!(snapshot.workers[0].state, "idle");
+        assert_eq!(
+            snapshot.workers[0].loaded_model.as_deref(),
+            Some("large-v3-turbo")
+        );
+        assert_eq!(snapshot.workers[0].completed_jobs, 1);
+        assert_eq!(snapshot.workers[1].state, "idle");
+        assert_eq!(snapshot.workers[1].loaded_model, None);
+
+        assert_eq!(snapshot.streams.len(), 1);
+        assert_eq!(snapshot.streams[0].client.as_deref(), Some("192.168.1.31"));
+
+        assert_eq!(snapshot.clients.len(), 1);
+        assert_eq!(snapshot.clients[0].address, "192.168.1.31");
+        assert_eq!(snapshot.clients[0].requests, 1);
+        assert_eq!(snapshot.clients[0].completed, 1);
+        assert_eq!(
+            snapshot.clients[0].last_model.as_deref(),
+            Some("large-v3-turbo")
+        );
     }
 
     #[test]
@@ -1263,13 +1815,154 @@ mod tests {
         let config = test_config();
         let mut metrics = HostMetrics::new(&config);
 
-        metrics.enqueue_job();
-        metrics.start_job(Duration::from_millis(5));
-        metrics.fail_job();
+        metrics.enqueue_job(test_queued_job(1, None));
+        metrics.start_job(
+            0,
+            1,
+            Duration::from_millis(5),
+            false,
+            test_running_job(None),
+        );
+        metrics.fail_job(0, None, "Whisper context failed");
 
-        assert_eq!(metrics.queued_jobs, 0);
-        assert_eq!(metrics.running_jobs, 0);
+        assert_eq!(metrics.queued.len(), 0);
+        assert_eq!(metrics.running_job_count(), 0);
         assert_eq!(metrics.failed_jobs, 1);
         assert_eq!(metrics.total_transcriptions, 0);
+        assert_eq!(
+            metrics.workers[0].last_error.as_deref(),
+            Some("Whisper context failed")
+        );
+    }
+
+    #[test]
+    fn worker_loading_state_transitions_to_transcribing_when_model_ready() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+
+        metrics.enqueue_job(test_queued_job(1, None));
+        metrics.start_job(0, 1, Duration::from_millis(5), true, test_running_job(None));
+        assert!(matches!(
+            metrics.workers[0].state,
+            super::WorkerState::Loading
+        ));
+        assert_eq!(metrics.workers[0].loaded_model, None);
+
+        metrics.worker_model_ready(0, "large-v3-turbo".to_string());
+        assert!(matches!(
+            metrics.workers[0].state,
+            super::WorkerState::Transcribing
+        ));
+        assert_eq!(
+            metrics.workers[0].loaded_model.as_deref(),
+            Some("large-v3-turbo")
+        );
+    }
+
+    #[test]
+    fn queue_snapshot_lists_waiting_jobs_in_arrival_order() {
+        let config = test_config();
+        let live = HostLiveConfig::new(&config);
+        let mut metrics = HostMetrics::new(&config);
+
+        metrics.enqueue_job(test_queued_job(1, Some("192.168.1.10")));
+        metrics.enqueue_job(test_queued_job(2, Some("192.168.1.11")));
+
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live);
+        assert_eq!(snapshot.queued_jobs, 2);
+        assert_eq!(snapshot.queue.len(), 2);
+        assert_eq!(snapshot.queue[0].id, 1);
+        assert_eq!(snapshot.queue[1].id, 2);
+        assert_eq!(snapshot.queue[0].client.as_deref(), Some("192.168.1.10"));
+
+        metrics.dequeue_job(1);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live);
+        assert_eq!(snapshot.queue.len(), 1);
+        assert_eq!(snapshot.queue[0].id, 2);
+    }
+
+    #[test]
+    fn client_tracking_is_bounded_and_evicts_least_recently_seen() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+
+        for index in 0..MAX_TRACKED_CLIENTS {
+            metrics.client_request(Some(&format!("10.0.0.{index}")));
+        }
+        assert_eq!(metrics.clients.len(), MAX_TRACKED_CLIENTS);
+
+        // Refresh one entry, then force an eviction with a brand-new address.
+        let oldest = metrics
+            .clients
+            .iter()
+            .min_by_key(|(_, stats)| stats.last_seen_ms)
+            .map(|(address, _)| address.clone())
+            .expect("oldest client");
+        metrics.client_request(Some("10.0.1.1"));
+
+        assert_eq!(metrics.clients.len(), MAX_TRACKED_CLIENTS);
+        assert!(!metrics.clients.contains_key(&oldest));
+        assert!(metrics.clients.contains_key("10.0.1.1"));
+    }
+
+    #[test]
+    fn config_update_applies_valid_values_and_rejects_out_of_range_atomically() {
+        let config = test_config();
+        let live = HostLiveConfig::new(&config);
+        assert_eq!(live.max_active_streams(), 1);
+
+        super::apply_config_update(
+            &super::HostConfigUpdate {
+                max_active_streams: Some(8),
+                max_recording_seconds: Some(300),
+                use_gpu: Some(false),
+            },
+            &live,
+        )
+        .expect("valid update applies");
+        assert_eq!(live.max_active_streams(), 8);
+        assert_eq!(live.max_recording_seconds(), 300);
+        assert!(!live.use_gpu());
+
+        // One invalid field rejects the whole update without partial writes.
+        let err = super::apply_config_update(
+            &super::HostConfigUpdate {
+                max_active_streams: Some(2),
+                max_recording_seconds: Some(5_000),
+                use_gpu: Some(true),
+            },
+            &live,
+        )
+        .expect_err("out-of-range update rejects");
+        assert!(err.contains("maxRecordingSeconds"));
+        assert_eq!(live.max_active_streams(), 8);
+        assert_eq!(live.max_recording_seconds(), 300);
+        assert!(!live.use_gpu());
+
+        let err = super::apply_config_update(
+            &super::HostConfigUpdate {
+                max_active_streams: Some(0),
+                max_recording_seconds: None,
+                use_gpu: None,
+            },
+            &live,
+        )
+        .expect_err("zero streams rejects");
+        assert!(err.contains("maxActiveStreams"));
+    }
+
+    #[test]
+    fn rejection_with_client_attributes_to_client_stats() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+
+        metrics.client_request(Some("192.168.1.20"));
+        metrics.reject_job(Some("192.168.1.20"));
+        metrics.reject_job(None);
+
+        assert_eq!(metrics.rejected_jobs, 2);
+        let stats = metrics.clients.get("192.168.1.20").expect("client stats");
+        assert_eq!(stats.requests, 1);
+        assert_eq!(stats.rejected, 1);
     }
 }
