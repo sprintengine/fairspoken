@@ -1,26 +1,21 @@
-use crate::models::{SherpaModel, WhisperModel};
+use crate::models::WhisperModel;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TranscriptionBackend {
-    Whisper,
-    SherpaStreaming,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TranscriptionLocation {
+    #[default]
     Local,
     RemoteHost,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordingShortcutMode {
+    #[default]
     Toggle,
     PushToTalk,
 }
@@ -30,11 +25,7 @@ pub enum RecordingShortcutMode {
 pub struct Settings {
     #[serde(default)]
     pub transcription_location: TranscriptionLocation,
-    #[serde(default)]
-    pub transcription_backend: TranscriptionBackend,
     pub model: WhisperModel,
-    #[serde(default)]
-    pub sherpa_model: SherpaModel,
     #[serde(default)]
     pub remote_url: String,
     #[serde(default)]
@@ -57,14 +48,29 @@ pub struct Settings {
     #[serde(default = "default_interaction_sounds")]
     pub interaction_sounds: bool,
     pub max_recording_seconds: u16,
+    /// Auto-delete unpinned notes whose last edit is older than this many
+    /// minutes; 0 keeps notes forever.
+    #[serde(default)]
+    pub note_retention_minutes: u32,
     #[serde(default = "default_whisper_chunk_seconds")]
     pub whisper_chunk_seconds: u16,
+    /// Run Whisper inference on the GPU when a GPU backend is compiled in
+    /// (Metal on macOS). Off forces CPU inference on the next model load.
+    #[serde(default = "default_use_gpu")]
+    pub use_gpu: bool,
     #[serde(default = "default_recording_shortcut")]
     pub recording_shortcut: String,
     #[serde(default)]
     pub recording_shortcut_mode: RecordingShortcutMode,
     #[serde(default = "default_transcript_stack_shortcut")]
     pub transcript_stack_shortcut: String,
+    /// macOS only: deliver the transcript by pasting at the cursor in the
+    /// focused app (the clipboard copy still happens first).
+    #[serde(default = "default_insert_at_cursor")]
+    pub insert_at_cursor: bool,
+    /// macOS only: hold the Fn/Globe key to record, release to transcribe.
+    #[serde(default)]
+    pub fn_push_to_talk: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -99,9 +105,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             transcription_location: TranscriptionLocation::Local,
-            transcription_backend: TranscriptionBackend::Whisper,
             model: WhisperModel::Base,
-            sherpa_model: SherpaModel::StreamingZipformerEn20230626Int8,
             remote_url: String::new(),
             remote_auth_token: String::new(),
             remote_timeout_seconds: default_remote_timeout_seconds(),
@@ -117,36 +121,20 @@ impl Default for Settings {
             always_on_top: true,
             interaction_sounds: true,
             max_recording_seconds: 120,
+            note_retention_minutes: 0,
             whisper_chunk_seconds: default_whisper_chunk_seconds(),
+            use_gpu: default_use_gpu(),
             recording_shortcut: default_recording_shortcut(),
             recording_shortcut_mode: RecordingShortcutMode::Toggle,
             transcript_stack_shortcut: default_transcript_stack_shortcut(),
+            insert_at_cursor: default_insert_at_cursor(),
+            fn_push_to_talk: false,
         }
     }
 }
 
-impl Default for TranscriptionBackend {
-    fn default() -> Self {
-        Self::Whisper
-    }
-}
-
-impl Default for TranscriptionLocation {
-    fn default() -> Self {
-        Self::Local
-    }
-}
-
-impl Default for RecordingShortcutMode {
-    fn default() -> Self {
-        Self::Toggle
-    }
-}
-
-impl Default for SherpaModel {
-    fn default() -> Self {
-        Self::StreamingZipformerEn20230626Int8
-    }
+fn default_insert_at_cursor() -> bool {
+    cfg!(target_os = "macos")
 }
 
 pub struct SettingsService {
@@ -189,9 +177,8 @@ impl SettingsService {
 impl Settings {
     pub fn requires_transcription_unload(&self, next: &Self) -> bool {
         self.transcription_location != next.transcription_location
-            || self.transcription_backend != next.transcription_backend
             || self.model != next.model
-            || self.sherpa_model != next.sherpa_model
+            || self.use_gpu != next.use_gpu
     }
 
     pub fn whisper_initial_prompt(&self) -> Option<String> {
@@ -217,7 +204,7 @@ impl Settings {
 fn normalize(settings: Settings) -> Settings {
     Settings {
         input_gain: settings.input_gain.clamp(1, 6),
-        max_recording_seconds: settings.max_recording_seconds.clamp(10, 300),
+        max_recording_seconds: settings.max_recording_seconds.clamp(10, 600),
         whisper_chunk_seconds: settings.whisper_chunk_seconds.clamp(5, 60),
         remote_url: normalize_remote_url(&settings.remote_url),
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
@@ -238,6 +225,10 @@ fn normalize(settings: Settings) -> Settings {
 
 fn default_whisper_chunk_seconds() -> u16 {
     20
+}
+
+fn default_use_gpu() -> bool {
+    true
 }
 
 fn default_remote_timeout_seconds() -> u16 {
@@ -393,10 +384,24 @@ mod tests {
     }
 
     #[test]
+    fn gpu_acceleration_defaults_on_and_reloads_transcription_when_toggled() {
+        let settings = Settings::default();
+        assert!(settings.use_gpu);
+
+        let mut cpu_settings = settings.clone();
+        cpu_settings.use_gpu = false;
+
+        assert!(settings.requires_transcription_unload(&cpu_settings));
+        assert!(!settings.requires_transcription_unload(&settings.clone()));
+    }
+
+    #[test]
     fn normalize_shortcuts_trims_and_falls_back_when_empty() {
-        let mut settings = Settings::default();
-        settings.recording_shortcut = "  CommandOrControl + Shift + A  ".to_string();
-        settings.transcript_stack_shortcut = "   ".to_string();
+        let settings = Settings {
+            recording_shortcut: "  CommandOrControl + Shift + A  ".to_string(),
+            transcript_stack_shortcut: "   ".to_string(),
+            ..Default::default()
+        };
 
         let normalized = normalize(settings);
 

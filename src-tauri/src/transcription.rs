@@ -1,7 +1,6 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::models::{ModelService, SherpaModel, WhisperModel};
-use crate::settings::{Settings, TranscriptionBackend};
-use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
+use crate::models::{ModelService, WhisperModel};
+use crate::settings::Settings;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
@@ -13,8 +12,8 @@ const WHISPER_CHUNK_OVERLAP_SECONDS: usize = 1;
 
 #[derive(Default)]
 pub struct TranscriptionService {
-    active: Option<ActiveTranscriptionBackend>,
-    session: Option<ActiveTranscriptionSession>,
+    active: Option<WhisperTranscriber>,
+    session: Option<WhisperSessionHandle>,
 }
 
 pub struct TranscriptionSessionStart {
@@ -33,27 +32,7 @@ pub struct TranscriptPreview {
 
 #[derive(Clone)]
 pub struct TranscriptionCancelHandle {
-    sender: TranscriptionCancelSender,
-}
-
-#[derive(Clone)]
-enum TranscriptionCancelSender {
-    Whisper(mpsc::Sender<WhisperControl>),
-    Sherpa(mpsc::Sender<SherpaControl>),
-}
-
-enum ActiveTranscriptionBackend {
-    Whisper(WhisperTranscriber),
-    Sherpa(SherpaBackend),
-}
-
-struct SherpaBackend {
-    model: SherpaModel,
-}
-
-enum ActiveTranscriptionSession {
-    Whisper(WhisperSessionHandle),
-    Sherpa(SherpaSessionHandle),
+    sender: mpsc::Sender<WhisperControl>,
 }
 
 struct WhisperSessionHandle {
@@ -63,25 +42,15 @@ struct WhisperSessionHandle {
     worker: Option<JoinHandle<()>>,
 }
 
-struct SherpaSessionHandle {
-    audio_tx: SyncSender<AudioFrame>,
-    control_tx: mpsc::Sender<SherpaControl>,
-    result_rx: Receiver<Result<String, String>>,
-    worker: Option<JoinHandle<()>>,
-}
-
 enum WhisperControl {
     Finish,
     Cancel,
 }
 
-enum SherpaControl {
-    Finish,
-    Cancel,
-}
-
+#[derive(Default)]
 struct WhisperTranscriber {
     active_model: Option<WhisperModel>,
+    active_use_gpu: Option<bool>,
     context: Option<Arc<WhisperContext>>,
 }
 
@@ -105,46 +74,17 @@ impl TranscriptionService {
             return Err("Transcription session already in progress".to_string());
         }
 
-        self.ensure_backend(settings)?;
-        match settings.transcription_backend {
-            TranscriptionBackend::Whisper => {
-                if let Some(ActiveTranscriptionBackend::Whisper(transcriber)) = self.active.as_mut()
-                {
-                    let model_path = models.path_for(settings.model);
-                    transcriber.ensure_context(settings.model, &model_path)?;
-                    let handle = transcriber.start_chunked_session(settings, preview_tx)?;
-                    let audio_tx = handle.audio_tx.clone();
-                    let cancel_handle = handle.cancel_handle();
-                    self.session = Some(ActiveTranscriptionSession::Whisper(handle));
-                    Ok(TranscriptionSessionStart {
-                        audio_tx: Some(audio_tx),
-                        cancel_handle,
-                    })
-                } else {
-                    Err("Whisper backend is unavailable".to_string())
-                }
-            }
-            TranscriptionBackend::SherpaStreaming => {
-                let paths = models.sherpa_paths(settings.sherpa_model);
-                let status = models.transcription_status(
-                    TranscriptionBackend::SherpaStreaming,
-                    settings.model,
-                    settings.sherpa_model,
-                );
-                if !status.cached {
-                    return Err(status.message);
-                }
-
-                let handle = SherpaSessionHandle::start(settings.sherpa_model, paths, preview_tx)?;
-                let audio_tx = handle.audio_tx.clone();
-                let cancel_handle = handle.cancel_handle();
-                self.session = Some(ActiveTranscriptionSession::Sherpa(handle));
-                Ok(TranscriptionSessionStart {
-                    audio_tx: Some(audio_tx),
-                    cancel_handle,
-                })
-            }
-        }
+        let transcriber = self.active.get_or_insert_with(WhisperTranscriber::default);
+        let model_path = models.path_for(settings.model);
+        transcriber.ensure_context(settings.model, &model_path, settings.use_gpu)?;
+        let handle = transcriber.start_chunked_session(settings, preview_tx)?;
+        let audio_tx = handle.audio_tx.clone();
+        let cancel_handle = handle.cancel_handle();
+        self.session = Some(handle);
+        Ok(TranscriptionSessionStart {
+            audio_tx: Some(audio_tx),
+            cancel_handle,
+        })
     }
 
     pub fn finish_session(
@@ -153,34 +93,26 @@ impl TranscriptionService {
         settings: &Settings,
         models: &ModelService,
     ) -> Result<String, String> {
-        match self
+        let handle = self
             .session
             .take()
-            .ok_or_else(|| "No transcription session is active".to_string())?
-        {
-            ActiveTranscriptionSession::Whisper(handle) => match handle.finish() {
-                Ok(transcript) => Ok(transcript),
-                Err(err) if err == "No audio frames were streamed to Whisper" => {
-                    let model_path = models.path_for(settings.model);
-                    let Some(ActiveTranscriptionBackend::Whisper(transcriber)) =
-                        self.active.as_mut()
-                    else {
-                        return Err("Whisper backend is unavailable".to_string());
-                    };
-                    transcriber.transcribe(recording, settings, &model_path)
-                }
-                Err(err) => Err(err),
-            },
-            ActiveTranscriptionSession::Sherpa(handle) => handle.finish(),
+            .ok_or_else(|| "No transcription session is active".to_string())?;
+        match handle.finish() {
+            Ok(transcript) => Ok(transcript),
+            Err(err) if err == "No audio frames were streamed to Whisper" => {
+                let model_path = models.path_for(settings.model);
+                let Some(transcriber) = self.active.as_mut() else {
+                    return Err("Whisper backend is unavailable".to_string());
+                };
+                transcriber.transcribe(recording, settings, &model_path)
+            }
+            Err(err) => Err(err),
         }
     }
 
     pub fn cancel_session(&mut self) {
-        if let Some(session) = self.session.take() {
-            match session {
-                ActiveTranscriptionSession::Whisper(handle) => handle.cancel(),
-                ActiveTranscriptionSession::Sherpa(handle) => handle.cancel(),
-            }
+        if let Some(handle) = self.session.take() {
+            handle.cancel();
         }
     }
 
@@ -188,58 +120,11 @@ impl TranscriptionService {
         self.cancel_session();
         self.active.take();
     }
-
-    fn ensure_backend(&mut self, settings: &Settings) -> Result<(), String> {
-        let reusable = matches!(
-            (&self.active, settings.transcription_backend),
-            (
-                Some(ActiveTranscriptionBackend::Whisper(_)),
-                TranscriptionBackend::Whisper
-            )
-        ) || matches!(
-            (&self.active, settings.transcription_backend),
-            (Some(ActiveTranscriptionBackend::Sherpa(backend)), TranscriptionBackend::SherpaStreaming)
-                if backend.model == settings.sherpa_model
-        );
-
-        if reusable {
-            return Ok(());
-        }
-
-        self.active.take();
-        self.active = Some(match settings.transcription_backend {
-            TranscriptionBackend::Whisper => {
-                ActiveTranscriptionBackend::Whisper(WhisperTranscriber::default())
-            }
-            TranscriptionBackend::SherpaStreaming => {
-                ActiveTranscriptionBackend::Sherpa(SherpaBackend {
-                    model: settings.sherpa_model,
-                })
-            }
-        });
-        Ok(())
-    }
 }
 
 impl TranscriptionCancelHandle {
     pub fn cancel(&self) {
-        match &self.sender {
-            TranscriptionCancelSender::Whisper(sender) => {
-                let _ = sender.send(WhisperControl::Cancel);
-            }
-            TranscriptionCancelSender::Sherpa(sender) => {
-                let _ = sender.send(SherpaControl::Cancel);
-            }
-        }
-    }
-}
-
-impl Default for WhisperTranscriber {
-    fn default() -> Self {
-        Self {
-            active_model: None,
-            context: None,
-        }
+        let _ = self.sender.send(WhisperControl::Cancel);
     }
 }
 
@@ -261,7 +146,7 @@ impl WhisperTranscriber {
             ));
         }
 
-        self.ensure_context(settings.model, model_path)?;
+        self.ensure_context(settings.model, model_path, settings.use_gpu)?;
 
         let context = self
             .context
@@ -276,18 +161,40 @@ impl WhisperTranscriber {
         )
     }
 
-    fn ensure_context(&mut self, model: WhisperModel, model_path: &Path) -> Result<(), String> {
-        if self.active_model == Some(model) && self.context.is_some() {
+    fn ensure_context(
+        &mut self,
+        model: WhisperModel,
+        model_path: &Path,
+        use_gpu: bool,
+    ) -> Result<(), String> {
+        if self.active_model == Some(model)
+            && self.active_use_gpu == Some(use_gpu)
+            && self.context.is_some()
+        {
             return Ok(());
         }
 
-        let params = WhisperContextParameters::default();
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(use_gpu);
+        // Flash attention is the fast path for GPU decode but is only worth
+        // forcing on builds that compile a GPU backend; CPU inference keeps
+        // the standard attention kernels.
+        if use_gpu
+            && cfg!(any(
+                target_os = "macos",
+                feature = "cuda",
+                feature = "vulkan"
+            ))
+        {
+            params.flash_attn(true);
+        }
         let path = path_to_string(model_path)?;
         let context = WhisperContext::new_with_params(&path, params)
             .map_err(|err| format!("Failed to load Whisper model: {err}"))?;
 
         self.context = Some(Arc::new(context));
         self.active_model = Some(model);
+        self.active_use_gpu = Some(use_gpu);
         Ok(())
     }
 
@@ -368,7 +275,7 @@ impl WhisperSessionHandle {
 
     fn cancel_handle(&self) -> TranscriptionCancelHandle {
         TranscriptionCancelHandle {
-            sender: TranscriptionCancelSender::Whisper(self.control_tx.clone()),
+            sender: self.control_tx.clone(),
         }
     }
 }
@@ -736,175 +643,6 @@ fn merge_transcript_text(previous: &str, next: &str) -> String {
 fn normalize_transcript_word(word: &str) -> String {
     word.trim_matches(|ch: char| !ch.is_alphanumeric())
         .to_lowercase()
-}
-
-impl SherpaSessionHandle {
-    fn start(
-        model: SherpaModel,
-        paths: crate::models::SherpaModelPaths,
-        preview_tx: Option<TranscriptionPreviewSender>,
-    ) -> Result<Self, String> {
-        let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(12);
-        let (control_tx, control_rx) = mpsc::channel::<SherpaControl>();
-        let (result_tx, result_rx) = mpsc::channel::<Result<String, String>>();
-        let worker = thread::Builder::new()
-            .name("sherpa-streaming-transcription".to_string())
-            .spawn(move || {
-                let result = run_sherpa_session(model, paths, audio_rx, control_rx, preview_tx);
-                let _ = result_tx.send(result);
-            })
-            .map_err(|err| format!("Failed to start Sherpa worker: {err}"))?;
-
-        Ok(Self {
-            audio_tx,
-            control_tx,
-            result_rx,
-            worker: Some(worker),
-        })
-    }
-
-    fn finish(mut self) -> Result<String, String> {
-        let _ = self.control_tx.send(SherpaControl::Finish);
-        drop(self.audio_tx);
-        let result = self
-            .result_rx
-            .recv()
-            .map_err(|_| "Sherpa worker stopped without a transcript".to_string())?;
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-        result
-    }
-
-    fn cancel(mut self) {
-        let _ = self.control_tx.send(SherpaControl::Cancel);
-        drop(self.audio_tx);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-    }
-
-    fn cancel_handle(&self) -> TranscriptionCancelHandle {
-        TranscriptionCancelHandle {
-            sender: TranscriptionCancelSender::Sherpa(self.control_tx.clone()),
-        }
-    }
-}
-
-fn run_sherpa_session(
-    _model: SherpaModel,
-    paths: crate::models::SherpaModelPaths,
-    audio_rx: Receiver<AudioFrame>,
-    control_rx: Receiver<SherpaControl>,
-    preview_tx: Option<TranscriptionPreviewSender>,
-) -> Result<String, String> {
-    let recognizer = create_sherpa_recognizer(&paths)?;
-    let stream = recognizer.create_stream();
-    let mut latest = String::new();
-    let mut preview_index = 0;
-
-    loop {
-        match control_rx.try_recv() {
-            Ok(SherpaControl::Finish) => break,
-            Ok(SherpaControl::Cancel) => {
-                return Err("Sherpa transcription was cancelled".to_string())
-            }
-            Err(mpsc::TryRecvError::Disconnected) => break,
-            Err(mpsc::TryRecvError::Empty) => {}
-        }
-
-        match audio_rx.recv_timeout(std::time::Duration::from_millis(20)) {
-            Ok(frame) => {
-                feed_sherpa_samples(
-                    &recognizer,
-                    &stream,
-                    &frame.pcm_i16,
-                    frame.sample_rate,
-                    &mut latest,
-                    &preview_tx,
-                    &mut preview_index,
-                );
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    for frame in audio_rx.try_iter() {
-        feed_sherpa_samples(
-            &recognizer,
-            &stream,
-            &frame.pcm_i16,
-            frame.sample_rate,
-            &mut latest,
-            &preview_tx,
-            &mut preview_index,
-        );
-    }
-
-    let tail_padding = vec![0.0_f32; 4_800];
-    stream.accept_waveform(16_000, &tail_padding);
-    stream.input_finished();
-    while recognizer.is_ready(&stream) {
-        recognizer.decode(&stream);
-        if let Some(result) = recognizer.get_result(&stream) {
-            if !result.text.trim().is_empty() {
-                latest = result.text.trim().to_string();
-                emit_preview(&preview_tx, preview_index, latest.clone(), false);
-                preview_index += 1;
-            }
-        }
-    }
-
-    if latest.trim().is_empty() {
-        return Err("No speech was transcribed".to_string());
-    }
-    let transcript = latest.trim().to_string();
-    emit_preview(&preview_tx, preview_index, transcript.clone(), true);
-    Ok(transcript)
-}
-
-fn create_sherpa_recognizer(
-    paths: &crate::models::SherpaModelPaths,
-) -> Result<OnlineRecognizer, String> {
-    let mut config = OnlineRecognizerConfig::default();
-    config.model_config.transducer.encoder = Some(path_to_string(&paths.encoder)?);
-    config.model_config.transducer.decoder = Some(path_to_string(&paths.decoder)?);
-    config.model_config.transducer.joiner = Some(path_to_string(&paths.joiner)?);
-    config.model_config.tokens = Some(path_to_string(&paths.tokens)?);
-    config.model_config.provider = Some("cpu".to_string());
-    config.model_config.num_threads = default_thread_count();
-    config.enable_endpoint = true;
-    config.decoding_method = Some("greedy_search".to_string());
-    OnlineRecognizer::create(&config)
-        .ok_or_else(|| "Failed to create Sherpa recognizer".to_string())
-}
-
-fn feed_sherpa_samples(
-    recognizer: &OnlineRecognizer,
-    stream: &OnlineStream,
-    samples: &[i16],
-    sample_rate: u32,
-    latest: &mut String,
-    preview_tx: &Option<TranscriptionPreviewSender>,
-    preview_index: &mut usize,
-) {
-    let audio = resample_i16_to_16khz_f32(samples, sample_rate);
-    stream.accept_waveform(16_000, &audio);
-    while recognizer.is_ready(stream) {
-        recognizer.decode(stream);
-        if let Some(result) = recognizer.get_result(stream) {
-            let text = result.text.trim();
-            if !text.is_empty() && text != latest.trim() {
-                *latest = text.to_string();
-                emit_preview(preview_tx, *preview_index, latest.clone(), false);
-                *preview_index += 1;
-            }
-        }
-        if recognizer.is_endpoint(stream) {
-            recognizer.reset(stream);
-        }
-    }
 }
 
 fn resample_i16_to_16khz_f32(samples: &[i16], source_rate: u32) -> Vec<f32> {

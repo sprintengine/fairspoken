@@ -1,5 +1,5 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::settings::{Settings, TranscriptionBackend};
+use crate::settings::Settings;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
@@ -114,7 +114,8 @@ fn transcribe_remote_stream(
 ) -> Result<RemoteTranscriptionResponse, String> {
     let base_url = validate_remote_base_url(&settings.remote_url)?;
     let client = Client::builder()
-        .timeout(remote_stream_timeout(settings))
+        .timeout(None)
+        .connect_timeout(remote_connect_timeout(settings))
         .build()
         .map_err(|err| format!("Failed to create remote transcription client: {err}"))?;
     let url = base_url
@@ -144,12 +145,8 @@ fn transcribe_remote_stream(
     Ok(result)
 }
 
-fn remote_stream_timeout(settings: &Settings) -> Duration {
-    Duration::from_secs(u64::from(
-        settings
-            .remote_timeout_seconds
-            .saturating_add(settings.max_recording_seconds),
-    ))
+fn remote_connect_timeout(settings: &Settings) -> Duration {
+    Duration::from_secs(u64::from(settings.remote_timeout_seconds))
 }
 
 #[allow(dead_code)]
@@ -198,6 +195,9 @@ pub fn read_stream_frame(reader: &mut impl Read) -> Result<Option<AudioFrame>, S
 
     let sample_rate = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
     let sample_count = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+    if sample_rate == 0 || sample_rate > 192_000 {
+        return Err("Remote stream frame has an unsupported sample rate".to_string());
+    }
     if sample_count == 0 {
         return Ok(Some(AudioFrame {
             pcm_i16: Vec::new(),
@@ -332,18 +332,12 @@ pub fn decode_wav(bytes: &[u8]) -> Result<Recording, String> {
     })
 }
 
-pub fn backend_id(backend: TranscriptionBackend) -> &'static str {
-    match backend {
-        TranscriptionBackend::Whisper => "whisper",
-        TranscriptionBackend::SherpaStreaming => "sherpa-streaming",
-    }
-}
+/// Engine identifier sent over the remote-host protocol and stored in
+/// transcript history; whisper.cpp is the only supported engine.
+pub const BACKEND_ID: &str = "whisper";
 
 pub fn selected_model_id(settings: &Settings) -> &'static str {
-    match settings.transcription_backend {
-        TranscriptionBackend::Whisper => settings.model.model_id(),
-        TranscriptionBackend::SherpaStreaming => settings.sherpa_model.model_id(),
-    }
+    settings.model.model_id()
 }
 
 fn auth_headers(settings: &Settings) -> Result<HeaderMap, String> {
@@ -365,10 +359,7 @@ fn transcription_headers(settings: &Settings) -> Result<HeaderMap, String> {
         "x-multivoice-client",
         HeaderValue::from_static("multivoice-tauri"),
     );
-    headers.insert(
-        "x-multivoice-backend",
-        HeaderValue::from_static(backend_id(settings.transcription_backend)),
-    );
+    headers.insert("x-multivoice-backend", HeaderValue::from_static(BACKEND_ID));
     headers.insert(
         "x-multivoice-model",
         HeaderValue::from_str(selected_model_id(settings))
@@ -449,8 +440,8 @@ fn host_allows_plain_http(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wav, encode_wav, read_stream_frame, remote_stream_timeout, validate_remote_base_url,
-        write_stream_frame,
+        decode_wav, encode_wav, read_stream_frame, remote_connect_timeout,
+        validate_remote_base_url, write_stream_frame,
     };
     use crate::audio::{AudioFrame, Recording};
     use crate::settings::Settings;
@@ -489,14 +480,26 @@ mod tests {
     }
 
     #[test]
-    fn remote_stream_timeout_covers_recording_and_server_processing_time() {
+    fn remote_stream_uses_configured_connect_timeout_only() {
         let settings = Settings {
             remote_timeout_seconds: 15,
             max_recording_seconds: 120,
             ..Settings::default()
         };
 
-        assert_eq!(remote_stream_timeout(&settings), Duration::from_secs(135));
+        assert_eq!(remote_connect_timeout(&settings), Duration::from_secs(15));
+    }
+
+    #[test]
+    fn stream_frame_rejects_unsupported_sample_rate() {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&0_u32.to_le_bytes());
+        encoded.extend_from_slice(&1_u32.to_le_bytes());
+        encoded.extend_from_slice(&1_i16.to_le_bytes());
+
+        let err = read_stream_frame(&mut encoded.as_slice()).expect_err("zero sample rate rejects");
+
+        assert!(err.contains("sample rate"));
     }
 
     #[test]

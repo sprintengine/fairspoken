@@ -1,4 +1,4 @@
-use crate::settings::{Settings, TranscriptionBackend, TranscriptionLocation};
+use crate::settings::{Settings, TranscriptionLocation};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -23,7 +23,6 @@ pub struct SpeedTestCapture {
 #[serde(rename_all = "kebab-case")]
 pub enum CapturePreviewMode {
     Chunked,
-    Streaming,
     FinalOnly,
     // Part of the public capture contract for backends whose preview support
     // cannot be known from local settings alone.
@@ -75,39 +74,16 @@ pub fn build_capture_result(
         transcript,
         recording_seconds,
         transcribe_ms,
-        engine: capture_engine_label(settings.transcription_backend).to_string(),
-        model: capture_model_label(settings).to_string(),
-        preview_mode: capture_preview_mode(
-            settings.transcription_location,
-            settings.transcription_backend,
-        ),
+        engine: "whisper".to_string(),
+        model: settings.model.model_id().to_string(),
+        preview_mode: capture_preview_mode(settings.transcription_location),
     }
 }
 
-pub fn capture_preview_mode(
-    location: TranscriptionLocation,
-    backend: TranscriptionBackend,
-) -> CapturePreviewMode {
+pub fn capture_preview_mode(location: TranscriptionLocation) -> CapturePreviewMode {
     match location {
-        TranscriptionLocation::Local => match backend {
-            TranscriptionBackend::Whisper => CapturePreviewMode::Chunked,
-            TranscriptionBackend::SherpaStreaming => CapturePreviewMode::Streaming,
-        },
+        TranscriptionLocation::Local => CapturePreviewMode::Chunked,
         TranscriptionLocation::RemoteHost => CapturePreviewMode::FinalOnly,
-    }
-}
-
-fn capture_engine_label(backend: TranscriptionBackend) -> &'static str {
-    match backend {
-        TranscriptionBackend::Whisper => "whisper",
-        TranscriptionBackend::SherpaStreaming => "sherpa-streaming",
-    }
-}
-
-fn capture_model_label(settings: &Settings) -> &'static str {
-    match settings.transcription_backend {
-        TranscriptionBackend::Whisper => settings.model.model_id(),
-        TranscriptionBackend::SherpaStreaming => settings.sherpa_model.model_id(),
     }
 }
 
@@ -137,7 +113,7 @@ impl SpeedTestService {
         let is_best = self
             .data
             .best
-            .map_or(true, |best| record.multiplier > best.multiplier);
+            .is_none_or(|best| record.multiplier > best.multiplier);
         self.data.last = Some(record);
         if is_best {
             self.data.best = Some(record);
@@ -182,7 +158,7 @@ fn default_speed_test_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SherpaModel, WhisperModel};
+    use crate::models::WhisperModel;
 
     fn service_at(name: &str) -> SpeedTestService {
         SpeedTestService {
@@ -230,28 +206,11 @@ mod tests {
     #[test]
     fn preview_mode_reports_real_backend_behavior() {
         assert_eq!(
-            capture_preview_mode(TranscriptionLocation::Local, TranscriptionBackend::Whisper),
+            capture_preview_mode(TranscriptionLocation::Local),
             CapturePreviewMode::Chunked
         );
         assert_eq!(
-            capture_preview_mode(
-                TranscriptionLocation::Local,
-                TranscriptionBackend::SherpaStreaming
-            ),
-            CapturePreviewMode::Streaming
-        );
-        assert_eq!(
-            capture_preview_mode(
-                TranscriptionLocation::RemoteHost,
-                TranscriptionBackend::Whisper
-            ),
-            CapturePreviewMode::FinalOnly
-        );
-        assert_eq!(
-            capture_preview_mode(
-                TranscriptionLocation::RemoteHost,
-                TranscriptionBackend::SherpaStreaming
-            ),
+            capture_preview_mode(TranscriptionLocation::RemoteHost),
             CapturePreviewMode::FinalOnly
         );
         assert_eq!(
@@ -264,9 +223,7 @@ mod tests {
     fn capture_result_builder_only_projects_measurement_metadata() {
         let settings = Settings {
             transcription_location: TranscriptionLocation::Local,
-            transcription_backend: TranscriptionBackend::SherpaStreaming,
             model: WhisperModel::Tiny,
-            sherpa_model: SherpaModel::StreamingZipformerEn20230626Int8,
             ..Settings::default()
         };
 
@@ -275,8 +232,8 @@ mod tests {
         assert_eq!(capture.transcript, "hello world");
         assert_eq!(capture.recording_seconds, 1.25);
         assert_eq!(capture.transcribe_ms, 42);
-        assert_eq!(capture.engine, "sherpa-streaming");
-        assert_eq!(capture.model, "streaming-zipformer-en-2023-06-26-int8");
-        assert_eq!(capture.preview_mode, CapturePreviewMode::Streaming);
+        assert_eq!(capture.engine, "whisper");
+        assert_eq!(capture.model, "tiny");
+        assert_eq!(capture.preview_mode, CapturePreviewMode::Chunked);
     }
 }

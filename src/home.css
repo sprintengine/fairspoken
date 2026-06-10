@@ -218,7 +218,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 .hero .sub { color: var(--text-muted); font-size: var(--fs-meta); margin-top: 6px; max-width: 56ch; }
 
 /* Stat strip: flat columns separated by a single vertical hairline. */
-.tiles { display: grid; grid-template-columns: repeat(5, 1fr); margin-bottom: 30px; }
+.tiles { display: grid; grid-template-columns: repeat(6, 1fr); margin-bottom: 30px; }
 .tile { padding: 0 18px; border-left: 1px solid var(--border); }
 .tile:first-child { padding-left: 0; border-left: none; }
 .tile .t-label { color: var(--text-secondary); font-size: var(--fs-meta); }

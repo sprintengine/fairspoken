@@ -9,6 +9,12 @@ const SECONDS_PER_DAY: u64 = 86_400;
 // typing; the speaking pace shown to the user is measured, not assumed.
 const TYPING_WPM: f64 = 40.0;
 const WEEK_DAYS: u64 = 7;
+// What the recorded audio would have cost on a metered cloud transcription
+// API. $0.006/min is OpenAI's rate for both whisper-1 and gpt-4o-transcribe
+// (verified June 2026). a commercial dictation app is deliberately not the anchor here: it is
+// a flat $15/mo subscription with no per-minute price, so a per-minute
+// comparison against it would be invented math.
+const CLOUD_TRANSCRIPTION_USD_PER_MINUTE: f64 = 0.006;
 
 /// One UTC day's dictation totals. Buckets are keyed by day index
 /// (days since the Unix epoch) so streaks and the weekly chart need no
@@ -59,6 +65,12 @@ pub struct UsageStatsSummary {
     /// measured value when set, otherwise the `TYPING_WPM` reference.
     pub typing_wpm: f64,
     pub speaking_wpm: u64,
+    /// What the lifetime recorded audio would have cost on a metered cloud
+    /// transcription API, in US dollars.
+    pub money_saved_usd: f64,
+    /// The per-minute rate behind `money_saved_usd`, so the UI label always
+    /// matches the math.
+    pub cloud_rate_usd_per_minute: f64,
     pub current_streak: u64,
     pub best_streak: u64,
     pub this_week_words: u64,
@@ -184,6 +196,8 @@ fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
         time_saved_seconds,
         typing_wpm,
         speaking_wpm,
+        money_saved_usd: data.total_recording_seconds / 60.0 * CLOUD_TRANSCRIPTION_USD_PER_MINUTE,
+        cloud_rate_usd_per_minute: CLOUD_TRANSCRIPTION_USD_PER_MINUTE,
         current_streak: current_streak(today, day_active),
         best_streak: best_streak(&data.days),
         this_week_words,
@@ -315,10 +329,12 @@ mod tests {
     #[test]
     fn time_saved_compares_typing_against_actual_recording() {
         // 40 words typed at 40 wpm = 60s; dictated in 20s → 40s saved.
-        let mut data = UsageStatsData::default();
-        data.total_words = 40;
-        data.total_dictations = 1;
-        data.total_recording_seconds = 20.0;
+        let data = UsageStatsData {
+            total_words: 40,
+            total_dictations: 1,
+            total_recording_seconds: 20.0,
+            ..Default::default()
+        };
 
         let summary = summarize(&data, SECONDS_PER_DAY * 100);
         assert_eq!(summary.time_saved_seconds.round() as i64, 40);
@@ -330,10 +346,12 @@ mod tests {
         // 40 words dictated in 20s. At the assumed 40 wpm, typing would take 60s
         // → 40s saved. A faster measured typist (80 wpm) types them in 30s, so
         // the personalized saving is only 10s.
-        let mut data = UsageStatsData::default();
-        data.total_words = 40;
-        data.total_dictations = 1;
-        data.total_recording_seconds = 20.0;
+        let mut data = UsageStatsData {
+            total_words: 40,
+            total_dictations: 1,
+            total_recording_seconds: 20.0,
+            ..Default::default()
+        };
 
         let default_summary = summarize(&data, SECONDS_PER_DAY * 100);
         assert_eq!(default_summary.typing_wpm, TYPING_WPM);
@@ -358,6 +376,21 @@ mod tests {
             .expect("clamps high");
         assert_eq!(service.data.measured_typing_wpm, Some(400.0));
         let _ = std::fs::remove_file(&service.path);
+    }
+
+    #[test]
+    fn money_saved_prices_recorded_audio_at_the_cloud_rate() {
+        // One hour of recorded audio at $0.006/min = $0.36.
+        let data = UsageStatsData {
+            total_words: 9000,
+            total_dictations: 1,
+            total_recording_seconds: 3600.0,
+            ..Default::default()
+        };
+
+        let summary = summarize(&data, SECONDS_PER_DAY * 100);
+        assert!((summary.money_saved_usd - 0.36).abs() < 1e-9);
+        assert_eq!(summary.cloud_rate_usd_per_minute, 0.006);
     }
 
     #[test]
@@ -406,10 +439,12 @@ mod tests {
         // The Default impl silently falls back to zeros if this fails, so a
         // broken round-trip would silently reset a user's lifetime stats on
         // the next launch. Guard against that.
-        let mut data = UsageStatsData::default();
-        data.total_words = 35;
-        data.total_recording_seconds = 45.0;
-        data.total_dictations = 3;
+        let mut data = UsageStatsData {
+            total_words: 35,
+            total_recording_seconds: 45.0,
+            total_dictations: 3,
+            ..Default::default()
+        };
         data.days.insert(
             100,
             DayBucket {

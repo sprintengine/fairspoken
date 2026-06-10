@@ -4,9 +4,7 @@ import { addEvent } from "./events";
 import { playRecordingStartSound, setInteractionSoundsEnabled } from "./sounds";
 
 type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3" | "large-v3-turbo";
-type TranscriptionBackend = "whisper" | "sherpa-streaming";
 type TranscriptionLocation = "local" | "remote-host";
-type SherpaModel = "streaming-zipformer-en-2023-06-26-int8";
 type RecordingShortcutMode = "toggle" | "push-to-talk";
 
 interface TranscriptCorrection {
@@ -19,9 +17,7 @@ interface TranscriptCorrection {
 
 interface Settings {
   transcriptionLocation: TranscriptionLocation;
-  transcriptionBackend: TranscriptionBackend;
   model: WhisperModel;
-  sherpaModel: SherpaModel;
   remoteUrl: string;
   remoteAuthToken: string;
   remoteTimeoutSeconds: number;
@@ -29,7 +25,9 @@ interface Settings {
   alwaysOnTop: boolean;
   interactionSounds: boolean;
   maxRecordingSeconds: number;
+  noteRetentionMinutes: number;
   whisperChunkSeconds: number;
+  useGpu: boolean;
   audioDevice?: string;
   noiseSuppression?: boolean;
   echoCancellation?: boolean;
@@ -40,11 +38,12 @@ interface Settings {
   recordingShortcut: string;
   recordingShortcutMode: RecordingShortcutMode;
   transcriptStackShortcut: string;
+  insertAtCursor: boolean;
+  fnPushToTalk: boolean;
 }
 
 interface ModelStatus {
-  backend?: TranscriptionBackend;
-  model: WhisperModel | SherpaModel;
+  model: WhisperModel;
   cached: boolean;
   message: string;
   modelPath: string;
@@ -58,7 +57,6 @@ interface RemoteHealth {
 }
 
 interface ModelPrepareProgressEvent {
-  backend: TranscriptionBackend;
   model: string;
   stage: string;
   message: string;
@@ -70,9 +68,7 @@ interface ModelPrepareProgressEvent {
 
 const DEFAULTS: Settings = {
   transcriptionLocation: "local",
-  transcriptionBackend: "whisper",
   model: "base",
-  sherpaModel: "streaming-zipformer-en-2023-06-26-int8",
   remoteUrl: "",
   remoteAuthToken: "",
   remoteTimeoutSeconds: 60,
@@ -80,7 +76,9 @@ const DEFAULTS: Settings = {
   alwaysOnTop: true,
   interactionSounds: true,
   maxRecordingSeconds: 120,
+  noteRetentionMinutes: 0,
   whisperChunkSeconds: 20,
+  useGpu: true,
   audioDevice: "",
   noiseSuppression: true,
   echoCancellation: true,
@@ -91,11 +89,12 @@ const DEFAULTS: Settings = {
   recordingShortcut: "CommandOrControl+Shift+Digit1",
   recordingShortcutMode: "toggle",
   transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
+  insertAtCursor: isMacOS(),
+  fnPushToTalk: false,
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
 const locationSelect = required<HTMLSelectElement>("locationSelect");
-const engineSelect = required<HTMLSelectElement>("engineSelect");
 const modelSelect = required<HTMLSelectElement>("modelSelect");
 const langSelect = required<HTMLSelectElement>("langSelect");
 const audioDeviceSelect = required<HTMLSelectElement>("audioDeviceSelect");
@@ -105,15 +104,21 @@ const inputGain = required<HTMLSelectElement>("inputGain");
 const postProcess = required<HTMLInputElement>("postProcess");
 const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
 const interactionSounds = required<HTMLInputElement>("interactionSounds");
-const maxRecordingSeconds = required<HTMLInputElement>("maxRecordingSeconds");
+const maxRecordingSeconds = required<HTMLSelectElement>("maxRecordingSeconds");
+const noteRetentionMinutes = required<HTMLSelectElement>("noteRetentionMinutes");
 const recordingShortcutMode = required<HTMLSelectElement>("recordingShortcutMode");
 const recordingShortcut = required<HTMLInputElement>("recordingShortcut");
 const recordingShortcutCapture = required<HTMLButtonElement>("recordingShortcutCapture");
 const transcriptStackShortcut = required<HTMLInputElement>("transcriptStackShortcut");
 const transcriptStackShortcutCapture = required<HTMLButtonElement>("transcriptStackShortcutCapture");
 const shortcutStatus = required<HTMLElement>("shortcutStatus");
-const whisperChunkField = required<HTMLElement>("whisperChunkField");
+const insertAtCursor = required<HTMLInputElement>("insertAtCursor");
+const insertAtCursorRow = required<HTMLElement>("insertAtCursorRow");
+const fnPushToTalk = required<HTMLInputElement>("fnPushToTalk");
+const fnPushToTalkRow = required<HTMLElement>("fnPushToTalkRow");
 const whisperChunkSeconds = required<HTMLInputElement>("whisperChunkSeconds");
+const useGpu = required<HTMLInputElement>("useGpu");
+const useGpuRow = required<HTMLElement>("useGpuRow");
 const inputMeter = required<HTMLElement>("inputMeter");
 const modelDownload = required<HTMLElement>("modelDownload");
 const modelDownloadStatus = required<HTMLElement>("modelDownloadStatus");
@@ -137,24 +142,6 @@ const MODEL_MEMORY_FOOTPRINTS: Record<WhisperModel, string> = {
   "large-v3-turbo": "RAM ~8G",
 };
 
-const SHERPA_MODEL_FOOTPRINTS: Record<SherpaModel, string> = {
-  "streaming-zipformer-en-2023-06-26-int8": "RAM ~0.8G",
-};
-
-const WHISPER_MODEL_OPTIONS: Array<[WhisperModel, string]> = [
-  ["tiny", "Tiny"],
-  ["base", "Base"],
-  ["small", "Small"],
-  ["medium", "Medium"],
-  ["large-v2", "Large v2"],
-  ["large-v3", "Large v3"],
-  ["large-v3-turbo", "Large v3 Turbo"],
-];
-
-const SHERPA_MODEL_OPTIONS: Array<[SherpaModel, string]> = [
-  ["streaming-zipformer-en-2023-06-26-int8", "Zipformer English int8"],
-];
-
 let currentSettings: Settings = { ...DEFAULTS };
 let meterStream: MediaStream | null = null;
 let meterContext: AudioContext | null = null;
@@ -167,14 +154,29 @@ function required<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
+// Mirror the options of the #maxRecordingSeconds and #noteRetentionMinutes
+// selects; settings saved by older builds or edited by hand can hold values
+// between the presets, so snap them to the closest one.
+const MAX_RECORDING_CHOICES = [30, 60, 120, 180, 300, 600];
+const NOTE_RETENTION_CHOICES = [0, 15, 60, 480, 1440, 10080, 43200];
+
+function snapToChoice(value: number, choices: number[], fallback: number): number {
+  const target = Number.isFinite(value) ? value : fallback;
+  return choices.reduce((closest, choice) =>
+    Math.abs(choice - target) < Math.abs(closest - target) ? choice : closest,
+  );
+}
+
 function normalizeSettings(settings: Partial<Settings>): Settings {
   const seconds = Number(settings.maxRecordingSeconds ?? DEFAULTS.maxRecordingSeconds);
+  const retentionMinutes = Number(settings.noteRetentionMinutes ?? DEFAULTS.noteRetentionMinutes);
   const chunkSeconds = Number(settings.whisperChunkSeconds ?? DEFAULTS.whisperChunkSeconds);
   return {
     ...DEFAULTS,
     ...settings,
     inputGain: Math.max(1, Math.min(6, Number(settings.inputGain ?? DEFAULTS.inputGain))),
-    maxRecordingSeconds: Math.max(10, Math.min(300, Math.round(seconds || DEFAULTS.maxRecordingSeconds))),
+    maxRecordingSeconds: snapToChoice(seconds, MAX_RECORDING_CHOICES, DEFAULTS.maxRecordingSeconds),
+    noteRetentionMinutes: snapToChoice(retentionMinutes, NOTE_RETENTION_CHOICES, DEFAULTS.noteRetentionMinutes),
     whisperChunkSeconds: Math.max(5, Math.min(60, Math.round(chunkSeconds || DEFAULTS.whisperChunkSeconds))),
     remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
@@ -183,15 +185,16 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
     recordingShortcutMode: settings.recordingShortcutMode === "push-to-talk" ? "push-to-talk" : "toggle",
     transcriptStackShortcut: normalizeShortcut(settings.transcriptStackShortcut ?? DEFAULTS.transcriptStackShortcut, DEFAULTS.transcriptStackShortcut),
+    insertAtCursor: settings.insertAtCursor ?? DEFAULTS.insertAtCursor,
+    fnPushToTalk: settings.fnPushToTalk ?? DEFAULTS.fnPushToTalk,
+    useGpu: settings.useGpu ?? DEFAULTS.useGpu,
   };
 }
 
 function applyToForm(settings: Settings): void {
   locationSelect.value = settings.transcriptionLocation;
-  engineSelect.value = settings.transcriptionBackend;
-  renderModelOptions(settings.transcriptionBackend);
-  modelSelect.value = selectedModel(settings);
-  updateModelSize(settings.transcriptionBackend, selectedModel(settings));
+  modelSelect.value = settings.model;
+  updateModelSize(settings.model);
   remoteUrl.value = settings.remoteUrl;
   remoteAuthToken.value = settings.remoteAuthToken;
   remoteTimeoutSeconds.value = String(settings.remoteTimeoutSeconds);
@@ -204,21 +207,22 @@ function applyToForm(settings: Settings): void {
   alwaysOnTop.checked = settings.alwaysOnTop;
   interactionSounds.checked = settings.interactionSounds ?? true;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
+  noteRetentionMinutes.value = String(settings.noteRetentionMinutes);
   recordingShortcutMode.value = settings.recordingShortcutMode;
   recordingShortcut.value = settings.recordingShortcut;
   transcriptStackShortcut.value = settings.transcriptStackShortcut;
+  insertAtCursor.checked = settings.insertAtCursor;
+  fnPushToTalk.checked = settings.fnPushToTalk;
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
-  updateWhisperChunkUi(settings.transcriptionBackend);
+  useGpu.checked = settings.useGpu;
   updateTranscriptionLocationUi(settings.transcriptionLocation);
+  updateUseGpuUi();
 }
 
 function readFromForm(): Settings {
-  const backend = engineSelect.value as TranscriptionBackend;
   return normalizeSettings({
     transcriptionLocation: locationSelect.value as TranscriptionLocation,
-    transcriptionBackend: backend,
-    model: backend === "whisper" ? (modelSelect.value as WhisperModel) : currentSettings.model,
-    sherpaModel: backend === "sherpa-streaming" ? (modelSelect.value as SherpaModel) : currentSettings.sherpaModel,
+    model: modelSelect.value as WhisperModel,
     remoteUrl: remoteUrl.value,
     remoteAuthToken: remoteAuthToken.value,
     remoteTimeoutSeconds: Number(remoteTimeoutSeconds.value),
@@ -231,10 +235,14 @@ function readFromForm(): Settings {
     alwaysOnTop: alwaysOnTop.checked,
     interactionSounds: interactionSounds.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
+    noteRetentionMinutes: Number(noteRetentionMinutes.value),
     recordingShortcutMode: recordingShortcutMode.value as RecordingShortcutMode,
     recordingShortcut: recordingShortcut.value,
     transcriptStackShortcut: transcriptStackShortcut.value,
     whisperChunkSeconds: Number(whisperChunkSeconds.value),
+    useGpu: useGpu.checked,
+    insertAtCursor: insertAtCursor.checked,
+    fnPushToTalk: fnPushToTalk.checked,
   });
 }
 
@@ -415,19 +423,18 @@ function formatModelStatus(status: ModelStatus): string {
 
 async function requestModelStatus(): Promise<void> {
   if (locationSelect.value === "remote-host") {
-    updateModelSize(engineSelect.value as TranscriptionBackend, modelSelect.value as WhisperModel | SherpaModel);
+    updateModelSize(modelSelect.value as WhisperModel);
     return;
   }
-  const backend = engineSelect.value as TranscriptionBackend;
-  const model = modelSelect.value as WhisperModel | SherpaModel;
-  updateModelSize(backend, model);
+  const model = modelSelect.value as WhisperModel;
+  updateModelSize(model);
   modelPrepare.textContent = "Checking";
   modelPrepare.disabled = true;
   modelDownload.dataset.state = "loading";
   modelDownloadStatus.textContent = "Checking model...";
   modelDownloadBar.style.transform = "scaleX(0.01)";
   const status = await invoke<ModelStatus>("get_transcription_model_status", {
-    request: modelRequest(backend, model),
+    request: { model },
   });
   addEvent(status.cached ? "info" : "warning", status.message);
   setModelCacheStatus(status);
@@ -435,15 +442,14 @@ async function requestModelStatus(): Promise<void> {
 
 async function beginModelPreload(): Promise<void> {
   if (locationSelect.value === "remote-host") return;
-  const backend = engineSelect.value as TranscriptionBackend;
-  const model = modelSelect.value as WhisperModel | SherpaModel;
-  updateModelSize(backend, model);
+  const model = modelSelect.value as WhisperModel;
+  updateModelSize(model);
   setModelDownloadStatus("Preparing model...", 1);
   modelPrepare.textContent = "Preparing";
   modelPrepare.disabled = true;
   try {
     await invoke("begin_prepare_transcription_model", {
-      request: modelRequest(backend, model),
+      request: { model },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -457,9 +463,7 @@ async function beginModelPreload(): Promise<void> {
 }
 
 function handleModelPrepareProgress(event: ModelPrepareProgressEvent): void {
-  const backend = engineSelect.value as TranscriptionBackend;
-  const model = modelSelect.value as WhisperModel | SherpaModel;
-  if (event.backend !== backend || event.model !== model) return;
+  if (event.model !== modelSelect.value) return;
 
   if (event.error) {
     addEvent("error", event.error);
@@ -491,24 +495,16 @@ function formatPrepareStage(stage: string, message: string): string {
   return message || "Preparing model";
 }
 
-function updateModelSize(backend: TranscriptionBackend, model: WhisperModel | SherpaModel): void {
-  modelSize.textContent =
-    backend === "whisper" ? MODEL_MEMORY_FOOTPRINTS[model as WhisperModel] : SHERPA_MODEL_FOOTPRINTS[model as SherpaModel];
+function updateModelSize(model: WhisperModel): void {
+  modelSize.textContent = MODEL_MEMORY_FOOTPRINTS[model];
 }
 
-function renderModelOptions(backend: TranscriptionBackend): void {
-  const options = backend === "whisper" ? WHISPER_MODEL_OPTIONS : SHERPA_MODEL_OPTIONS;
-  modelSelect.replaceChildren(...options.map(([value, label]) => new Option(label, value)));
-}
-
-function selectedModel(settings: Settings): WhisperModel | SherpaModel {
-  return settings.transcriptionBackend === "whisper" ? settings.model : settings.sherpaModel;
-}
-
-function updateWhisperChunkUi(backend: TranscriptionBackend): void {
-  const whisper = backend === "whisper";
-  whisperChunkField.hidden = !whisper;
-  whisperChunkSeconds.disabled = !whisper;
+// The GPU toggle only affects local Whisper inference: a remote host's GPU
+// use is the host operator's configuration.
+function updateUseGpuUi(): void {
+  const local = locationSelect.value === "local";
+  useGpuRow.hidden = !local;
+  useGpu.disabled = !local;
 }
 
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
@@ -536,14 +532,6 @@ async function testRemoteHost(): Promise<void> {
   } finally {
     remoteTest.disabled = false;
   }
-}
-
-function modelRequest(backend: TranscriptionBackend, model: WhisperModel | SherpaModel): Record<string, unknown> {
-  return {
-    backend,
-    model: backend === "whisper" ? model : null,
-    sherpaModel: backend === "sherpa-streaming" ? model : null,
-  };
 }
 
 async function loadAudioDevices(): Promise<void> {
@@ -658,6 +646,7 @@ refreshBtn.addEventListener("click", () => {
 
 locationSelect.addEventListener("change", () => {
   updateTranscriptionLocationUi(locationSelect.value as TranscriptionLocation);
+  updateUseGpuUi();
   void persistSettings()
     .then((saved) => {
       if (!saved) return;
@@ -665,20 +654,6 @@ locationSelect.addEventListener("change", () => {
       return requestModelStatus();
     })
     .catch(reportAsyncError);
-});
-
-engineSelect.addEventListener("change", () => {
-  const backend = engineSelect.value as TranscriptionBackend;
-  renderModelOptions(backend);
-  updateWhisperChunkUi(backend);
-  modelSelect.value = backend === "whisper" ? currentSettings.model : currentSettings.sherpaModel;
-  void persistSettings()
-    .then((saved) => {
-      if (!saved) return;
-      addEvent("info", `Transcription engine changed to ${backend === "whisper" ? "Whisper" : "Sherpa streaming"}`);
-      return requestModelStatus();
-    })
-    .catch((error) => addEvent("error", error instanceof Error ? error.message : String(error)));
 });
 
 modelSelect.addEventListener("change", () => {
@@ -741,7 +716,7 @@ interactionSounds.addEventListener("change", () => {
     .catch(reportAsyncError);
 });
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-maxRecordingSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
+noteRetentionMinutes.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 recordingShortcutMode.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 recordingShortcutCapture.addEventListener("click", () => {
   beginShortcutCapture(recordingShortcut, recordingShortcutCapture, "Recording");
@@ -751,6 +726,19 @@ transcriptStackShortcutCapture.addEventListener("click", () => {
 });
 whisperChunkSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 whisperChunkSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
+useGpu.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+insertAtCursor.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+fnPushToTalk.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+
+// Both delivery integrations are macOS-only (CGEvent paste and the Fn event
+// tap); hide rather than disable them elsewhere so the form stays honest.
+function isMacOS(): boolean {
+  return navigator.platform.toLowerCase().includes("mac");
+}
+if (!isMacOS()) {
+  insertAtCursorRow.hidden = true;
+  fnPushToTalkRow.hidden = true;
+}
 
 // Settings auto-persist on change; the form must never submit/navigate, which
 // in the home window would reload the whole webview.

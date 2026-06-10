@@ -87,6 +87,7 @@
               <div class="tile"><div class="t-label">This week</div><div class="t-value num" id="statThisWeek">0</div><div class="t-meta" id="statWeekDelta"></div></div>
               <div class="tile"><div class="t-label">Day streak</div><div class="t-value num" id="statStreak">0</div><div class="t-meta" id="statBestStreak"></div></div>
               <div class="tile"><div class="t-label">Speaking pace</div><div class="t-value num" id="statWpm">0</div><div class="t-meta">wpm avg</div></div>
+              <div class="tile"><div class="t-label">Money saved</div><div class="t-value num" id="statMoneySaved">$0</div><div class="t-meta" id="statMoneySavedMeta">vs cloud transcription</div></div>
             </div>
             <div class="panel">
               <div class="panel-head"><h2>This week</h2><div class="grow"></div><span class="hint">words per day</span></div>
@@ -183,6 +184,18 @@
                   </select>
                 </label>
 
+                <label class="field compact-field">
+                  <span>Max recording<span class="field-hint">Dictation stops automatically after this long</span></span>
+                  <select id="maxRecordingSeconds" class="setting-select">
+                    <option value="30">30 seconds</option>
+                    <option value="60">1 minute</option>
+                    <option value="120">2 minutes</option>
+                    <option value="180">3 minutes</option>
+                    <option value="300">5 minutes</option>
+                    <option value="600">10 minutes</option>
+                  </select>
+                </label>
+
                 <label class="toggle-row">
                   <span><strong>Noise suppression</strong></span>
                   <input id="noiseSuppression" type="checkbox" />
@@ -214,14 +227,6 @@
                   <select id="locationSelect" class="setting-select">
                     <option value="local">Local</option>
                     <option value="remote-host">Remote host</option>
-                  </select>
-                </label>
-
-                <label class="field">
-                  <span>Engine</span>
-                  <select id="engineSelect" class="setting-select">
-                    <option value="whisper">Whisper</option>
-                    <option value="sherpa-streaming">Sherpa streaming</option>
                   </select>
                 </label>
 
@@ -288,9 +293,38 @@
                   <input id="whisperChunkSeconds" class="setting-input" type="number" min="5" max="60" step="5" />
                 </label>
 
+                <label class="toggle-row" id="useGpuRow">
+                  <span><strong>Use GPU acceleration</strong><span class="field-hint">Run Whisper on the GPU; turn off to force CPU transcription</span></span>
+                  <input id="useGpu" type="checkbox" />
+                </label>
+
                 <label class="toggle-row">
                   <span><strong>Clean up text</strong><span class="field-hint">Apply your dictionary corrections and snippets</span></span>
                   <input id="postProcess" type="checkbox" />
+                </label>
+
+                <label class="toggle-row" id="insertAtCursorRow">
+                  <span><strong>Insert at cursor</strong><span class="field-hint">Paste the transcript into the focused app; needs the macOS Accessibility permission</span></span>
+                  <input id="insertAtCursor" type="checkbox" />
+                </label>
+              </section>
+
+              <section class="settings-section" aria-labelledby="notesTitle">
+                <div class="section-head">
+                  <h2 id="notesTitle">Notes</h2>
+                </div>
+
+                <label class="field compact-field">
+                  <span>Auto-delete<span class="field-hint">Remove unpinned notes after this long; pinned notes are kept</span></span>
+                  <select id="noteRetentionMinutes" class="setting-select">
+                    <option value="0">Never</option>
+                    <option value="15">After 15 minutes</option>
+                    <option value="60">After 1 hour</option>
+                    <option value="480">After 8 hours</option>
+                    <option value="1440">After 1 day</option>
+                    <option value="10080">After 1 week</option>
+                    <option value="43200">After 30 days</option>
+                  </select>
                 </label>
               </section>
 
@@ -302,11 +336,6 @@
                 <label class="toggle-row">
                   <span><strong>Keep pill on top</strong></span>
                   <input id="alwaysOnTop" type="checkbox" />
-                </label>
-
-                <label class="field compact-field">
-                  <span>Max recording</span>
-                  <input id="maxRecordingSeconds" class="setting-input" type="number" min="10" max="300" step="5" />
                 </label>
               </section>
 
@@ -338,6 +367,11 @@
                     <button class="btn btn-ghost" id="transcriptStackShortcutCapture" type="button">Record</button>
                   </div>
                 </div>
+
+                <label class="toggle-row" id="fnPushToTalkRow">
+                  <span><strong>Hold Fn to talk</strong><span class="field-hint">Hold the Fn/Globe key to record, release to transcribe; needs the macOS Input Monitoring permission</span></span>
+                  <input id="fnPushToTalk" type="checkbox" />
+                </label>
 
                 <div class="settings-note" id="shortcutStatus" aria-live="polite">Shortcuts apply globally while MultiVoice is running.</div>
               </section>

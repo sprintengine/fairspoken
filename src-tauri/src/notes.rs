@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -52,7 +53,7 @@ impl NotesService {
     pub fn list(&self) -> Vec<Note> {
         let mut ordered = self.notes.clone();
         // Stable sort keeps the stored newest-first order inside each group.
-        ordered.sort_by(|a, b| b.pinned.cmp(&a.pinned));
+        ordered.sort_by_key(|note| Reverse(note.pinned));
         ordered
     }
 
@@ -119,6 +120,23 @@ impl NotesService {
             return Err("Note was not found".to_string());
         }
         self.save()
+    }
+
+    /// Delete unpinned notes whose last edit is older than the retention
+    /// window; 0 keeps notes forever. Returns whether anything was removed.
+    pub fn sweep_expired(&mut self, retention_minutes: u32) -> Result<bool, String> {
+        if retention_minutes == 0 {
+            return Ok(false);
+        }
+        let cutoff = current_epoch_millis().saturating_sub(u64::from(retention_minutes) * 60_000);
+        let original_len = self.notes.len();
+        self.notes
+            .retain(|note| note.pinned || note.updated_at >= cutoff);
+        if self.notes.len() == original_len {
+            return Ok(false);
+        }
+        self.save()?;
+        Ok(true)
     }
 
     /// Drop the oldest unpinned notes once over the cap; pinned notes stay.
@@ -249,6 +267,39 @@ mod tests {
 
         assert_eq!(notes.notes.len(), MAX_NOTES);
         assert!(notes.find(&pinned.id).is_some(), "pinned note survives cap");
+    }
+
+    #[test]
+    fn sweep_expired_removes_old_unpinned_and_keeps_pinned() {
+        let mut notes = service();
+        let old = notes.add(new("old")).unwrap();
+        let pinned = notes.add(new("pinned and old")).unwrap();
+        notes.set_pinned(&pinned.id, true).unwrap();
+        let fresh = notes.add(new("fresh")).unwrap();
+
+        // Age everything except the fresh note beyond a 10-minute window.
+        let stale = current_epoch_millis() - 11 * 60_000;
+        for note in &mut notes.notes {
+            if note.id != fresh.id {
+                note.updated_at = stale;
+            }
+        }
+
+        assert!(notes.sweep_expired(10).unwrap(), "reports a removal");
+        assert!(notes.find(&old.id).is_none(), "stale unpinned note removed");
+        assert!(notes.find(&pinned.id).is_some(), "pinned note survives");
+        assert!(notes.find(&fresh.id).is_some(), "fresh note survives");
+        assert!(!notes.sweep_expired(10).unwrap(), "second sweep is a no-op");
+    }
+
+    #[test]
+    fn sweep_expired_zero_retention_keeps_everything() {
+        let mut notes = service();
+        let note = notes.add(new("keep forever")).unwrap();
+        notes.notes[0].updated_at = 0;
+
+        assert!(!notes.sweep_expired(0).unwrap());
+        assert!(notes.find(&note.id).is_some());
     }
 
     fn new(text: &str) -> NewNote {

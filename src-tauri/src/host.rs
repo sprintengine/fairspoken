@@ -1,14 +1,15 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::models::{ModelService, SherpaModel, WhisperModel};
+use crate::models::{ModelService, WhisperModel};
 use crate::remote_transcription::{
-    backend_id, decode_wav, read_stream_frame, selected_model_id, RemoteHealth,
-    RemoteTranscriptionResponse,
+    decode_wav, read_stream_frame, selected_model_id, RemoteHealth, RemoteTranscriptionResponse,
+    BACKEND_ID,
 };
-use crate::settings::{Settings, TranscriptionBackend};
+use crate::settings::Settings;
 use crate::transcription::TranscriptionService;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::env;
+use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -23,6 +24,9 @@ const DEFAULT_HOST_WORKERS: usize = 1;
 const DEFAULT_HOST_QUEUE_CAPACITY: usize = 8;
 const DEFAULT_HOST_MAX_ACTIVE_STREAMS: u32 = 4;
 const DEFAULT_HOST_MAX_RECORDING_SECONDS: u16 = 120;
+const MAX_STREAM_SAMPLE_RATE: u32 = 192_000;
+const MAX_BATCH_WAV_BYTES_PER_SECOND: u64 = (MAX_STREAM_SAMPLE_RATE as u64) * 2;
+const MAX_BATCH_WAV_HEADER_BYTES: u64 = 64 * 1024;
 
 pub fn run_transcription_host() -> Result<(), String> {
     let addr = env::var("MULTIVOICE_HOST_ADDR").unwrap_or_else(|_| "127.0.0.1:48173".to_string());
@@ -63,9 +67,10 @@ fn handle_request(
     metrics: Arc<Mutex<HostMetrics>>,
     bind_addr: &str,
 ) -> Result<(), String> {
+    let path = request_path(request.url());
     // The dashboard HTML itself is safe to serve without auth — it contains no secrets
     // and gates its own data calls behind the token. Every other route still authenticates.
-    if matches!((request.method(), request.url()), (&Method::Get, "/")) {
+    if matches!((request.method(), path), (&Method::Get, "/")) {
         return respond_html(request, DASHBOARD_HTML);
     }
 
@@ -77,7 +82,7 @@ fn handle_request(
         );
     }
 
-    match (request.method(), request.url()) {
+    match (request.method(), path) {
         (&Method::Get, "/v1/health") => {
             let health = RemoteHealth {
                 ok: true,
@@ -118,6 +123,10 @@ fn handle_request(
     }
 }
 
+fn request_path(url: &str) -> &str {
+    url.split_once('?').map(|(path, _)| path).unwrap_or(url)
+}
+
 #[derive(Clone, Copy)]
 enum TranscriptionRequestKind {
     Batch,
@@ -148,14 +157,16 @@ fn handle_batch_transcription(
     mut request: Request,
     runtime: Arc<HostRuntime>,
 ) -> Result<(), String> {
-    let mut body = Vec::new();
-    if let Err(err) = request.as_reader().read_to_end(&mut body) {
-        return respond_error(
-            request,
-            StatusCode(400),
-            &format!("Failed to read transcription request body: {err}"),
-        );
-    }
+    let body = match read_limited_body(
+        &mut request.as_reader(),
+        max_batch_body_bytes(runtime.max_recording_seconds()),
+    ) {
+        Ok(body) => body,
+        Err(err) => {
+            runtime.record_rejection();
+            return respond_error(request, StatusCode(413), &err);
+        }
+    };
     let settings = match settings_from_headers(&request) {
         Ok(settings) => settings,
         Err(err) => return respond_error(request, StatusCode(400), &err),
@@ -234,6 +245,7 @@ struct HostRuntimeConfig {
     queue_capacity: usize,
     max_active_streams: u32,
     max_recording_seconds: u16,
+    use_gpu: bool,
 }
 
 impl HostRuntimeConfig {
@@ -255,6 +267,7 @@ impl HostRuntimeConfig {
                 DEFAULT_HOST_MAX_RECORDING_SECONDS,
             )
             .clamp(10, 300),
+            use_gpu: env_bool("MULTIVOICE_HOST_USE_GPU", true),
         }
     }
 }
@@ -280,6 +293,21 @@ fn env_u16(name: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+fn env_bool(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .and_then(|value| parse_bool(&value))
+        .unwrap_or(default)
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
 struct HostRuntime {
     job_tx: SyncSender<TranscriptionJob>,
     metrics: Arc<Mutex<HostMetrics>>,
@@ -296,6 +324,7 @@ struct TranscriptionJob {
     accepted_at: Instant,
 }
 
+#[derive(Debug)]
 enum HostRuntimeError {
     QueueFull(String),
     WorkerFailed(String),
@@ -380,9 +409,12 @@ impl HostRuntime {
     fn transcribe(
         &self,
         recording: Recording,
-        settings: Settings,
+        mut settings: Settings,
         source: &'static str,
     ) -> Result<String, HostRuntimeError> {
+        // GPU use is an operator decision for the whole host, not a
+        // per-request client choice.
+        settings.use_gpu = self.config.use_gpu;
         let duration_seconds = recording.stats().duration_seconds;
         if let Err(err) = self.validate_recording_duration(duration_seconds) {
             self.metrics
@@ -467,7 +499,7 @@ fn run_host_worker(
 
         let started = Instant::now();
         let duration_seconds = job.recording.stats().duration_seconds;
-        let backend = backend_id(job.settings.transcription_backend).to_string();
+        let backend = BACKEND_ID.to_string();
         let model = selected_model_id(&job.settings).to_string();
         let source = job.source;
         let result =
@@ -511,7 +543,7 @@ fn transcription_response(
     RemoteTranscriptionResponse {
         text,
         duration_seconds,
-        backend: backend_id(settings.transcription_backend).to_string(),
+        backend: BACKEND_ID.to_string(),
         model: selected_model_id(settings).to_string(),
         server_version: Some(SERVER_VERSION.to_string()),
     }
@@ -526,17 +558,31 @@ fn read_stream_recording(
     request: &mut Request,
     max_recording_seconds: u16,
 ) -> Result<Recording, String> {
-    let mut pcm_i16 = Vec::new();
-    let mut sample_rate = 16_000;
+    read_stream_recording_from_reader(&mut request.as_reader(), max_recording_seconds)
+}
 
-    loop {
-        let Some(frame) = read_stream_frame(&mut request.as_reader())? else {
-            break;
-        };
+fn read_stream_recording_from_reader(
+    reader: &mut impl Read,
+    max_recording_seconds: u16,
+) -> Result<Recording, String> {
+    let mut pcm_i16 = Vec::new();
+    let mut recording_sample_rate = None;
+
+    while let Some(frame) = read_stream_frame(reader)? {
         if frame.pcm_i16.is_empty() {
             continue;
         }
-        sample_rate = frame.sample_rate;
+
+        let sample_rate = match recording_sample_rate {
+            Some(sample_rate) if sample_rate != frame.sample_rate => {
+                return Err("Remote stream sample rate changed during recording".to_string())
+            }
+            Some(sample_rate) => sample_rate,
+            None => {
+                recording_sample_rate = Some(frame.sample_rate);
+                frame.sample_rate
+            }
+        };
         let max_samples = sample_rate as usize * usize::from(max_recording_seconds);
         if pcm_i16.len().saturating_add(frame.pcm_i16.len()) > max_samples {
             return Err(format!(
@@ -546,6 +592,7 @@ fn read_stream_recording(
         pcm_i16.extend_from_slice(&frame.pcm_i16);
     }
 
+    let sample_rate = recording_sample_rate.unwrap_or(16_000);
     if pcm_i16.is_empty() {
         return Err("No audio samples were captured".to_string());
     }
@@ -555,6 +602,24 @@ fn read_stream_recording(
         sample_rate,
         dropped_stream_frames: 0,
     })
+}
+
+fn read_limited_body(reader: &mut impl Read, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    let mut limited = reader.take(max_bytes.saturating_add(1));
+    limited
+        .read_to_end(&mut body)
+        .map_err(|err| format!("Failed to read transcription request body: {err}"))?;
+    if body.len() as u64 > max_bytes {
+        return Err("Transcription request body exceeds host maximum upload size".to_string());
+    }
+    Ok(body)
+}
+
+fn max_batch_body_bytes(max_recording_seconds: u16) -> u64 {
+    MAX_BATCH_WAV_HEADER_BYTES.saturating_add(
+        MAX_BATCH_WAV_BYTES_PER_SECOND.saturating_mul(u64::from(max_recording_seconds)),
+    )
 }
 
 fn stream_recording_error_status(message: &str) -> StatusCode {
@@ -582,7 +647,7 @@ fn transcribe_recording(
                 .is_err()
             {
                 transcription.cancel_session();
-                return Err("Sherpa transcription worker stopped while receiving audio".to_string());
+                return Err("Transcription worker stopped while receiving audio".to_string());
             }
         }
     }
@@ -604,23 +669,17 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
         .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
         .unwrap_or_default();
 
-    let mut settings = Settings::default();
-    settings.language = language;
-    settings.whisper_chunk_seconds = whisper_chunk_seconds.clamp(5, 60);
-    settings.vocabulary_hints = vocabulary_hints;
-    settings.transcription_backend = match backend {
-        "whisper" => {
-            settings.model = WhisperModel::from_model_id(model)
-                .ok_or_else(|| format!("Unsupported Whisper model: {model}"))?;
-            TranscriptionBackend::Whisper
-        }
-        "sherpa-streaming" | "sherpa" => {
-            settings.sherpa_model = SherpaModel::from_model_id(model)
-                .ok_or_else(|| format!("Unsupported Sherpa model: {model}"))?;
-            TranscriptionBackend::SherpaStreaming
-        }
-        other => return Err(format!("Unsupported transcription backend: {other}")),
+    let mut settings = Settings {
+        language,
+        whisper_chunk_seconds: whisper_chunk_seconds.clamp(5, 60),
+        vocabulary_hints,
+        ..Default::default()
     };
+    if backend != "whisper" {
+        return Err(format!("Unsupported transcription backend: {backend}"));
+    }
+    settings.model = WhisperModel::from_model_id(model)
+        .ok_or_else(|| format!("Unsupported Whisper model: {model}"))?;
     Ok(settings)
 }
 
@@ -722,6 +781,7 @@ struct HostMetrics {
     started: Instant,
     worker_count: usize,
     queue_capacity: usize,
+    max_active_streams: u32,
     active_streams: u32,
     queued_jobs: u32,
     running_jobs: u32,
@@ -742,6 +802,7 @@ impl HostMetrics {
             started: Instant::now(),
             worker_count: config.worker_count,
             queue_capacity: config.queue_capacity,
+            max_active_streams: config.max_active_streams,
             active_streams: 0,
             queued_jobs: 0,
             running_jobs: 0,
@@ -839,6 +900,7 @@ impl HostMetrics {
             running_jobs: self.running_jobs,
             worker_count: self.worker_count,
             queue_capacity: self.queue_capacity,
+            max_active_streams: self.max_active_streams,
             rejected_jobs: self.rejected_jobs,
             failed_jobs: self.failed_jobs,
             total_transcriptions: self.total_transcriptions,
@@ -883,6 +945,7 @@ struct StatsSnapshot<'a> {
     running_jobs: u32,
     worker_count: usize,
     queue_capacity: usize,
+    max_active_streams: u32,
     rejected_jobs: u64,
     failed_jobs: u64,
     total_transcriptions: u64,
@@ -894,13 +957,25 @@ struct StatsSnapshot<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostMetrics, HostRuntime, HostRuntimeConfig, HostRuntimeError};
+    use super::{
+        max_batch_body_bytes, read_limited_body, read_stream_recording_from_reader, request_path,
+        HostMetrics, HostRuntime, HostRuntimeConfig, HostRuntimeError,
+    };
     use crate::audio::Recording;
     use crate::settings::Settings;
+    use std::io::Cursor;
     use std::sync::atomic::AtomicU64;
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn request_path_ignores_query_string_for_route_matching() {
+        assert_eq!(request_path("/?token=secret"), "/");
+        assert_eq!(request_path("/v1/stats?token=secret"), "/v1/stats");
+        assert_eq!(request_path("/v1/health"), "/v1/health");
+    }
 
     fn test_config() -> HostRuntimeConfig {
         HostRuntimeConfig {
@@ -908,6 +983,7 @@ mod tests {
             queue_capacity: 1,
             max_active_streams: 1,
             max_recording_seconds: 10,
+            use_gpu: true,
         }
     }
 
@@ -929,6 +1005,14 @@ mod tests {
             pcm_i16: vec![1; 16_000 * seconds],
             sample_rate: 16_000,
             dropped_stream_frames: 0,
+        }
+    }
+
+    fn write_test_stream_frame(sample_rate: u32, samples: &[i16], target: &mut Vec<u8>) {
+        target.extend_from_slice(&sample_rate.to_le_bytes());
+        target.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+        for sample in samples {
+            target.extend_from_slice(&sample.to_le_bytes());
         }
     }
 
@@ -986,6 +1070,95 @@ mod tests {
     }
 
     #[test]
+    fn queued_runtime_returns_results_to_multiple_waiting_callers() {
+        let config = HostRuntimeConfig {
+            queue_capacity: 2,
+            ..test_config()
+        };
+        let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
+        let (job_tx, job_rx) = mpsc::sync_channel(2);
+        let runtime = Arc::new(test_runtime(config, job_tx, Arc::clone(&metrics)));
+
+        let first_runtime = Arc::clone(&runtime);
+        let first = thread::spawn(move || {
+            first_runtime.transcribe(test_recording(1), Settings::default(), "stream")
+        });
+        let second_runtime = Arc::clone(&runtime);
+        let second = thread::spawn(move || {
+            second_runtime.transcribe(test_recording(1), Settings::default(), "stream")
+        });
+
+        let first_job = job_rx.recv().expect("first queued job");
+        let second_job = job_rx.recv().expect("second queued job");
+        assert_eq!(metrics.lock().expect("metrics").queued_jobs, 2);
+
+        first_job
+            .result_tx
+            .send(Ok("first transcript".to_string()))
+            .expect("send first result");
+        second_job
+            .result_tx
+            .send(Ok("second transcript".to_string()))
+            .expect("send second result");
+
+        let mut results = vec![
+            first
+                .join()
+                .expect("first caller joined")
+                .expect("first ok"),
+            second
+                .join()
+                .expect("second caller joined")
+                .expect("second ok"),
+        ];
+        results.sort();
+
+        assert_eq!(results, vec!["first transcript", "second transcript"]);
+    }
+
+    #[test]
+    fn host_gpu_config_overrides_client_settings() {
+        let config = HostRuntimeConfig {
+            use_gpu: false,
+            ..test_config()
+        };
+        let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
+        let (job_tx, job_rx) = mpsc::sync_channel(1);
+        let runtime = Arc::new(test_runtime(config, job_tx, Arc::clone(&metrics)));
+
+        let client_settings = Settings::default();
+        assert!(client_settings.use_gpu, "client default should request GPU");
+
+        let worker_runtime = Arc::clone(&runtime);
+        let caller = thread::spawn(move || {
+            worker_runtime.transcribe(test_recording(1), client_settings, "batch")
+        });
+
+        let job = job_rx.recv().expect("queued job");
+        assert!(
+            !job.settings.use_gpu,
+            "host config must force CPU inference"
+        );
+
+        job.result_tx
+            .send(Ok("transcript".to_string()))
+            .expect("send result");
+        caller
+            .join()
+            .expect("caller joined")
+            .expect("transcribe ok");
+    }
+
+    #[test]
+    fn parse_bool_accepts_numeric_and_word_flags() {
+        assert_eq!(super::parse_bool("1"), Some(true));
+        assert_eq!(super::parse_bool(" TRUE "), Some(true));
+        assert_eq!(super::parse_bool("0"), Some(false));
+        assert_eq!(super::parse_bool("false"), Some(false));
+        assert_eq!(super::parse_bool("yes"), None);
+    }
+
+    #[test]
     fn oversized_recording_rejects_before_enqueue() {
         let config = test_config();
         let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
@@ -1012,12 +1185,48 @@ mod tests {
     }
 
     #[test]
+    fn limited_batch_body_rejects_oversized_uploads() {
+        let max_bytes = max_batch_body_bytes(10);
+        let mut body = Cursor::new(vec![0_u8; max_bytes as usize + 1]);
+
+        let err = read_limited_body(&mut body, max_bytes).expect_err("oversized body rejects");
+
+        assert!(err.contains("maximum upload size"));
+    }
+
+    #[test]
+    fn stream_recording_rejects_sample_rate_changes() {
+        let mut encoded = Vec::new();
+        write_test_stream_frame(16_000, &[1, 2, 3], &mut encoded);
+        write_test_stream_frame(48_000, &[4, 5, 6], &mut encoded);
+
+        let err = read_stream_recording_from_reader(&mut encoded.as_slice(), 10)
+            .expect_err("mixed sample rates reject");
+
+        assert!(err.contains("sample rate changed"));
+    }
+
+    #[test]
+    fn stream_recording_preserves_consistent_sample_rate() {
+        let mut encoded = Vec::new();
+        write_test_stream_frame(16_000, &[1, 2, 3], &mut encoded);
+        write_test_stream_frame(16_000, &[4, 5, 6], &mut encoded);
+
+        let recording =
+            read_stream_recording_from_reader(&mut encoded.as_slice(), 10).expect("recording");
+
+        assert_eq!(recording.sample_rate, 16_000);
+        assert_eq!(recording.pcm_i16, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
     fn metrics_snapshot_separates_stream_queue_and_running_work() {
         let config = HostRuntimeConfig {
             worker_count: 2,
             queue_capacity: 4,
             max_active_streams: 3,
             max_recording_seconds: 120,
+            use_gpu: true,
         };
         let mut metrics = HostMetrics::new(&config);
 
@@ -1040,6 +1249,7 @@ mod tests {
         assert_eq!(snapshot.running_jobs, 0);
         assert_eq!(snapshot.worker_count, 2);
         assert_eq!(snapshot.queue_capacity, 4);
+        assert_eq!(snapshot.max_active_streams, 3);
         assert_eq!(snapshot.total_transcriptions, 1);
         assert_eq!(snapshot.average_queue_ms, 30);
         assert_eq!(snapshot.average_processing_ms, 90);

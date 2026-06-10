@@ -106,7 +106,7 @@ interface SpeedTestCapture {
   transcribeMs: number;
   engine: string;
   model: string;
-  previewMode: "chunked" | "streaming" | "final-only" | "unknown";
+  previewMode: "chunked" | "final-only" | "unknown";
 }
 
 interface SpeedTestRecord {
@@ -181,7 +181,7 @@ function span(seconds: number): string {
 }
 
 function engineLabel(engine: string, model: string): string {
-  const name = engine === "sherpa-streaming" ? "Sherpa" : engine === "whisper" ? "Whisper" : engine;
+  const name = engine === "whisper" ? "Whisper" : engine;
   return model ? `${name} ${model}` : name;
 }
 

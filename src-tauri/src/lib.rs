@@ -1,6 +1,8 @@
 mod audio;
 mod clipboard;
 mod host;
+#[cfg(target_os = "macos")]
+mod macos_input;
 mod models;
 mod notes;
 mod post_processing;
@@ -15,10 +17,7 @@ pub use host::run_transcription_host;
 
 use audio::{AudioService, Recording};
 use clipboard::ClipboardService;
-use models::{
-    ModelPrepareProgress, ModelService, ModelStatus, SherpaModel, TranscriptionModelStatus,
-    WhisperModel,
-};
+use models::{ModelPrepareProgress, ModelService, ModelStatus, WhisperModel};
 use notes::{NewNote, Note, NotesService};
 use post_processing::apply_transcript_post_processing;
 use remote_transcription::{
@@ -27,10 +26,7 @@ use remote_transcription::{
     RemoteStreamingSession,
 };
 use serde::{Deserialize, Serialize};
-use settings::{
-    Settings, SettingsService, Snippet, TranscriptCorrection, TranscriptionBackend,
-    TranscriptionLocation,
-};
+use settings::{Settings, SettingsService, Snippet, TranscriptCorrection, TranscriptionLocation};
 use speed_test::{
     build_capture_result, SpeedTestCapture, SpeedTestRecord, SpeedTestService, SpeedTestSummary,
 };
@@ -40,7 +36,10 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State, WindowEvent};
+use std::time::Duration;
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Size, State, WindowEvent,
+};
 use transcript_history::{
     NewTranscriptHistoryItem, TranscriptHistoryItem, TranscriptHistoryService,
 };
@@ -69,6 +68,10 @@ struct AppServices {
     transcription: Mutex<TranscriptionService>,
     remote_transcription: Mutex<Option<RemoteStreamingSession>>,
     transcript_shelf_positioned: AtomicBool,
+    #[cfg(target_os = "macos")]
+    fn_push_to_talk_enabled: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    fn_push_to_talk_tap_started: AtomicBool,
 }
 
 #[derive(Serialize)]
@@ -152,7 +155,30 @@ fn save_settings(
     };
 
     let _ = app.emit("settings-updated", &normalized);
+    #[cfg(target_os = "macos")]
+    sync_fn_push_to_talk(&app, services.inner(), normalized.fn_push_to_talk);
     Ok(())
+}
+
+/// Applies the hold-Fn setting: the event tap is installed at most once per
+/// app run (installing prompts for Input Monitoring, so it only happens when
+/// the user has the feature on), and the enabled flag gates event emission so
+/// later toggles apply instantly without reinstalling.
+#[cfg(target_os = "macos")]
+fn sync_fn_push_to_talk(app: &AppHandle, services: &AppServices, enabled: bool) {
+    services
+        .fn_push_to_talk_enabled
+        .store(enabled, Ordering::SeqCst);
+    if enabled
+        && !services
+            .fn_push_to_talk_tap_started
+            .swap(true, Ordering::SeqCst)
+    {
+        macos_input::spawn_fn_push_to_talk_tap(
+            app.clone(),
+            Arc::clone(&services.fn_push_to_talk_enabled),
+        );
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -189,22 +215,19 @@ fn save_dictionary(
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptionModelRequest {
-    backend: TranscriptionBackend,
     model: Option<WhisperModel>,
-    sherpa_model: Option<SherpaModel>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelPrepareProgressEvent {
-    backend: TranscriptionBackend,
     model: String,
     stage: String,
     message: String,
     percentage: u8,
     done: bool,
     error: Option<String>,
-    status: Option<TranscriptionModelStatus>,
+    status: Option<ModelStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -249,34 +272,30 @@ fn prepare_model(
 fn get_transcription_model_status(
     request: TranscriptionModelRequest,
     services: State<'_, AppServices>,
-) -> Result<TranscriptionModelStatus, String> {
+) -> Result<ModelStatus, String> {
     let settings = services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
-    Ok(services.models.transcription_status(
-        request.backend,
-        request.model.unwrap_or(settings.model),
-        request.sherpa_model.unwrap_or(settings.sherpa_model),
-    ))
+    Ok(services
+        .models
+        .status(request.model.unwrap_or(settings.model)))
 }
 
 #[tauri::command]
 fn prepare_transcription_model(
     request: TranscriptionModelRequest,
     services: State<'_, AppServices>,
-) -> Result<TranscriptionModelStatus, String> {
+) -> Result<ModelStatus, String> {
     let settings = services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
-    services.models.prepare_transcription_model(
-        request.backend,
-        request.model.unwrap_or(settings.model),
-        request.sherpa_model.unwrap_or(settings.sherpa_model),
-    )
+    services
+        .models
+        .prepare(request.model.unwrap_or(settings.model))
 }
 
 #[tauri::command]
@@ -298,10 +317,8 @@ fn begin_prepare_transcription_model(
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
-    let backend = request.backend;
     let whisper_model = request.model.unwrap_or(settings.model);
-    let sherpa_model = request.sherpa_model.unwrap_or(settings.sherpa_model);
-    let model_id = selected_prepare_model_id(backend, whisper_model, sherpa_model).to_string();
+    let model_id = whisper_model.model_id().to_string();
     let models = services.models.clone();
     let running = Arc::clone(&services.model_prepare_running);
 
@@ -310,7 +327,6 @@ fn begin_prepare_transcription_model(
         .spawn(move || {
             emit_model_prepare_event(
                 &app,
-                backend,
                 &model_id,
                 ModelPrepareProgress {
                     stage: "starting",
@@ -322,19 +338,13 @@ fn begin_prepare_transcription_model(
                 None,
             );
 
-            let result = models.prepare_transcription_model_with_progress(
-                backend,
-                whisper_model,
-                sherpa_model,
-                |progress| {
-                    emit_model_prepare_event(&app, backend, &model_id, progress, false, None, None);
-                },
-            );
+            let result = models.prepare_with_progress(whisper_model, |progress| {
+                emit_model_prepare_event(&app, &model_id, progress, false, None, None);
+            });
 
             match result {
                 Ok(status) => emit_model_prepare_event(
                     &app,
-                    backend,
                     &model_id,
                     ModelPrepareProgress {
                         stage: "ready",
@@ -347,7 +357,6 @@ fn begin_prepare_transcription_model(
                 ),
                 Err(err) => emit_model_prepare_event(
                     &app,
-                    backend,
                     &model_id,
                     ModelPrepareProgress {
                         stage: "error",
@@ -374,17 +383,15 @@ fn begin_prepare_transcription_model(
 
 fn emit_model_prepare_event(
     app: &AppHandle,
-    backend: TranscriptionBackend,
     model: &str,
     progress: ModelPrepareProgress,
     done: bool,
     error: Option<String>,
-    status: Option<TranscriptionModelStatus>,
+    status: Option<ModelStatus>,
 ) {
     let _ = app.emit(
         "model-prepare-progress",
         ModelPrepareProgressEvent {
-            backend,
             model: model.to_string(),
             stage: progress.stage.to_string(),
             message: progress.message,
@@ -394,17 +401,6 @@ fn emit_model_prepare_event(
             status,
         },
     );
-}
-
-fn selected_prepare_model_id(
-    backend: TranscriptionBackend,
-    whisper_model: WhisperModel,
-    sherpa_model: SherpaModel,
-) -> &'static str {
-    match backend {
-        TranscriptionBackend::Whisper => whisper_model.model_id(),
-        TranscriptionBackend::SherpaStreaming => sherpa_model.model_id(),
-    }
 }
 
 #[tauri::command]
@@ -417,6 +413,58 @@ fn test_remote_transcription_host(
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
     check_remote_transcription_host(&settings)
+}
+
+/// Native window bounds (logical points) for each mini-pill layout state.
+/// Each is the visible capsule plus a 6 pt margin so the capsule's shadow is
+/// not clipped; the margin is part of the always-on-top hit area, which is why
+/// idle is kept as small as possible.
+fn pill_window_bounds(state: &str) -> Option<(f64, f64)> {
+    match state {
+        "idle" => Some((76.0, 24.0)),
+        "hover" => Some((212.0, 46.0)),
+        "recording" | "transcribing" => Some((212.0, 46.0)),
+        "copied" => Some((140.0, 46.0)),
+        "error" => Some((280.0, 46.0)),
+        _ => None,
+    }
+}
+
+/// Gap between the capsule and the bottom of the monitor work area, so the
+/// pill floats just above the Dock like the competitors' recorders.
+const PILL_BOTTOM_GAP: f64 = 12.0;
+
+/// Resizes the pill window for a layout state and re-anchors it bottom-center
+/// of the work area of whichever monitor it is currently on.
+#[tauri::command]
+fn layout_pill_window(app: AppHandle, state: String) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Pill window is not configured".to_string())?;
+    let (width, height) =
+        pill_window_bounds(&state).ok_or_else(|| format!("Unknown pill layout state: {state}"))?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "Pill window has no monitor".to_string())?;
+
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let area_x = f64::from(area.position.x) / scale;
+    let area_y = f64::from(area.position.y) / scale;
+    let area_width = f64::from(area.size.width) / scale;
+    let area_height = f64::from(area.size.height) / scale;
+
+    let x = area_x + (area_width - width) / 2.0;
+    let y = area_y + area_height - height - PILL_BOTTOM_GAP;
+
+    window
+        .set_size(Size::Logical(LogicalSize { width, height }))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_position(Position::Logical(LogicalPosition { x, y }))
+        .map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -477,11 +525,18 @@ fn hide_transcript_shelf_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_notes(services: State<'_, AppServices>) -> Result<Vec<Note>, String> {
-    services
+    let retention_minutes = services
+        .settings
+        .lock()
+        .map_err(|_| "Settings service lock failed".to_string())?
+        .current()
+        .note_retention_minutes;
+    let mut notes = services
         .notes
         .lock()
-        .map_err(|_| "Notes service lock failed".to_string())
-        .map(|notes| notes.list())
+        .map_err(|_| "Notes service lock failed".to_string())?;
+    notes.sweep_expired(retention_minutes)?;
+    Ok(notes.list())
 }
 
 #[tauri::command]
@@ -574,7 +629,9 @@ fn copy_transcript_history_item(
         .find(&id)
         .ok_or_else(|| "Transcript history item was not found".to_string())?;
 
-    services.clipboard.write_text(&item.text)?;
+    services
+        .clipboard
+        .write_text(&transcript_clipboard_text(&item.text))?;
     let _ = app.emit("transcript-copied", &item);
     Ok(item)
 }
@@ -678,8 +735,8 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         &app,
         "info",
         format!(
-            "Recording started: location={:?}, backend={:?}, gain={}x",
-            settings.transcription_location, settings.transcription_backend, settings.input_gain
+            "Recording started: location={:?}, model={:?}, gain={}x",
+            settings.transcription_location, settings.model, settings.input_gain
         ),
     );
     Ok(settings.max_recording_seconds)
@@ -703,8 +760,8 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         &app,
         "info",
         format!(
-            "Finishing transcription with location={:?}, backend={:?}",
-            settings.transcription_location, settings.transcription_backend
+            "Finishing transcription with location={:?}, model={:?}",
+            settings.transcription_location, settings.model
         ),
     );
     let raw_transcript = finish_transcription_raw(&app, &services, &recording, &settings)?;
@@ -733,12 +790,14 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         .map_err(|_| "Transcript history service lock failed".to_string())?
         .add(NewTranscriptHistoryItem {
             text: transcript.clone(),
-            backend: backend_id(settings.transcription_backend).to_string(),
+            backend: remote_transcription::BACKEND_ID.to_string(),
             location: location_id(settings.transcription_location).to_string(),
             duration_seconds: stats.duration_seconds,
         })?;
 
-    services.clipboard.write_text(&transcript)?;
+    services
+        .clipboard
+        .write_text(&transcript_clipboard_text(&transcript))?;
     let _ = app.emit(
         "transcript-history-updated",
         TranscriptHistoryUpdatedEvent {
@@ -746,6 +805,11 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         },
     );
     emit_backend_event(&app, "info", "Transcript copied to clipboard");
+
+    #[cfg(target_os = "macos")]
+    if settings.insert_at_cursor && !transcript.is_empty() {
+        deliver_transcript_at_cursor(&app);
+    }
 
     // Usage stats are best-effort: a stats write must never fail the dictation
     // the user just completed.
@@ -768,6 +832,67 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
     }
 
     Ok(transcript)
+}
+
+/// Pastes the freshly copied transcript into whichever app the user is
+/// dictating into. Skipped when one of our own windows is focused (the paste
+/// would land in Multivoice itself); every other failure is surfaced as a
+/// backend event because the user is otherwise left wondering why no text
+/// appeared.
+#[cfg(target_os = "macos")]
+fn deliver_transcript_at_cursor(app: &AppHandle) {
+    let our_window_focused = app
+        .webview_windows()
+        .values()
+        .any(|window| window.is_focused().unwrap_or(false));
+    if our_window_focused {
+        emit_backend_event(
+            app,
+            "info",
+            "Insert at cursor skipped while a Multivoice window is focused; transcript is on the clipboard",
+        );
+        return;
+    }
+
+    match macos_input::paste_clipboard_at_cursor() {
+        Ok(()) => emit_backend_event(app, "info", "Transcript inserted at cursor"),
+        Err(err) => emit_backend_event(
+            app,
+            "warning",
+            format!("Insert at cursor failed ({err}); transcript is on the clipboard"),
+        ),
+    }
+}
+
+fn transcript_clipboard_text(transcript: &str) -> String {
+    let trimmed = transcript.trim_end();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed} ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transcript_clipboard_text;
+
+    #[test]
+    fn transcript_clipboard_text_adds_single_trailing_space() {
+        assert_eq!(
+            transcript_clipboard_text("First recording."),
+            "First recording. "
+        );
+        assert_eq!(
+            transcript_clipboard_text("First recording.   "),
+            "First recording. "
+        );
+    }
+
+    #[test]
+    fn transcript_clipboard_text_preserves_empty_transcript() {
+        assert_eq!(transcript_clipboard_text("   "), "");
+    }
 }
 
 /// Stop audio capture and reject recordings that are too short or silent.
@@ -1041,7 +1166,7 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
     Ok(())
 }
 
-fn emit_backend_event(app: &AppHandle, level: &'static str, message: impl Into<String>) {
+pub(crate) fn emit_backend_event(app: &AppHandle, level: &'static str, message: impl Into<String>) {
     let id = BACKEND_EVENT_ID.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit(
         "backend-event",
@@ -1073,11 +1198,33 @@ fn start_transcript_preview_forwarder(app: AppHandle) -> TranscriptionPreviewSen
     tx
 }
 
-fn backend_id(backend: TranscriptionBackend) -> &'static str {
-    match backend {
-        TranscriptionBackend::Whisper => "whisper",
-        TranscriptionBackend::SherpaStreaming => "sherpa-streaming",
-    }
+/// Apply the note-retention setting while the app sits idle, so expired
+/// notes disappear without waiting for the notes screen to reload them.
+fn start_note_retention_sweeper(app: AppHandle) {
+    thread::Builder::new()
+        .name("note-retention-sweeper".to_string())
+        .spawn(move || loop {
+            thread::sleep(Duration::from_secs(60));
+            let services = app.state::<AppServices>();
+            let retention_minutes = services
+                .settings
+                .lock()
+                .map(|service| service.current().note_retention_minutes)
+                .unwrap_or(0);
+            if retention_minutes == 0 {
+                continue;
+            }
+            let removed = services
+                .notes
+                .lock()
+                .ok()
+                .and_then(|mut notes| notes.sweep_expired(retention_minutes).ok())
+                .unwrap_or(false);
+            if removed {
+                let _ = app.emit("notes-updated", ());
+            }
+        })
+        .ok();
 }
 
 fn location_id(location: TranscriptionLocation) -> &'static str {
@@ -1144,7 +1291,7 @@ pub fn run() {
         })
         .manage(AppServices {
             audio: Mutex::new(AudioService::default()),
-            clipboard: ClipboardService::default(),
+            clipboard: ClipboardService,
             models: ModelService::default(),
             model_prepare_running: Arc::new(AtomicBool::new(false)),
             transcription_cancel_requested: Arc::new(AtomicBool::new(false)),
@@ -1157,6 +1304,28 @@ pub fn run() {
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
             transcript_shelf_positioned: AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            fn_push_to_talk_enabled: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "macos")]
+            fn_push_to_talk_tap_started: AtomicBool::new(false),
+        })
+        .setup(|app| {
+            let handle = app.handle();
+            if let Err(err) = layout_pill_window(handle.clone(), "idle".to_string()) {
+                emit_backend_event(handle, "warning", format!("Could not position pill: {err}"));
+            }
+            start_note_retention_sweeper(handle.clone());
+            #[cfg(target_os = "macos")]
+            {
+                let services = app.state::<AppServices>();
+                let fn_enabled = services
+                    .settings
+                    .lock()
+                    .map(|service| service.current().fn_push_to_talk)
+                    .unwrap_or(false);
+                sync_fn_push_to_talk(handle, services.inner(), fn_enabled);
+            }
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_app_status,
@@ -1169,6 +1338,7 @@ pub fn run() {
             prepare_transcription_model,
             begin_prepare_transcription_model,
             test_remote_transcription_host,
+            layout_pill_window,
             open_home_window,
             show_transcript_shelf_window,
             hide_transcript_shelf_window,

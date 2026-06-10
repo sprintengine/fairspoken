@@ -79,94 +79,45 @@ impl AudioService {
         let channels = supported_config.channels() as usize;
         let config: StreamConfig = supported_config.clone().into();
         let input_gain = input_gain.clamp(1, 6) as f32;
-        let max_samples = sample_rate as usize * usize::from(max_recording_seconds.max(1).min(300));
+        let max_samples = sample_rate as usize * usize::from(max_recording_seconds.clamp(1, 600));
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(
             sample_rate as usize
                 * usize::from(DEFAULT_MAX_RECORDING_SECONDS.min(max_recording_seconds)),
         )));
         let dropped_stream_frames = Arc::new(AtomicU64::new(0));
+        let capture_config = InputCaptureConfig {
+            channels,
+            input_gain,
+            max_samples,
+            buffer: &buffer,
+            dropped_stream_frames: &dropped_stream_frames,
+        };
 
         let stream = match supported_config.sample_format() {
-            SampleFormat::F32 => build_input_stream::<f32>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::F64 => build_input_stream::<f64>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::I8 => build_input_stream::<i8>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::I16 => build_input_stream::<i16>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::I32 => build_input_stream::<i32>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::U8 => build_input_stream::<u8>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::U16 => build_input_stream::<u16>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
-            SampleFormat::U32 => build_input_stream::<u32>(
-                &device,
-                &config,
-                channels,
-                input_gain,
-                max_samples,
-                &buffer,
-                &dropped_stream_frames,
-                stream_sink,
-            ),
+            SampleFormat::F32 => {
+                build_input_stream::<f32>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::F64 => {
+                build_input_stream::<f64>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::I8 => {
+                build_input_stream::<i8>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::I16 => {
+                build_input_stream::<i16>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::I32 => {
+                build_input_stream::<i32>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::U8 => {
+                build_input_stream::<u8>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::U16 => {
+                build_input_stream::<u16>(&device, &config, capture_config, stream_sink)
+            }
+            SampleFormat::U32 => {
+                build_input_stream::<u32>(&device, &config, capture_config, stream_sink)
+            }
             other => Err(format!("Unsupported input sample format: {other:?}")),
         }?;
 
@@ -355,22 +306,21 @@ impl ToI16Sample for u32 {
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
-    channels: usize,
-    input_gain: f32,
-    max_samples: usize,
-    buffer: &Arc<Mutex<Vec<i16>>>,
-    dropped_stream_frames: &Arc<AtomicU64>,
+    capture: InputCaptureConfig<'_>,
     stream_sink: Option<SyncSender<AudioFrame>>,
 ) -> Result<Stream, String>
 where
     T: ToI16Sample + cpal::SizedSample + Copy + Send + 'static,
 {
-    let buffer = Arc::clone(buffer);
+    let buffer = Arc::clone(capture.buffer);
     let captured_samples = Arc::new(AtomicUsize::new(0));
-    let dropped_stream_frames = Arc::clone(dropped_stream_frames);
+    let dropped_stream_frames = Arc::clone(capture.dropped_stream_frames);
     let err_fn = |err| eprintln!("Audio input stream error: {err}");
     let sink = stream_sink;
     let sample_rate = config.sample_rate;
+    let channels = capture.channels;
+    let input_gain = capture.input_gain;
+    let max_samples = capture.max_samples;
     let mut chunk = Vec::new();
 
     device
@@ -419,6 +369,15 @@ where
             None,
         )
         .map_err(|err| format!("Failed to build audio input stream: {err}"))
+}
+
+#[derive(Clone, Copy)]
+struct InputCaptureConfig<'a> {
+    channels: usize,
+    input_gain: f32,
+    max_samples: usize,
+    buffer: &'a Arc<Mutex<Vec<i16>>>,
+    dropped_stream_frames: &'a Arc<AtomicU64>,
 }
 
 fn append_mono_samples<T>(

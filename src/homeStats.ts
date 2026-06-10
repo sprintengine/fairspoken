@@ -19,6 +19,8 @@ interface UsageStatsSummary {
   timeSavedSeconds: number;
   typingWpm: number;
   speakingWpm: number;
+  moneySavedUsd: number;
+  cloudRateUsdPerMinute: number;
   currentStreak: number;
   bestStreak: number;
   thisWeekWords: number;
@@ -47,6 +49,8 @@ const statWeekDelta = byId("statWeekDelta");
 const statStreak = byId("statStreak");
 const statBestStreak = byId("statBestStreak");
 const statWpm = byId("statWpm");
+const statMoneySaved = byId("statMoneySaved");
+const statMoneySavedMeta = byId("statMoneySavedMeta");
 const statChart = byId("statChart");
 const statRecent = byId("statRecent");
 const statViewAll = document.getElementById("statViewAll");
@@ -64,6 +68,11 @@ function formatDuration(seconds: number): string {
   const minutes = Math.round((total % 3600) / 60);
   if (hours > 0) return `${hours} h ${minutes} m`;
   return `${minutes} m`;
+}
+
+function formatMoney(usd: number): string {
+  if (usd > 0 && usd < 0.005) return "<$0.01";
+  return `$${usd.toFixed(2)}`;
 }
 
 function weekDeltaLabel(thisWeek: number, lastWeek: number): string {
@@ -118,6 +127,9 @@ function renderStats(summary: UsageStatsSummary): void {
   statStreak.textContent = String(summary.currentStreak);
   statBestStreak.textContent = `best ${summary.bestStreak}`;
   statWpm.textContent = String(summary.speakingWpm);
+  statMoneySaved.textContent = formatMoney(summary.moneySavedUsd);
+  statMoneySavedMeta.textContent =
+    `vs cloud transcription ($${summary.cloudRateUsdPerMinute.toFixed(3)}/min)`;
 
   renderChart(summary.week);
 }
@@ -206,6 +218,8 @@ function emptyStats(): UsageStatsSummary {
     timeSavedSeconds: 0,
     typingWpm: TYPING_WPM,
     speakingWpm: 0,
+    moneySavedUsd: 0,
+    cloudRateUsdPerMinute: 0.006,
     currentStreak: 0,
     bestStreak: 0,
     thisWeekWords: 0,

@@ -11,6 +11,7 @@ This app is intentionally separate from the Electron app. The goal is a lighter 
 - Native CPAL capture is wired for the default microphone.
 - Recording has too-short and silence guards before transcription.
 - whisper-rs is wired for local whisper.cpp ggml model inference.
+- macOS builds run Whisper on the GPU (Metal + flash attention); Windows/Linux stay CPU-only. This covers the desktop app and the transcription host.
 - Model preparation downloads ggml models from the whisper.cpp Hugging Face repository and verifies SHA1 checksums.
 - Settings persist to the OS app data directory.
 - Clipboard writes are verified after transcription.
@@ -72,7 +73,12 @@ MULTIVOICE_HOST_MAX_ACTIVE_STREAMS=4
 MULTIVOICE_HOST_MAX_RECORDING_SECONDS=120
 ```
 
-In the desktop settings, set `Transcription` location to `Remote host`, enter the host URL, and choose either `Whisper` or `Sherpa streaming`. The client streams mono PCM frames while recording; the host uses the requested backend/model and returns the final transcript for clipboard copy.
+Streaming clients keep the transcription request open until the queued job
+finishes and the host returns one final JSON transcript. Connection setup still
+uses the configured remote timeout, but queued streams are not cut off by a
+fixed read timeout while waiting for a worker.
+
+In the desktop settings, set `Transcription` location to `Remote host`, enter the host URL, and choose a Whisper model. The client streams mono PCM frames while recording; the host uses the requested model and returns the final transcript for clipboard copy.
 
 For a dedicated Mac mini setup and benchmark checklist, see
 `docs/mac-mini-transcription-host.md`.

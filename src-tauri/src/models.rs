@@ -1,5 +1,3 @@
-use crate::settings::TranscriptionBackend;
-use bzip2::read::BzDecoder;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -7,11 +5,8 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use tar::Archive;
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
-const SHERPA_MODEL_BASE_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -25,28 +20,10 @@ pub enum WhisperModel {
     LargeV3Turbo,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SherpaModel {
-    #[serde(rename = "streaming-zipformer-en-2023-06-26-int8")]
-    #[serde(alias = "streaming-zipformer-en20230626-int8")]
-    StreamingZipformerEn20230626Int8,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
     pub model: WhisperModel,
-    pub cached: bool,
-    pub message: String,
-    pub model_path: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscriptionModelStatus {
-    pub backend: TranscriptionBackend,
-    pub model: String,
     pub cached: bool,
     pub message: String,
     pub model_path: String,
@@ -90,82 +67,11 @@ impl ModelService {
         }
     }
 
-    pub fn transcription_status(
-        &self,
-        backend: TranscriptionBackend,
-        whisper_model: WhisperModel,
-        sherpa_model: SherpaModel,
-    ) -> TranscriptionModelStatus {
-        match backend {
-            TranscriptionBackend::Whisper => {
-                let status = self.status(whisper_model);
-                TranscriptionModelStatus {
-                    backend,
-                    model: whisper_model.model_id().to_string(),
-                    cached: status.cached,
-                    message: status.message,
-                    model_path: status.model_path,
-                }
-            }
-            TranscriptionBackend::SherpaStreaming => {
-                let status = self.sherpa_status(sherpa_model);
-                TranscriptionModelStatus {
-                    backend,
-                    model: sherpa_model.model_id().to_string(),
-                    cached: status.cached,
-                    message: status.message,
-                    model_path: status.model_path,
-                }
-            }
-        }
-    }
-
-    pub fn prepare_transcription_model(
-        &self,
-        backend: TranscriptionBackend,
-        whisper_model: WhisperModel,
-        sherpa_model: SherpaModel,
-    ) -> Result<TranscriptionModelStatus, String> {
-        self.prepare_transcription_model_with_progress(backend, whisper_model, sherpa_model, |_| {})
-    }
-
-    pub fn prepare_transcription_model_with_progress(
-        &self,
-        backend: TranscriptionBackend,
-        whisper_model: WhisperModel,
-        sherpa_model: SherpaModel,
-        mut progress: impl FnMut(ModelPrepareProgress),
-    ) -> Result<TranscriptionModelStatus, String> {
-        match backend {
-            TranscriptionBackend::Whisper => {
-                let status = self.prepare_with_progress(whisper_model, |event| progress(event))?;
-                Ok(TranscriptionModelStatus {
-                    backend,
-                    model: whisper_model.model_id().to_string(),
-                    cached: status.cached,
-                    message: status.message,
-                    model_path: status.model_path,
-                })
-            }
-            TranscriptionBackend::SherpaStreaming => {
-                let status =
-                    self.prepare_sherpa_with_progress(sherpa_model, |event| progress(event))?;
-                Ok(TranscriptionModelStatus {
-                    backend,
-                    model: sherpa_model.model_id().to_string(),
-                    cached: status.cached,
-                    message: status.message,
-                    model_path: status.model_path,
-                })
-            }
-        }
-    }
-
     pub fn prepare(&self, model: WhisperModel) -> Result<ModelStatus, String> {
         self.prepare_with_progress(model, |_| {})
     }
 
-    fn prepare_with_progress(
+    pub fn prepare_with_progress(
         &self,
         model: WhisperModel,
         mut progress: impl FnMut(ModelPrepareProgress),
@@ -217,155 +123,6 @@ impl ModelService {
     pub fn path_for(&self, model: WhisperModel) -> PathBuf {
         self.base_dir.join(model.file_name())
     }
-
-    pub fn sherpa_paths(&self, model: SherpaModel) -> SherpaModelPaths {
-        sherpa_paths_for_dir(self.base_dir.join(model.directory_name()), model)
-    }
-
-    fn sherpa_status_for_dir(&self, model: SherpaModel, dir: PathBuf) -> ModelStatusLike {
-        let paths = sherpa_paths_for_dir(dir, model);
-        let validation = validate_sherpa_model_dir(model, &paths.dir);
-        ModelStatusLike {
-            cached: validation.is_ok(),
-            message: validation.unwrap_or_else(|err| err),
-            model_path: paths.dir.display().to_string(),
-        }
-    }
-
-    fn sherpa_status(&self, model: SherpaModel) -> ModelStatusLike {
-        self.sherpa_status_for_dir(model, self.base_dir.join(model.directory_name()))
-    }
-
-    fn prepare_sherpa_with_progress(
-        &self,
-        model: SherpaModel,
-        mut progress: impl FnMut(ModelPrepareProgress),
-    ) -> Result<ModelStatusLike, String> {
-        let status = self.sherpa_status(model);
-        if status.cached {
-            progress(ModelPrepareProgress {
-                stage: "ready",
-                message: status.message.clone(),
-                percentage: 100,
-            });
-            return Ok(status);
-        }
-
-        fs::create_dir_all(&self.base_dir)
-            .map_err(|err| format!("Failed to create model directory: {err}"))?;
-
-        let url = format!("{SHERPA_MODEL_BASE_URL}/{}", model.archive_name());
-        let archive_path = self.base_dir.join(model.archive_name());
-        let temp_dir = self
-            .base_dir
-            .join(format!("{}.download", model.directory_name()));
-        let final_dir = self.base_dir.join(model.directory_name());
-
-        let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(&temp_dir)
-            .map_err(|err| format!("Failed to create Sherpa model unpack directory: {err}"))?;
-        if !archive_path.is_file() {
-            download_to_file_with_progress(&url, &archive_path, |percentage| {
-                progress(ModelPrepareProgress {
-                    stage: "downloading",
-                    message: "Downloading Sherpa model archive".to_string(),
-                    percentage,
-                })
-            })?;
-        } else {
-            progress(ModelPrepareProgress {
-                stage: "downloading",
-                message: "Using existing Sherpa model archive".to_string(),
-                percentage: 70,
-            });
-        }
-        progress(ModelPrepareProgress {
-            stage: "unpacking",
-            message: "Unpacking Sherpa model archive".to_string(),
-            percentage: 75,
-        });
-        if let Err(err) = unpack_tar_bz2(&archive_path, &temp_dir) {
-            let _ = fs::remove_file(&archive_path);
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(err);
-        }
-        let _ = fs::remove_file(&archive_path);
-
-        let unpacked_dir = temp_dir.join(model.directory_name());
-        progress(ModelPrepareProgress {
-            stage: "validating",
-            message: "Validating Sherpa model files".to_string(),
-            percentage: 90,
-        });
-        let temp_status = self.sherpa_status_for_dir(model, unpacked_dir.clone());
-        if !temp_status.cached {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(temp_status.message);
-        }
-
-        let _ = fs::remove_dir_all(&final_dir);
-        fs::rename(&unpacked_dir, &final_dir)
-            .map_err(|err| format!("Failed to install Sherpa model files: {err}"))?;
-        let _ = fs::remove_dir_all(&temp_dir);
-
-        let status = self.sherpa_status(model);
-        progress(ModelPrepareProgress {
-            stage: "ready",
-            message: status.message.clone(),
-            percentage: 100,
-        });
-        Ok(status)
-    }
-}
-
-pub struct SherpaModelPaths {
-    pub dir: PathBuf,
-    pub encoder: PathBuf,
-    pub decoder: PathBuf,
-    pub joiner: PathBuf,
-    pub tokens: PathBuf,
-}
-
-struct ModelStatusLike {
-    cached: bool,
-    message: String,
-    model_path: String,
-}
-
-struct SherpaRequiredFile {
-    name: &'static str,
-    min_bytes: u64,
-}
-
-fn sherpa_paths_for_dir(dir: PathBuf, model: SherpaModel) -> SherpaModelPaths {
-    SherpaModelPaths {
-        dir: dir.clone(),
-        encoder: dir.join(model.encoder_file()),
-        decoder: dir.join(model.decoder_file()),
-        joiner: dir.join(model.joiner_file()),
-        tokens: dir.join("tokens.txt"),
-    }
-}
-
-fn validate_sherpa_model_dir(model: SherpaModel, dir: &Path) -> Result<String, String> {
-    for file in model.required_files() {
-        let path = dir.join(file.name);
-        if !path.is_file() {
-            return Err(format!("Missing Sherpa model file: {}", path.display()));
-        }
-
-        let len = fs::metadata(&path)
-            .map_err(|err| format!("Failed to inspect Sherpa model file: {err}"))?
-            .len();
-        if len < file.min_bytes {
-            return Err(format!(
-                "Sherpa model file failed size validation: {}",
-                path.display()
-            ));
-        }
-    }
-
-    Ok("Sherpa model files are available".to_string())
 }
 
 impl WhisperModel {
@@ -418,62 +175,6 @@ impl WhisperModel {
                 "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
             ),
         }
-    }
-}
-
-impl SherpaModel {
-    pub fn from_model_id(model_id: &str) -> Option<Self> {
-        match model_id {
-            "streaming-zipformer-en-2023-06-26-int8" | "streaming-zipformer-en20230626-int8" => {
-                Some(Self::StreamingZipformerEn20230626Int8)
-            }
-            _ => None,
-        }
-    }
-
-    pub fn model_id(self) -> &'static str {
-        "streaming-zipformer-en-2023-06-26-int8"
-    }
-
-    fn directory_name(self) -> &'static str {
-        "sherpa-onnx-streaming-zipformer-en-2023-06-26"
-    }
-
-    fn archive_name(self) -> &'static str {
-        "sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2"
-    }
-
-    fn encoder_file(self) -> &'static str {
-        "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
-    }
-
-    fn decoder_file(self) -> &'static str {
-        "decoder-epoch-99-avg-1-chunk-16-left-128.onnx"
-    }
-
-    fn joiner_file(self) -> &'static str {
-        "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
-    }
-
-    fn required_files(self) -> &'static [SherpaRequiredFile] {
-        &[
-            SherpaRequiredFile {
-                name: "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
-                min_bytes: 60 * 1024 * 1024,
-            },
-            SherpaRequiredFile {
-                name: "decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
-                min_bytes: 1 * 1024 * 1024,
-            },
-            SherpaRequiredFile {
-                name: "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
-                min_bytes: 200 * 1024,
-            },
-            SherpaRequiredFile {
-                name: "tokens.txt",
-                min_bytes: 4 * 1024,
-            },
-        ]
     }
 }
 
@@ -535,36 +236,6 @@ fn download_to_file_with_progress(
         }
     }
     progress(70);
-    Ok(())
-}
-
-fn unpack_tar_bz2(archive_path: &Path, target_dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(target_dir)
-        .map_err(|err| format!("Failed to create archive unpack directory: {err}"))?;
-    let file = File::open(archive_path)
-        .map_err(|err| format!("Failed to open Sherpa model archive: {err}"))?;
-    let decoder = BzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
-
-    for entry in archive
-        .entries()
-        .map_err(|err| format!("Failed to read Sherpa model archive: {err}"))?
-    {
-        let mut entry = entry.map_err(|err| format!("Failed to read archive entry: {err}"))?;
-        let path = entry
-            .path()
-            .map_err(|err| format!("Failed to read archive entry path: {err}"))?;
-        if path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            return Err("Sherpa model archive contains an unsafe path".to_string());
-        }
-        entry
-            .unpack_in(target_dir)
-            .map_err(|err| format!("Failed to unpack Sherpa model archive: {err}"))?;
-    }
-
     Ok(())
 }
 

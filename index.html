@@ -4,62 +4,44 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>multivoice</title>
-  <link rel="stylesheet" href="/src/styles.css" />
+  <link rel="stylesheet" href="/src/pill.css" />
   <script type="module" src="/src/main.ts" defer></script>
 </head>
-<body>
+<body data-pill="idle">
   <div class="window" id="app">
-    <div class="bar" id="titlebar" title="Click to show copied messages">
-      <button
-        class="logo-btn"
-        id="recordBtn"
-        aria-label="Start recording"
-        aria-pressed="false"
-        title="Click to record"
-      >
-        <span class="logo-ring" aria-hidden="true"></span>
-        <img class="logo-img" src="/logo.png" alt="" draggable="false" />
-        <span class="stop-overlay" aria-hidden="true">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/>
-          </svg>
-        </span>
-      </button>
-
-      <div class="info">
-        <span class="brand">multivoice</span>
-        <span class="status-line">
-          <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-          <span class="status-label" id="statusLabel" role="status" aria-live="polite">Ready</span>
-          <span class="timer" id="timer" aria-label="Recording duration" aria-live="polite"></span>
-        </span>
-      </div>
-
-      <span class="copy-indicator" id="copyIndicator" aria-label="Copied" aria-hidden="true" title="Copied">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M8 7.5V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          <rect x="5" y="8" width="10" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/>
-          <path d="m8.2 14.2 2 2 3.8-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+    <button
+      class="pill"
+      id="recordBtn"
+      aria-label="Start recording"
+      aria-pressed="false"
+      title="Click to record"
+    >
+      <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+      <span class="wave" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
       </span>
+      <span class="brand" aria-hidden="true">multivoice</span>
+      <span class="pill-label" id="statusLabel" role="status" aria-live="polite">Ready</span>
+      <span class="timer" id="timer" aria-label="Recording duration" aria-live="polite"></span>
+      <kbd class="pill-hint" id="pillHint" aria-hidden="true"></kbd>
+      <span class="progress" aria-hidden="true"></span>
+    </button>
 
-      <button class="settings-btn" id="settingsBtn" aria-label="Open settings" title="Settings">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M9.6 3.7 10 2h4l.4 1.7a8.2 8.2 0 0 1 1.8.8l1.5-.9 2.8 2.8-.9 1.5c.3.6.6 1.2.8 1.8L22 10v4l-1.7.4a8.2 8.2 0 0 1-.8 1.8l.9 1.5-2.8 2.8-1.5-.9a8.2 8.2 0 0 1-1.8.8L14 22h-4l-.4-1.7a8.2 8.2 0 0 1-1.8-.8l-1.5.9-2.8-2.8.9-1.5a8.2 8.2 0 0 1-.8-1.8L2 14v-4l1.7-.4c.2-.6.4-1.2.8-1.8l-.9-1.5 2.8-2.8 1.5.9c.5-.3 1.1-.5 1.7-.7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/>
-        </svg>
-        <span class="settings-event-badge" id="settingsEventBadge" aria-hidden="true"></span>
-      </button>
+    <button class="settings-btn" id="settingsBtn" aria-label="Open settings" title="Settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M9.6 3.7 10 2h4l.4 1.7a8.2 8.2 0 0 1 1.8.8l1.5-.9 2.8 2.8-.9 1.5c.3.6.6 1.2.8 1.8L22 10v4l-1.7.4a8.2 8.2 0 0 1-.8 1.8l.9 1.5-2.8 2.8-1.5-.9a8.2 8.2 0 0 1-1.8.8L14 22h-4l-.4-1.7a8.2 8.2 0 0 1-1.8-.8l-1.5.9-2.8-2.8.9-1.5a8.2 8.2 0 0 1-.8-1.8L2 14v-4l1.7-.4c.2-.6.4-1.2.8-1.8l-.9-1.5 2.8-2.8 1.5.9c.5-.3 1.1-.5 1.7-.7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+      <span class="settings-event-badge" id="settingsEventBadge" aria-hidden="true"></span>
+    </button>
+
+    <!-- Hidden render targets: the live preview and copied-message stack are
+         displayed by the transcript-shelf window; main.ts still tracks their
+         state here so shelf toggling and copy events stay in sync. -->
+    <div hidden aria-hidden="true">
+      <div id="liveTranscriptBubble" hidden><div id="liveTranscriptText"></div></div>
+      <div id="transcriptShelf"></div>
     </div>
-
-    <section class="transcript-overlay" id="transcriptOverlay" aria-label="Transcript clips">
-      <div class="live-transcript-bubble" id="liveTranscriptBubble" aria-live="polite" hidden>
-        <div class="live-transcript-text" id="liveTranscriptText"></div>
-      </div>
-      <div class="transcript-shelf" id="transcriptShelf" aria-live="polite"></div>
-    </section>
-
-    <div class="toast-container" id="toastContainer" aria-live="assertive" aria-atomic="true"></div>
   </div>
 </body>
 </html>

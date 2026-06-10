@@ -12,7 +12,7 @@ import { compareTranscript, type TranscriptComparison } from "./transcriptCompar
 // sits beside. Scoring is the shared word-level alignment in transcriptCompare,
 // the same primitive the speed test's speaking leg uses.
 
-type PreviewMode = "chunked" | "streaming" | "final-only" | "unknown";
+type PreviewMode = "chunked" | "final-only" | "unknown";
 
 // Mirrors the Rust `SpeedTestCapture` returned by `stop_voice_test_capture`.
 interface VoiceTestCapture {
@@ -34,9 +34,7 @@ interface TranscriptPreviewEvent {
 // We read only the fields we need from the full settings payload.
 interface VoiceSettings {
   transcriptionLocation: "local" | "remote-host";
-  transcriptionBackend: "whisper" | "sherpa-streaming";
   model: string;
-  sherpaModel: string;
 }
 
 interface BackendInfo {
@@ -85,15 +83,13 @@ function secs(value: number): string {
 }
 
 function engineDisplay(engine: string): string {
-  return engine === "sherpa-streaming" ? "Sherpa" : engine === "whisper" ? "Whisper" : engine;
+  return engine === "whisper" ? "Whisper" : engine;
 }
 
 function previewModeLabel(mode: PreviewMode): string {
   switch (mode) {
     case "chunked":
       return "chunked preview";
-    case "streaming":
-      return "streaming preview";
     case "final-only":
       return "final-only";
     default:
@@ -104,8 +100,7 @@ function previewModeLabel(mode: PreviewMode): string {
 /** The same local-settings → preview-mode mapping the backend uses, so the live
  *  label during recording matches the mode reported on the final capture. */
 function inferPreviewMode(settings: VoiceSettings): PreviewMode {
-  if (settings.transcriptionLocation === "remote-host") return "final-only";
-  return settings.transcriptionBackend === "sherpa-streaming" ? "streaming" : "chunked";
+  return settings.transcriptionLocation === "remote-host" ? "final-only" : "chunked";
 }
 
 // ── Controller ───────────────────────────────────────────────────────────
@@ -170,11 +165,8 @@ export function createVoiceAccuracyTest(opts: {
     try {
       const settings = await invoke<VoiceSettings>("get_settings");
       backend = {
-        engine: settings.transcriptionBackend,
-        model:
-          settings.transcriptionBackend === "sherpa-streaming"
-            ? settings.sherpaModel
-            : settings.model,
+        engine: "whisper",
+        model: settings.model,
         location: settings.transcriptionLocation,
         previewMode: inferPreviewMode(settings),
       };

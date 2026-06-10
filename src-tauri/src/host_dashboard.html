@@ -112,6 +112,7 @@
   .stat-value[data-active="true"] { color: var(--accent); }
   .stat-value .unit { font-size: var(--fs-body); font-weight: 500; color: var(--text-muted); margin-left: 1px; }
   .stat-meta { color: var(--text-muted); font-size: var(--fs-micro); margin-top: 4px; min-height: 14px; }
+  .stat-meta[data-active="true"] { color: var(--accent); }
 
   @media (max-width: 560px) {
     .stats { grid-template-columns: 1fr; gap: 14px; }
@@ -127,7 +128,7 @@
   .rows { display: flex; flex-direction: column; }
   .row {
     display: grid;
-    grid-template-columns: 72px 52px minmax(0, 1fr) auto;
+    grid-template-columns: 72px 52px minmax(0, 1fr) 112px;
     align-items: baseline; gap: 14px;
     padding: 9px 0; border-top: 1px solid var(--border);
   }
@@ -301,6 +302,12 @@
     return `${s.toFixed(1)}s`;
   };
 
+  const formatMillis = (ms) => {
+    const value = Math.max(0, Math.round(ms));
+    if (value >= 1000) return `${(value / 1000).toFixed(1)}s`;
+    return `${value}ms`;
+  };
+
   const formatClock = (ms) => {
     if (!ms) return "—";
     const d = new Date(ms);
@@ -363,7 +370,11 @@
 
       const duration = document.createElement("span");
       duration.className = "row-duration";
-      duration.textContent = formatDuration(r.durationSeconds || 0);
+      duration.textContent = [
+        formatDuration(r.durationSeconds || 0),
+        `q ${formatMillis(r.queueWaitMs || 0)}`,
+        `p ${formatMillis(r.processingMs || 0)}`,
+      ].join(" · ");
 
       row.append(time, source, model, duration);
       frag.appendChild(row);
@@ -384,26 +395,32 @@
     const running = stats.runningJobs || 0;
     const workers = stats.workerCount || 0;
     const capacity = stats.queueCapacity || 0;
+    const maxStreams = stats.maxActiveStreams || 0;
     const rejected = stats.rejectedJobs || 0;
     const failed = stats.failedJobs || 0;
+    const averageQueue = stats.averageQueueMs || 0;
+    const averageProcessing = stats.averageProcessingMs || 0;
     const live = streams > 0 || queued > 0 || running > 0;
 
     el.activeValue.textContent = String(streams);
     el.activeValue.setAttribute("data-active", streams > 0 ? "true" : "false");
     el.activeDot.setAttribute("data-active", live ? "true" : "false");
-    el.activeMeta.textContent = running > 0 ? `${running} running` : "active";
+    el.activeMeta.textContent = maxStreams ? `limit ${maxStreams}` : "active";
 
     el.queuedValue.textContent = String(queued);
     el.queuedValue.setAttribute("data-active", queued > 0 ? "true" : "false");
-    el.queuedMeta.textContent = capacity ? `capacity ${capacity}` : "waiting";
+    el.queuedMeta.textContent = capacity
+      ? `capacity ${capacity} · avg ${formatMillis(averageQueue)}`
+      : `avg ${formatMillis(averageQueue)}`;
 
     el.runningValue.textContent = String(running);
     el.runningValue.setAttribute("data-active", running > 0 ? "true" : "false");
-    el.runningMeta.textContent = workers === 1 ? "1 worker" : `${workers} workers`;
+    el.runningMeta.textContent = `${workers === 1 ? "1 worker" : `${workers} workers`} · avg ${formatMillis(averageProcessing)}`;
 
     el.rejectedValue.textContent = String(rejected);
-    el.rejectedValue.setAttribute("data-active", rejected > 0 || failed > 0 ? "true" : "false");
+    el.rejectedValue.setAttribute("data-active", rejected > 0 ? "true" : "false");
     el.healthMeta.textContent = `${failed} failed`;
+    el.healthMeta.setAttribute("data-active", failed > 0 ? "true" : "false");
 
     el.totalValue.textContent = String(stats.totalTranscriptions || 0);
 

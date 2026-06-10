@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isRegistered, register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
 import { playRecordingStartSound, playRecordingStopSound, preloadInteractionSounds, setInteractionSoundsEnabled } from "./sounds";
@@ -46,6 +45,8 @@ interface ShortcutSettings {
   interactionSounds: boolean;
 }
 
+type PillLayout = "idle" | "hover" | "recording" | "transcribing" | "copied" | "error";
+
 const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
 const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
 const STACK_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit2", "CommandOrControl+Shift+2", "Command+Shift+Digit2", "Command+Shift+2"];
@@ -56,14 +57,11 @@ const DEFAULT_SHORTCUT_SETTINGS: ShortcutSettings = {
   transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
   interactionSounds: true,
 };
-const PILL_DRAG_THRESHOLD_PX = 4;
 
-const app = required<HTMLElement>("app");
-const titlebar = required<HTMLElement>("titlebar");
 const recordBtn = required<HTMLButtonElement>("recordBtn");
 const settingsBtn = required<HTMLButtonElement>("settingsBtn");
 const settingsEventBadge = required<HTMLElement>("settingsEventBadge");
-const copyIndicator = required<HTMLElement>("copyIndicator");
+const pillHint = required<HTMLElement>("pillHint");
 const statusLabel = required<HTMLElement>("statusLabel");
 const timerEl = required<HTMLElement>("timer");
 const liveTranscriptBubble = required<HTMLElement>("liveTranscriptBubble");
@@ -73,8 +71,10 @@ const transcriptShelf = required<HTMLElement>("transcriptShelf");
 let appState: AppState = "idle";
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let maxRecordingTimer: ReturnType<typeof setTimeout> | null = null;
-let copyIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
 let copiedStatusTimer: ReturnType<typeof setTimeout> | null = null;
+let copiedShowing = false;
+let pillHovering = false;
+let appliedPillLayout: PillLayout | null = null;
 let recordingSeconds = 0;
 let startRecordingRequestPending = false;
 let stopRecordingRequestPending = false;
@@ -99,23 +99,18 @@ function setState(state: AppState, message?: string): void {
   if (copiedStatusTimer !== null && state !== "idle") {
     clearTimeout(copiedStatusTimer);
     copiedStatusTimer = null;
+    copiedShowing = false;
   }
 
   appState = state;
-  app.dataset.appState = state;
-  recordBtn.dataset.state = state;
   recordBtn.setAttribute("aria-pressed", String(state === "recording"));
   recordBtn.setAttribute(
     "aria-label",
-    state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : "Start recording",
+    state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : state === "error" ? "Recording failed, click to retry" : "Start recording",
   );
-  recordBtn.title = state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : "Click to record";
+  recordBtn.title = state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : state === "error" ? "Click to retry" : "Click to record";
   recordBtn.disabled = false;
   statusLabel.textContent = message ?? stateLabel(state);
-
-  if (state !== "idle") {
-    hideCopyIndicator();
-  }
 
   if (state === "recording") {
     startTimer();
@@ -123,6 +118,28 @@ function setState(state: AppState, message?: string): void {
     stopTimer();
     clearMaxRecordingTimer();
   }
+
+  updatePillLayout();
+}
+
+function computePillLayout(): PillLayout {
+  if (appState === "recording") return "recording";
+  if (appState === "transcribing") return "transcribing";
+  if (appState === "error") return "error";
+  if (copiedShowing) return "copied";
+  return pillHovering ? "hover" : "idle";
+}
+
+// The pill window is native-resized per layout state so the idle hit area
+// stays tiny; the CSS visibility matrix in pill.css follows data-pill.
+function updatePillLayout(): void {
+  const layout = computePillLayout();
+  if (layout === appliedPillLayout) return;
+  appliedPillLayout = layout;
+  document.body.dataset.pill = layout;
+  void invoke("layout_pill_window", { state: layout }).catch((error) =>
+    addEvent("warning", `Could not lay out pill window: ${error instanceof Error ? error.message : String(error)}`),
+  );
 }
 
 function stateLabel(state: AppState): string {
@@ -195,32 +212,19 @@ function waitForPaint(): Promise<void> {
   });
 }
 
-function hideCopyIndicator(): void {
-  if (copyIndicatorTimer !== null) {
-    clearTimeout(copyIndicatorTimer);
-    copyIndicatorTimer = null;
-  }
-
-  copyIndicator.dataset.visible = "false";
-  copyIndicator.setAttribute("aria-hidden", "true");
-}
-
-function showCopyIndicator(): void {
-  hideCopyIndicator();
-  copyIndicator.dataset.visible = "true";
-  copyIndicator.setAttribute("aria-hidden", "false");
-  copyIndicatorTimer = setTimeout(hideCopyIndicator, 20_000);
-}
-
 function showCopiedStatus(): void {
-  setState("idle", "Copied");
   if (copiedStatusTimer !== null) {
     clearTimeout(copiedStatusTimer);
   }
+  copiedShowing = true;
+  setState("idle", "Copied");
   copiedStatusTimer = setTimeout(() => {
     copiedStatusTimer = null;
+    copiedShowing = false;
     if (appState === "idle") {
       setState("idle", "Ready");
+    } else {
+      updatePillLayout();
     }
   }, 1400);
 }
@@ -286,7 +290,6 @@ async function copyTranscriptItem(id: string): Promise<void> {
     showTranscriptShelf();
     renderTranscriptShelf();
     showCopiedStatus();
-    showCopyIndicator();
   } catch (error) {
     addEvent("error", error instanceof Error ? error.message : String(error));
     setState("error", "Error");
@@ -396,10 +399,10 @@ async function startRecording(): Promise<boolean> {
 
   try {
     startRecordingRequestPending = true;
+    playRecordingStartSound();
     const maxRecordingSeconds = await invoke<number>("start_recording");
     startRecordingRequestPending = false;
     cancelTranscriptionRequestPending = false;
-    playRecordingStartSound();
     setState("recording");
     resetLiveTranscript();
     scheduleMaxRecordingStop(maxRecordingSeconds);
@@ -469,7 +472,6 @@ async function stopAndTranscribe(): Promise<void> {
       void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
       resetLiveTranscript();
       showCopiedStatus();
-      showCopyIndicator();
     } else {
       addEvent("warning", "No transcript returned");
       setState("idle", "Ready");
@@ -514,38 +516,50 @@ async function toggleTranscriptStack(): Promise<void> {
   }
 }
 
-// The pill is a frameless, always-on-top HUD. A press that moves drags the
-// window; a press that stays put is a click that toggles the copied-message
-// stack. We drive both from JS (rather than a CSS drag region) so the click
-// is delivered reliably on macOS instead of being swallowed by the OS drag.
-function wirePillPointer(): void {
-  const appWindow = getCurrentWindow();
-  let press: { x: number; y: number; dragging: boolean } | null = null;
-
-  titlebar.addEventListener("mousedown", (event) => {
-    if (event.button !== 0) return;
-    if ((event.target as HTMLElement).closest(".logo-btn, .settings-btn")) return;
-    press = { x: event.clientX, y: event.clientY, dragging: false };
+// The idle capsule is nearly invisible; entering the (tiny) pill window
+// expands it to the hover layout with the wordmark, shortcut hint, and gear.
+function wirePillHover(): void {
+  document.body.addEventListener("mouseenter", () => {
+    pillHovering = true;
+    updatePillLayout();
   });
-
-  window.addEventListener("mousemove", (event) => {
-    if (press === null || press.dragging) return;
-    if (Math.abs(event.clientX - press.x) > PILL_DRAG_THRESHOLD_PX || Math.abs(event.clientY - press.y) > PILL_DRAG_THRESHOLD_PX) {
-      press.dragging = true;
-      void appWindow.startDragging();
+  document.body.addEventListener("mouseleave", () => {
+    pillHovering = false;
+    updatePillLayout();
+  });
+  // Native resizes can move the capsule out from under a stationary cursor
+  // without a mouseleave ever firing; reconcile while the hover layout is up.
+  setInterval(() => {
+    if (pillHovering && !document.body.matches(":hover")) {
+      pillHovering = false;
+      updatePillLayout();
     }
-  });
-
-  window.addEventListener("mouseup", () => {
-    if (press === null) return;
-    const wasClick = !press.dragging;
-    press = null;
-    if (wasClick) void toggleTranscriptStack();
-  });
+  }, 1000);
 }
 
 function isMacOS(): boolean {
   return navigator.platform.toLowerCase().includes("mac");
+}
+
+const MAC_SHORTCUT_GLYPHS: Record<string, string> = {
+  CommandOrControl: "⌘",
+  Command: "⌘",
+  Super: "⌘",
+  Control: "⌃",
+  Ctrl: "⌃",
+  Shift: "⇧",
+  Alt: "⌥",
+  Option: "⌥",
+};
+
+function shortcutHint(shortcut: string): string {
+  const parts = normalizeShortcut(shortcut)
+    .split("+")
+    .map((part) => part.replace(/^Digit/, "").replace(/^Key/, ""));
+  if (isMacOS()) {
+    return parts.map((part) => MAC_SHORTCUT_GLYPHS[part] ?? part).join("");
+  }
+  return parts.map((part) => (part === "CommandOrControl" ? "Ctrl" : part)).join("+");
 }
 
 function normalizeShortcutSettings(settings: Partial<ShortcutSettings>): ShortcutSettings {
@@ -632,6 +646,7 @@ async function registerGlobalShortcuts(settings = shortcutSettings): Promise<voi
   const normalized = normalizeShortcutSettings(settings);
   shortcutSettings = normalized;
   setInteractionSoundsEnabled(normalized.interactionSounds);
+  pillHint.textContent = shortcutHint(normalized.recordingShortcut);
 
   try {
     await unregisterAll();
@@ -685,11 +700,24 @@ void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event)
 void listen<TranscriptHistoryItem>("transcript-copied", (event) => {
   copiedTranscriptId = event.payload.id;
   renderTranscriptShelf();
-  showCopyIndicator();
+  // Recopies can arrive from the home window at any time; only flash the
+  // Copied capsule when the pill is not busy recording or transcribing.
+  if (appState === "idle") {
+    showCopiedStatus();
+  }
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
 void listen<ShortcutSettings>("settings-updated", (event) => {
   void registerGlobalShortcuts(event.payload);
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
+// Emitted by the Rust CGEventTap when hold-Fn push-to-talk is enabled.
+void listen<{ pressed: boolean }>("fn-push-to-talk", (event) => {
+  if (event.payload.pressed) {
+    void startPushToTalkRecording();
+  } else {
+    void stopPushToTalkRecording();
+  }
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
 void loadBackendStatus().catch((error) => {
@@ -700,6 +728,7 @@ void loadTranscriptHistory().catch((error) => addEvent("warning", error instance
 void loadShortcutSettings()
   .then((settings) => registerGlobalShortcuts(settings))
   .catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
-wirePillPointer();
+wirePillHover();
+updatePillLayout();
 updateSettingsEventBadge();
 preloadInteractionSounds();

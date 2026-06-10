@@ -30,8 +30,23 @@ sha1 = "0.11.0"
 sha2 = "0.11.0"
 reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "rustls", "json"] }
 tauri-plugin-global-shortcut = "2"
-sherpa-onnx = { version = "1.13.0", default-features = false, features = ["shared"] }
-tar = "0.4.44"
-bzip2 = "0.6.0"
 hound = "3.5.1"
 tiny_http = "0.12.0"
+
+# Metal stays macOS-only: the feature compiles GGML Metal kernels that do not
+# exist on Windows/Linux. Cargo merges these features into the base whisper-rs
+# dependency for macOS targets, so both the desktop app and the
+# transcription-host binary get GPU inference.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }
+core-graphics = "0.25.0"
+core-foundation = "0.10.1"
+
+# Opt-in GPU backends for a future non-Mac transcription host. These are
+# build-time choices: `cuda` needs the NVIDIA CUDA Toolkit on the build
+# machine and CUDA runtime libraries on the target; `vulkan` is the
+# vendor-neutral option. Neither has been exercised yet — no non-Mac GPU
+# host hardware exists; validate on real hardware before relying on them.
+[features]
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
