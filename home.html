@@ -149,91 +149,114 @@
         <section class="screen" id="screen-settings">
           <form class="settings-form" id="settingsForm">
               <section class="settings-section" aria-labelledby="captureTitle">
-                <div class="section-head">
-                  <h2 id="captureTitle">Capture</h2>
-                  <button class="icon-btn" id="refreshDevices" type="button" aria-label="Refresh microphones" title="Refresh microphones">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12A8 8 0 0 1 17.7 6.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                      <path d="M20 5v5h-5M4 19v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                  </button>
-                </div>
+                <h2 id="captureTitle">Capture</h2>
 
-                <label class="field">
-                  <span>Microphone</span>
-                  <select id="audioDeviceSelect" class="setting-select">
-                    <option value="">Default microphone</option>
-                  </select>
-                </label>
-
-                <div class="meter-row" aria-hidden="true">
-                  <span class="meter-dot"></span>
-                  <div class="meter-track">
-                    <span class="meter-bar" id="inputMeter"></span>
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="audioDeviceSelect">Microphone</label>
+                  </div>
+                  <div class="row-control mic-control">
+                    <div class="mic-line">
+                      <button class="icon-btn" id="refreshDevices" type="button" aria-label="Refresh microphones" title="Refresh microphones">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12A8 8 0 0 1 17.7 6.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                          <path d="M20 5v5h-5M4 19v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                      </button>
+                      <select id="audioDeviceSelect" class="setting-select w-lg">
+                        <option value="">Default microphone</option>
+                      </select>
+                    </div>
+                    <div class="level" aria-hidden="true"><span id="inputMeter"></span></div>
                   </div>
                 </div>
 
-                <label class="field compact-field">
-                  <span>Input gain</span>
-                  <select id="inputGain" class="setting-select">
-                    <option value="1">1x</option>
-                    <option value="2">2x</option>
-                    <option value="3">3x</option>
-                    <option value="4">4x</option>
-                    <option value="6">6x</option>
-                  </select>
-                </label>
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="inputGain">Input gain</label>
+                    <div class="row-help">Boosts a quiet microphone before transcription.</div>
+                  </div>
+                  <div class="row-control">
+                    <select id="inputGain" class="setting-select w-xs">
+                      <option value="1">1×</option>
+                      <option value="2">2×</option>
+                      <option value="3">3×</option>
+                      <option value="4">4×</option>
+                      <option value="6">6×</option>
+                    </select>
+                  </div>
+                </div>
 
-                <label class="field compact-field">
-                  <span>Max recording<span class="field-hint">Dictation stops automatically after this long</span></span>
-                  <select id="maxRecordingSeconds" class="setting-select">
-                    <option value="30">30 seconds</option>
-                    <option value="60">1 minute</option>
-                    <option value="120">2 minutes</option>
-                    <option value="180">3 minutes</option>
-                    <option value="300">5 minutes</option>
-                    <option value="600">10 minutes</option>
-                  </select>
-                </label>
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="maxRecordingSeconds">Max recording</label>
+                    <div class="row-help">Dictation stops automatically at this limit.</div>
+                  </div>
+                  <div class="row-control">
+                    <select id="maxRecordingSeconds" class="setting-select w-sm">
+                      <option value="30">30 seconds</option>
+                      <option value="60">1 minute</option>
+                      <option value="120">2 minutes</option>
+                      <option value="180">3 minutes</option>
+                      <option value="300">5 minutes</option>
+                      <option value="600">10 minutes</option>
+                    </select>
+                  </div>
+                </div>
 
-                <label class="toggle-row">
-                  <span><strong>Noise suppression</strong></span>
-                  <input id="noiseSuppression" type="checkbox" />
-                </label>
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="noiseSuppression">Noise suppression</label>
+                  </div>
+                  <div class="row-control">
+                    <input id="noiseSuppression" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
 
-                <label class="toggle-row">
-                  <span><strong>Echo cancellation</strong></span>
-                  <input id="echoCancellation" type="checkbox" />
-                </label>
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="echoCancellation">Echo cancellation</label>
+                  </div>
+                  <div class="row-control">
+                    <input id="echoCancellation" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
 
-                <label class="toggle-row">
-                  <span><strong>Interaction sounds</strong><span class="field-hint">Play a soft chime when recording starts and stops</span></span>
-                  <input id="interactionSounds" type="checkbox" />
-                </label>
-
-                <div class="toggle-row capture-diagnostic">
-                  <span><strong>Voice accuracy test</strong><span class="field-hint">Read a known passage and check what the transcriber heard</span></span>
-                  <button class="btn btn-sm" data-open="voicetest" type="button">Test</button>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Voice accuracy test</div>
+                    <div class="row-help">Read a passage and compare what the transcriber heard.</div>
+                  </div>
+                  <div class="row-control">
+                    <button class="btn" data-open="voicetest" type="button">Run test</button>
+                  </div>
                 </div>
               </section>
 
               <section class="settings-section" aria-labelledby="transcriptionTitle">
-                <div class="section-head">
-                  <h2 id="transcriptionTitle">Transcription</h2>
+                <h2 id="transcriptionTitle">Transcription</h2>
+
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label" id="locationLabel">Location</div>
+                    <div class="row-help">Where audio is transcribed. Local never leaves this Mac.</div>
+                  </div>
+                  <div class="row-control">
+                    <div class="seg" id="locationSeg" role="group" aria-labelledby="locationLabel">
+                      <button type="button" data-value="local" aria-pressed="true">Local</button>
+                      <button type="button" data-value="remote-host" aria-pressed="false">Remote host</button>
+                    </div>
+                  </div>
                 </div>
 
-                <label class="field">
-                  <span>Location</span>
-                  <select id="locationSelect" class="setting-select">
-                    <option value="local">Local</option>
-                    <option value="remote-host">Remote host</option>
-                  </select>
-                </label>
-
-                <label class="field" id="modelField">
-                  <span>Model<span class="field-hint">Used for local transcription — a remote host serves the model its operator configured</span></span>
-                  <div class="model-select-row">
-                    <select id="modelSelect" class="setting-select">
+                <div class="row" id="modelField">
+                  <div class="row-text">
+                    <label class="row-label" for="modelSelect">Model</label>
+                    <div class="row-help">Larger models are more accurate and use more memory.</div>
+                  </div>
+                  <div class="row-control">
+                    <span class="meta num" id="modelSize">RAM ~1.2G</span>
+                    <select id="modelSelect" class="setting-select w-md">
                       <option value="tiny">Tiny</option>
                       <option value="base">Base</option>
                       <option value="small">Small</option>
@@ -242,138 +265,206 @@
                       <option value="large-v3">Large v3</option>
                       <option value="large-v3-turbo">Large v3 Turbo</option>
                     </select>
-                    <span class="model-size" id="modelSize">~80 MB</span>
-                  </div>
-                </label>
-
-                <div class="model-download" id="modelDownload" aria-live="polite">
-                  <span class="model-download-status" id="modelDownloadStatus">Model not loaded</span>
-                  <div class="model-download-track">
-                    <span class="model-download-bar" id="modelDownloadBar"></span>
-                  </div>
-                  <button class="model-prepare-btn" id="modelPrepare" type="button">Prepare</button>
-                </div>
-
-                <div class="remote-host-panel" id="remoteHostPanel" aria-live="polite" hidden>
-                  <label class="field">
-                    <span>Host URL</span>
-                    <input id="remoteUrl" class="setting-input" type="url" placeholder="https://host.example.com" />
-                  </label>
-                  <label class="field">
-                    <span>Token</span>
-                    <input id="remoteAuthToken" class="setting-input" type="password" autocomplete="off" />
-                  </label>
-                  <label class="field compact-field">
-                    <span>Timeout</span>
-                    <input id="remoteTimeoutSeconds" class="setting-input" type="number" min="5" max="300" step="5" />
-                  </label>
-                  <div class="remote-host-actions">
-                    <span class="model-download-status" id="remoteStatus">Remote host not checked</span>
-                    <button class="model-prepare-btn" id="remoteTest" type="button">Test</button>
                   </div>
                 </div>
 
-                <label class="field">
-                  <span>Language</span>
-                  <select id="langSelect" class="setting-select">
-                    <option value="auto">Auto-detect</option>
-                    <option value="en">English</option>
-                    <option value="es">Spanish</option>
-                    <option value="fr">French</option>
-                    <option value="de">German</option>
-                    <option value="it">Italian</option>
-                    <option value="pt">Portuguese</option>
-                    <option value="zh">Chinese</option>
-                    <option value="ja">Japanese</option>
-                  </select>
-                </label>
+                <div class="model-state" id="modelDownload" data-state="idle" aria-live="polite">
+                  <span class="status num" id="modelDownloadStatus">Checking model…</span>
+                  <div class="progress"><span id="modelDownloadBar"></span></div>
+                  <button class="btn" id="modelPrepare" type="button">Download</button>
+                </div>
 
-                <label class="field compact-field" id="whisperChunkField">
-                  <span>Whisper chunk</span>
-                  <input id="whisperChunkSeconds" class="setting-input" type="number" min="5" max="60" step="5" />
-                </label>
+                <div id="remoteHostPanel" aria-live="polite" hidden>
+                  <div class="row">
+                    <div class="row-text">
+                      <label class="row-label" for="remoteUrl">Host URL</label>
+                      <div class="row-help">The model is whatever the host operator configured.</div>
+                    </div>
+                    <div class="row-control">
+                      <input id="remoteUrl" class="setting-input mono w-lg" type="url" placeholder="https://host.example.com" />
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <label class="row-label" for="remoteAuthToken">Token</label>
+                    </div>
+                    <div class="row-control">
+                      <input id="remoteAuthToken" class="setting-input w-lg" type="password" autocomplete="off" />
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <label class="row-label" for="remoteTimeoutSeconds">Timeout</label>
+                    </div>
+                    <div class="row-control">
+                      <input id="remoteTimeoutSeconds" class="setting-input num w-xs" type="number" min="5" max="300" step="5" />
+                      <span class="meta">seconds</span>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="status-text" id="remoteStatus">Remote host not checked</div>
+                    </div>
+                    <div class="row-control">
+                      <button class="btn" id="remoteTest" type="button">Test connection</button>
+                    </div>
+                  </div>
+                </div>
 
-                <label class="toggle-row" id="useGpuRow">
-                  <span><strong>Use GPU acceleration</strong><span class="field-hint">Run Whisper on the GPU; turn off to force CPU transcription</span></span>
-                  <input id="useGpu" type="checkbox" />
-                </label>
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="langSelect">Language</label>
+                  </div>
+                  <div class="row-control">
+                    <select id="langSelect" class="setting-select w-md">
+                      <option value="auto">Auto-detect</option>
+                      <option value="en">English</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="it">Italian</option>
+                      <option value="pt">Portuguese</option>
+                      <option value="zh">Chinese</option>
+                      <option value="ja">Japanese</option>
+                    </select>
+                  </div>
+                </div>
 
-                <label class="toggle-row">
-                  <span><strong>Clean up text</strong><span class="field-hint">Apply your dictionary corrections and snippets</span></span>
-                  <input id="postProcess" type="checkbox" />
-                </label>
+                <div class="row" id="useGpuRow">
+                  <div class="row-text">
+                    <label class="row-label" for="useGpu">GPU acceleration</label>
+                    <div class="row-help">Run Whisper on the GPU; turn off to force CPU.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="useGpu" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
 
-                <label class="toggle-row" id="insertAtCursorRow">
-                  <span><strong>Insert at cursor</strong><span class="field-hint">Paste the transcript into the focused app; needs the macOS Accessibility permission</span></span>
-                  <input id="insertAtCursor" type="checkbox" />
-                </label>
+                <div class="row" id="whisperChunkField">
+                  <div class="row-text">
+                    <label class="row-label" for="whisperChunkSeconds">Whisper chunk</label>
+                    <div class="row-help">Seconds of audio per transcription pass.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="whisperChunkSeconds" class="setting-input num w-xs" type="number" min="5" max="60" step="5" />
+                    <span class="meta">seconds</span>
+                  </div>
+                </div>
+
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="postProcess">Clean up text</label>
+                    <div class="row-help">Apply your dictionary corrections and snippets.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="postProcess" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+
+                <div class="row" id="insertAtCursorRow">
+                  <div class="row-text">
+                    <label class="row-label" for="insertAtCursor">Insert at cursor</label>
+                    <div class="row-help">Paste the transcript into the focused app. Needs the macOS Accessibility permission.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="insertAtCursor" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
               </section>
 
-              <section class="settings-section" aria-labelledby="notesTitle">
-                <div class="section-head">
-                  <h2 id="notesTitle">Notes</h2>
-                </div>
+              <section class="settings-section" aria-labelledby="shortcutsTitle">
+                <h2 id="shortcutsTitle">Shortcuts</h2>
 
-                <label class="field compact-field">
-                  <span>Auto-delete<span class="field-hint">Remove unpinned notes after this long; pinned notes are kept</span></span>
-                  <select id="noteRetentionMinutes" class="setting-select">
-                    <option value="0">Never</option>
-                    <option value="15">After 15 minutes</option>
-                    <option value="60">After 1 hour</option>
-                    <option value="480">After 8 hours</option>
-                    <option value="1440">After 1 day</option>
-                    <option value="10080">After 1 week</option>
-                    <option value="43200">After 30 days</option>
-                  </select>
-                </label>
-              </section>
-
-              <section class="settings-section" aria-labelledby="windowTitle">
-                <div class="section-head">
-                  <h2 id="windowTitle">Window</h2>
-                </div>
-
-                <label class="toggle-row">
-                  <span><strong>Keep pill on top</strong></span>
-                  <input id="alwaysOnTop" type="checkbox" />
-                </label>
-              </section>
-
-              <section class="settings-section" aria-labelledby="keyBindingsTitle">
-                <div class="section-head">
-                  <h2 id="keyBindingsTitle">Key Bindings</h2>
-                </div>
-
-                <label class="field">
-                  <span>Recording mode</span>
-                  <select id="recordingShortcutMode" class="setting-select">
-                    <option value="toggle">Toggle</option>
-                    <option value="push-to-talk">Push to talk</option>
-                  </select>
-                </label>
-
-                <div class="field">
-                  <span>Recording shortcut</span>
-                  <div class="shortcut-row">
-                    <input id="recordingShortcut" class="setting-input mono" type="text" readonly aria-label="Recording shortcut" />
-                    <button class="btn btn-ghost" id="recordingShortcutCapture" type="button">Record</button>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label" id="recordingModeLabel">Recording mode</div>
+                    <div class="row-help">Toggle starts and stops; push to talk records while held.</div>
+                  </div>
+                  <div class="row-control">
+                    <div class="seg" id="recordingModeSeg" role="group" aria-labelledby="recordingModeLabel">
+                      <button type="button" data-value="toggle" aria-pressed="true">Toggle</button>
+                      <button type="button" data-value="push-to-talk" aria-pressed="false">Push to talk</button>
+                    </div>
                   </div>
                 </div>
 
-                <div class="field">
-                  <span>Copied messages</span>
-                  <div class="shortcut-row">
-                    <input id="transcriptStackShortcut" class="setting-input mono" type="text" readonly aria-label="Copied messages shortcut" />
-                    <button class="btn btn-ghost" id="transcriptStackShortcutCapture" type="button">Record</button>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Start recording</div>
+                  </div>
+                  <div class="row-control">
+                    <button class="shortcut" id="recordingShortcutChip" type="button" data-label="Start recording" aria-label="Start recording shortcut">
+                      <span class="keys" aria-hidden="true"></span>
+                      <span class="capture-hint">Press shortcut · esc cancels</span>
+                    </button>
                   </div>
                 </div>
 
-                <label class="toggle-row" id="fnPushToTalkRow">
-                  <span><strong>Hold Fn to talk</strong><span class="field-hint">Hold the Fn/Globe key to record, release to transcribe; needs the macOS Input Monitoring permission</span></span>
-                  <input id="fnPushToTalk" type="checkbox" />
-                </label>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Copied messages</div>
+                    <div class="row-help">Show the stack of recent transcripts.</div>
+                  </div>
+                  <div class="row-control">
+                    <button class="shortcut" id="transcriptStackShortcutChip" type="button" data-label="Copied messages" aria-label="Copied messages shortcut">
+                      <span class="keys" aria-hidden="true"></span>
+                      <span class="capture-hint">Press shortcut · esc cancels</span>
+                    </button>
+                  </div>
+                </div>
 
-                <div class="settings-note" id="shortcutStatus" aria-live="polite">Shortcuts apply globally while MultiVoice is running.</div>
+                <div class="row" id="fnPushToTalkRow">
+                  <div class="row-text">
+                    <label class="row-label" for="fnPushToTalk">Hold Fn to talk</label>
+                    <div class="row-help">Hold the Fn/Globe key to record, release to transcribe. Needs the macOS Input Monitoring permission.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="fnPushToTalk" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+
+                <div class="section-note" id="shortcutStatus" aria-live="polite">Shortcuts work globally while MultiVoice is running.</div>
+              </section>
+
+              <section class="settings-section" aria-labelledby="generalTitle">
+                <h2 id="generalTitle">General</h2>
+
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="alwaysOnTop">Keep pill on top</label>
+                  </div>
+                  <div class="row-control">
+                    <input id="alwaysOnTop" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="interactionSounds">Interaction sounds</label>
+                    <div class="row-help">A soft chime when recording starts and stops.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="interactionSounds" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="noteRetentionMinutes">Auto-delete notes</label>
+                    <div class="row-help">Unpinned notes are removed after this long; pinned notes are kept.</div>
+                  </div>
+                  <div class="row-control">
+                    <select id="noteRetentionMinutes" class="setting-select w-sm">
+                      <option value="0">Never</option>
+                      <option value="15">After 15 minutes</option>
+                      <option value="60">After 1 hour</option>
+                      <option value="480">After 8 hours</option>
+                      <option value="1440">After 1 day</option>
+                      <option value="10080">After 1 week</option>
+                      <option value="43200">After 30 days</option>
+                    </select>
+                  </div>
+                </div>
               </section>
           </form>
         </section>

@@ -67,8 +67,9 @@ body {
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums slashed-zero; }
 
 :focus-visible { outline: none; }
-.nav-item:focus-visible, .btn:focus-visible, .model-prepare-btn:focus-visible,
-.icon-btn:focus-visible, .note-row:focus-visible, .chip button:focus-visible {
+.nav-item:focus-visible, .btn:focus-visible, .icon-btn:focus-visible,
+.note-row:focus-visible, .chip button:focus-visible, .switch:focus-visible,
+.seg button:focus-visible, .shortcut:focus-visible {
   outline: 2px solid var(--focus); outline-offset: 2px;
 }
 
@@ -168,13 +169,13 @@ body {
 .panel-head .hint { color: var(--text-muted); font-size: var(--fs-micro); }
 
 /* ── Buttons ─────────────────────────────────────────────── */
-.btn, .model-prepare-btn {
+.btn {
   font: inherit; font-weight: 500; cursor: pointer;
   border-radius: var(--r-sm); padding: 6px 12px;
   border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text);
 }
-.btn:hover, .model-prepare-btn:hover { background: var(--bg-row-hover); }
-.btn:disabled, .model-prepare-btn:disabled { opacity: .5; cursor: default; }
+.btn:hover { background: var(--bg-row-hover); }
+.btn:disabled { opacity: .5; cursor: default; }
 .btn-ghost { background: none; border-color: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { color: var(--text); background: var(--bg-row-hover); }
 .btn-sm { padding: 4px 9px; font-size: var(--fs-meta); }
@@ -192,13 +193,60 @@ body {
 /* ── Inputs ──────────────────────────────────────────────── */
 .setting-select, .setting-input, .setting-textarea {
   background: var(--bg-input); border: 1px solid var(--border-strong); color: var(--text);
-  border-radius: var(--r-sm); padding: 6px 9px; font: inherit; width: 100%; outline: none;
+  border-radius: var(--r-sm); height: 28px; padding: 0 9px; font: inherit; font-size: 12.5px;
+  width: 100%; outline: none;
 }
 .setting-select:focus-visible, .setting-input:focus-visible, .setting-textarea:focus-visible {
   border-color: var(--accent-strong); outline: 2px solid var(--focus); outline-offset: 0;
 }
-.setting-textarea { resize: vertical; min-height: 64px; line-height: 1.5; }
-input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+.setting-select {
+  appearance: none; -webkit-appearance: none; padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9aa2' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center;
+}
+.setting-textarea { height: auto; resize: vertical; min-height: 64px; padding: 6px 9px; line-height: 1.5; }
+/* `:not(.switch)` keeps plain checkboxes native while letting the .switch rule
+   below win — a bare `input[type=checkbox]` selector outranks `.switch` and
+   would otherwise force the switch back to a 16×16 box. */
+input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+
+/* Compact control width tiers — sized to expected content, never to the panel. */
+.w-xs { width: 76px; flex: none; }
+.w-sm { width: 140px; flex: none; }
+.w-md { width: 168px; flex: none; }
+.w-lg { width: 240px; flex: none; }
+
+/* Switch — a checkbox restyled as a 32×18 switch; the on-state carries the
+   product accent exactly as accent-color did on the old checkboxes. */
+.switch {
+  appearance: none; -webkit-appearance: none;
+  position: relative; width: 32px; height: 18px; margin: 0;
+  border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--track); cursor: pointer; flex: none;
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px; border-radius: 50%; background: var(--text-secondary);
+  transition: transform 120ms ease, background 120ms ease;
+}
+.switch:checked { background: var(--accent); border-color: var(--accent); }
+.switch:checked::after { background: #fff; transform: translateX(14px); }
+.switch:disabled { opacity: .5; cursor: default; }
+
+/* Segmented control — for two-value mode switches. Neutral active state; the
+   accent stays with selection and CTAs. The inner radius is the outer radius
+   minus the 2px padding (concentric), not a third radius token. */
+.seg {
+  display: inline-flex; padding: 2px; gap: 2px;
+  background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+}
+.seg button {
+  border: none; background: none; color: var(--text-secondary);
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  padding: 3px 11px; border-radius: 4px; cursor: pointer;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: #28282d; color: var(--text); }
 
 /* ── Empty / placeholder states ──────────────────────────── */
 .empty {
@@ -250,49 +298,72 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 .settings-form { max-width: 640px; }
-.settings-section { margin-bottom: 30px; }
+.settings-section { margin-bottom: 34px; }
 .settings-section:last-child { margin-bottom: 0; }
+.settings-section > h2 { font-size: var(--fs-body); font-weight: 600; padding-bottom: 6px; }
 
-.field, .toggle-row {
-  display: grid; grid-template-columns: 200px 1fr; align-items: center;
-  gap: 14px; padding: 12px 0; border-top: 1px solid var(--border);
+/* Row grammar — one idiom for every setting: label + muted help on the left,
+   a compact right-aligned control sized to its content, never to the panel. */
+.row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 32px; padding: 11px 0; min-height: 48px; border-top: 1px solid var(--border);
 }
-/* Rows hidden from script must stay hidden despite the display rules above
-   (the `hidden` attribute alone loses to an explicit `display`). */
-.field[hidden], .toggle-row[hidden], .model-download[hidden] { display: none; }
-.section-head + .field, .section-head + .toggle-row, .section-head + .meter-row { border-top: none; }
-.field > span, .toggle-row > span { color: var(--text-secondary); }
-.toggle-row > span strong { font-weight: 500; color: var(--text-secondary); }
-.toggle-row input[type="checkbox"] { justify-self: end; }
-.capture-diagnostic .btn { justify-self: end; }
-.field-hint { display: block; color: var(--text-muted); font-size: var(--fs-micro); font-weight: 400; margin-top: 2px; }
+.settings-section > h2 + .row { border-top: none; }
+/* Rows hidden from script must stay hidden despite the display rule above. */
+.row[hidden] { display: none; }
+.row-text { min-width: 0; max-width: 380px; }
+.row-label { font-weight: 500; color: var(--text); }
+.row-help { margin-top: 2px; font-size: var(--fs-meta); line-height: 1.45; color: var(--text-muted); }
+.row-control { flex: none; display: flex; align-items: center; gap: 8px; }
+.row-control .meta { color: var(--text-muted); font-size: var(--fs-meta); white-space: nowrap; }
+.row-control .btn { height: 28px; padding: 0 12px; }
+.status-text { color: var(--text-secondary); font-size: var(--fs-meta); }
 
-.meter-row { display: flex; align-items: center; gap: 10px; padding: 4px 0 10px; }
-.meter-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-good); flex: none; }
-.meter-track { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
-.meter-bar { display: block; height: 100%; width: 100%; background: var(--dot-good); border-radius: 3px;
+/* Mic level — owned by the Microphone row so the live level reads as the
+   selected device's. Movement is the status; no separate dot. */
+.mic-control { flex-direction: column; align-items: flex-end; gap: 6px; }
+.mic-control .mic-line { display: flex; align-items: center; gap: 8px; }
+.level { width: 240px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.level span { display: block; height: 100%; width: 100%; background: var(--dot-good); border-radius: 2px;
   transform: scaleX(0); transform-origin: left center; transition: transform 90ms linear; }
 
-.model-select-row { display: flex; align-items: center; gap: 10px; }
-.model-size { color: var(--text-muted); font-size: var(--fs-meta); white-space: nowrap; }
-
-.model-download {
-  display: flex; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--border);
-}
-.model-download-status { color: var(--text-secondary); font-size: var(--fs-meta); min-width: 120px; }
-.model-download[data-state="ready"] .model-download-status { color: var(--dot-good); }
-.model-download[data-state="error"] .model-download-status { color: var(--accent); }
-.model-download-track { flex: 1; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
-.model-download-bar { display: block; height: 100%; width: 100%; background: var(--accent);
+/* Model download — one state-driven sub-row owned by the Model row: status
+   copy, a 2px progress hairline only while loading, and one action whose
+   label and visibility follow the state machine. */
+.model-state { display: flex; align-items: center; gap: 12px; padding: 2px 0 12px; }
+.model-state[hidden] { display: none; }
+.model-state .status { color: var(--text-secondary); font-size: var(--fs-meta); white-space: nowrap; }
+.model-state .progress { flex: 1; height: 2px; border-radius: 1px; background: var(--track); overflow: hidden; display: none; }
+.model-state .progress span { display: block; height: 100%; width: 100%; background: var(--accent);
   transform: scaleX(0); transform-origin: left center; transition: transform 160ms ease; }
+.model-state .btn { margin-left: auto; height: 28px; padding: 0 12px; }
+.model-state[data-state="ready"] .status { color: var(--dot-good); }
+.model-state[data-state="error"] .status { color: var(--accent); }
+.model-state[data-state="loading"] .progress { display: block; }
+.model-state[data-state="loading"] .btn,
+.model-state[data-state="ready"] .btn { display: none; }
 
-.remote-host-panel { border-top: 1px solid var(--border); }
-.remote-host-actions { display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; padding: 12px 0; border-top: 1px solid var(--border); }
+/* Shortcut chip — the shortcut reads as keycaps and the whole chip is the
+   rebind button (click → capture, Esc cancels). */
+.shortcut {
+  display: inline-flex; align-items: center; gap: 3px;
+  min-height: 28px; padding: 0 6px; border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer;
+}
+.shortcut:hover { background: var(--bg-row-hover); }
+.shortcut .keys { display: inline-flex; align-items: center; gap: 3px; }
+.shortcut .key {
+  min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center;
+  border: 1px solid var(--border-strong); border-radius: 4px;
+  background: var(--bg-input); color: var(--text);
+  font-family: var(--mono); font-size: var(--fs-micro);
+}
+.shortcut .capture-hint { display: none; color: var(--text-muted); font-size: var(--fs-meta); padding: 0 4px; }
+.shortcut.capturing { border-color: var(--accent-strong); }
+.shortcut.capturing .keys { display: none; }
+.shortcut.capturing .capture-hint { display: block; }
 
-.shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
-.shortcut-row .setting-input { cursor: default; }
-.settings-note { color: var(--text-muted); font-size: var(--fs-meta); padding: 12px 0; border-top: 1px solid var(--border); }
+.section-note { color: var(--text-muted); font-size: var(--fs-meta); padding-top: 11px; border-top: 1px solid var(--border); }
 
 /* ── Activity ────────────────────────────────────────────── */
 .activity { display: flex; flex-direction: column; gap: 12px; }

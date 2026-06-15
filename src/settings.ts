@@ -94,7 +94,7 @@ const DEFAULTS: Settings = {
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
-const locationSelect = required<HTMLSelectElement>("locationSelect");
+const locationSeg = segControl("locationSeg");
 const modelSelect = required<HTMLSelectElement>("modelSelect");
 const langSelect = required<HTMLSelectElement>("langSelect");
 const audioDeviceSelect = required<HTMLSelectElement>("audioDeviceSelect");
@@ -106,12 +106,11 @@ const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
 const interactionSounds = required<HTMLInputElement>("interactionSounds");
 const maxRecordingSeconds = required<HTMLSelectElement>("maxRecordingSeconds");
 const noteRetentionMinutes = required<HTMLSelectElement>("noteRetentionMinutes");
-const recordingShortcutMode = required<HTMLSelectElement>("recordingShortcutMode");
-const recordingShortcut = required<HTMLInputElement>("recordingShortcut");
-const recordingShortcutCapture = required<HTMLButtonElement>("recordingShortcutCapture");
-const transcriptStackShortcut = required<HTMLInputElement>("transcriptStackShortcut");
-const transcriptStackShortcutCapture = required<HTMLButtonElement>("transcriptStackShortcutCapture");
+const recordingModeSeg = segControl("recordingModeSeg");
+const recordingShortcutChip = required<HTMLButtonElement>("recordingShortcutChip");
+const transcriptStackShortcutChip = required<HTMLButtonElement>("transcriptStackShortcutChip");
 const shortcutStatus = required<HTMLElement>("shortcutStatus");
+const shortcutStatusDefault = shortcutStatus.textContent ?? "";
 const insertAtCursor = required<HTMLInputElement>("insertAtCursor");
 const insertAtCursorRow = required<HTMLElement>("insertAtCursorRow");
 const fnPushToTalk = required<HTMLInputElement>("fnPushToTalk");
@@ -155,6 +154,95 @@ function required<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
+// A segmented control is a group of `aria-pressed` buttons carrying the active
+// value in `data-value`; this adapts it to the same value-in/value-out + change
+// contract the form expects from a <select>.
+interface SegControl {
+  get(): string;
+  set(value: string): void;
+  onChange(handler: (value: string) => void): void;
+}
+
+function segControl(id: string): SegControl {
+  const root = required<HTMLElement>(id);
+  const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>("button[data-value]"));
+  const handlers: Array<(value: string) => void> = [];
+  const get = () =>
+    buttons.find((button) => button.getAttribute("aria-pressed") === "true")?.dataset.value
+    ?? buttons[0]?.dataset.value
+    ?? "";
+  const set = (value: string) => {
+    for (const button of buttons) {
+      button.setAttribute("aria-pressed", String(button.dataset.value === value));
+    }
+  };
+  for (const button of buttons) {
+    button.addEventListener("click", () => {
+      const value = button.dataset.value ?? "";
+      if (get() === value) return;
+      set(value);
+      for (const handler of handlers) handler(value);
+    });
+  }
+  return { get, set, onChange: (handler) => handlers.push(handler) };
+}
+
+// Accelerators are stored in the Tauri global-shortcut grammar
+// (e.g. "CommandOrControl+Shift+Digit1"); the chip renders them as keycaps.
+const onMac = isMacOS();
+const KEY_GLYPHS: Record<string, string> = {
+  CommandOrControl: onMac ? "⌘" : "Ctrl",
+  Command: "⌘", Cmd: "⌘", Meta: "⌘", Super: "⌘",
+  Control: "⌃", Ctrl: "⌃",
+  Alt: onMac ? "⌥" : "Alt", Option: "⌥",
+  Shift: "⇧",
+  ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
+  Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
+  Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`",
+};
+const KEY_WORDS: Record<string, string> = {
+  CommandOrControl: onMac ? "Command" : "Control",
+  Command: "Command", Cmd: "Command", Meta: "Command", Super: "Command",
+  Control: "Control", Ctrl: "Control",
+  Alt: onMac ? "Option" : "Alt", Option: "Option",
+  Shift: "Shift",
+};
+
+function accelTokens(accelerator: string): string[] {
+  return accelerator.split("+").map((token) => token.trim()).filter(Boolean);
+}
+
+function keyGlyph(token: string): string {
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(token);
+  if (digit) return digit[1];
+  return KEY_GLYPHS[token] ?? token;
+}
+
+function keyWord(token: string): string {
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(token);
+  if (digit) return digit[1];
+  return KEY_WORDS[token] ?? token;
+}
+
+// Paint the keycaps and keep the chip's accessible name describing the current
+// shortcut and the rebind affordance; `data-shortcut` is the form's value source.
+function renderShortcutChip(chip: HTMLButtonElement, accelerator: string): void {
+  const normalized = normalizeShortcut(accelerator, accelerator);
+  chip.dataset.shortcut = normalized;
+  const tokens = accelTokens(normalized);
+  const keys = chip.querySelector<HTMLElement>(".keys");
+  if (keys) {
+    keys.replaceChildren(...tokens.map((token) => {
+      const span = document.createElement("span");
+      span.className = "key";
+      span.textContent = keyGlyph(token);
+      return span;
+    }));
+  }
+  const name = chip.dataset.label ?? "Shortcut";
+  chip.setAttribute("aria-label", `${name}: ${tokens.map(keyWord).join(" ")}. Click to change.`);
+}
+
 // Mirror the options of the #maxRecordingSeconds and #noteRetentionMinutes
 // selects; settings saved by older builds or edited by hand can hold values
 // between the presets, so snap them to the closest one.
@@ -193,7 +281,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
 }
 
 function applyToForm(settings: Settings): void {
-  locationSelect.value = settings.transcriptionLocation;
+  locationSeg.set(settings.transcriptionLocation);
   modelSelect.value = settings.model;
   updateModelSize(settings.model);
   remoteUrl.value = settings.remoteUrl;
@@ -209,9 +297,9 @@ function applyToForm(settings: Settings): void {
   interactionSounds.checked = settings.interactionSounds ?? true;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
   noteRetentionMinutes.value = String(settings.noteRetentionMinutes);
-  recordingShortcutMode.value = settings.recordingShortcutMode;
-  recordingShortcut.value = settings.recordingShortcut;
-  transcriptStackShortcut.value = settings.transcriptStackShortcut;
+  recordingModeSeg.set(settings.recordingShortcutMode);
+  renderShortcutChip(recordingShortcutChip, settings.recordingShortcut);
+  renderShortcutChip(transcriptStackShortcutChip, settings.transcriptStackShortcut);
   insertAtCursor.checked = settings.insertAtCursor;
   fnPushToTalk.checked = settings.fnPushToTalk;
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
@@ -222,7 +310,7 @@ function applyToForm(settings: Settings): void {
 
 function readFromForm(): Settings {
   return normalizeSettings({
-    transcriptionLocation: locationSelect.value as TranscriptionLocation,
+    transcriptionLocation: locationSeg.get() as TranscriptionLocation,
     model: modelSelect.value as WhisperModel,
     remoteUrl: remoteUrl.value,
     remoteAuthToken: remoteAuthToken.value,
@@ -237,9 +325,9 @@ function readFromForm(): Settings {
     interactionSounds: interactionSounds.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
     noteRetentionMinutes: Number(noteRetentionMinutes.value),
-    recordingShortcutMode: recordingShortcutMode.value as RecordingShortcutMode,
-    recordingShortcut: recordingShortcut.value,
-    transcriptStackShortcut: transcriptStackShortcut.value,
+    recordingShortcutMode: recordingModeSeg.get() as RecordingShortcutMode,
+    recordingShortcut: recordingShortcutChip.dataset.shortcut ?? DEFAULTS.recordingShortcut,
+    transcriptStackShortcut: transcriptStackShortcutChip.dataset.shortcut ?? DEFAULTS.transcriptStackShortcut,
     whisperChunkSeconds: Number(whisperChunkSeconds.value),
     useGpu: useGpu.checked,
     insertAtCursor: insertAtCursor.checked,
@@ -346,16 +434,15 @@ function shortcutKeyName(event: KeyboardEvent): string {
   return aliases[event.code] ?? "";
 }
 
-function beginShortcutCapture(target: HTMLInputElement, button: HTMLButtonElement, label: string): void {
+function beginShortcutCapture(chip: HTMLButtonElement, label: string): void {
+  if (chip.classList.contains("capturing")) return;
+  chip.classList.add("capturing");
   shortcutStatus.textContent = "Press a key combination, or Esc to cancel.";
-  button.textContent = "Listening";
-  button.disabled = true;
 
   const stopCapture = (message?: string) => {
     window.removeEventListener("keydown", onKeyDown, true);
-    button.textContent = "Record";
-    button.disabled = false;
-    if (message) shortcutStatus.textContent = message;
+    chip.classList.remove("capturing");
+    shortcutStatus.textContent = message ?? shortcutStatusDefault;
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -363,7 +450,7 @@ function beginShortcutCapture(target: HTMLInputElement, button: HTMLButtonElemen
     event.stopPropagation();
     const shortcut = shortcutFromKeyboardEvent(event);
     if (shortcut === null) {
-      stopCapture("Shortcut capture canceled.");
+      stopCapture();
       return;
     }
     if (!shortcut) {
@@ -371,7 +458,7 @@ function beginShortcutCapture(target: HTMLInputElement, button: HTMLButtonElemen
       return;
     }
 
-    target.value = shortcut;
+    renderShortcutChip(chip, shortcut);
     stopCapture(`${label} shortcut set to ${shortcut}.`);
     void persistSettings().catch(reportAsyncError);
   };
@@ -423,7 +510,7 @@ function formatModelStatus(status: ModelStatus): string {
 }
 
 async function requestModelStatus(): Promise<void> {
-  if (locationSelect.value === "remote-host") {
+  if (locationSeg.get() === "remote-host") {
     updateModelSize(modelSelect.value as WhisperModel);
     return;
   }
@@ -442,7 +529,7 @@ async function requestModelStatus(): Promise<void> {
 }
 
 async function beginModelPreload(): Promise<void> {
-  if (locationSelect.value === "remote-host") return;
+  if (locationSeg.get() === "remote-host") return;
   const model = modelSelect.value as WhisperModel;
   updateModelSize(model);
   setModelDownloadStatus("Preparing model...", 1);
@@ -503,7 +590,7 @@ function updateModelSize(model: WhisperModel): void {
 // The GPU toggle only affects local Whisper inference: a remote host's GPU
 // use is the host operator's configuration.
 function updateUseGpuUi(): void {
-  const local = locationSelect.value === "local";
+  const local = locationSeg.get() === "local";
   useGpuRow.hidden = !local;
   useGpu.disabled = !local;
 }
@@ -648,13 +735,13 @@ refreshBtn.addEventListener("click", () => {
   refreshMeter();
 });
 
-locationSelect.addEventListener("change", () => {
-  updateTranscriptionLocationUi(locationSelect.value as TranscriptionLocation);
+locationSeg.onChange((value) => {
+  updateTranscriptionLocationUi(value as TranscriptionLocation);
   updateUseGpuUi();
   void persistSettings()
     .then((saved) => {
       if (!saved) return;
-      addEvent("info", `Transcription location changed to ${locationSelect.value === "local" ? "local" : "remote host"}`);
+      addEvent("info", `Transcription location changed to ${value === "local" ? "local" : "remote host"}`);
       return requestModelStatus();
     })
     .catch(reportAsyncError);
@@ -721,12 +808,12 @@ interactionSounds.addEventListener("change", () => {
 });
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 noteRetentionMinutes.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-recordingShortcutMode.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-recordingShortcutCapture.addEventListener("click", () => {
-  beginShortcutCapture(recordingShortcut, recordingShortcutCapture, "Recording");
+recordingModeSeg.onChange(() => void persistSettings().catch(reportAsyncError));
+recordingShortcutChip.addEventListener("click", () => {
+  beginShortcutCapture(recordingShortcutChip, "Recording");
 });
-transcriptStackShortcutCapture.addEventListener("click", () => {
-  beginShortcutCapture(transcriptStackShortcut, transcriptStackShortcutCapture, "Copied messages");
+transcriptStackShortcutChip.addEventListener("click", () => {
+  beginShortcutCapture(transcriptStackShortcutChip, "Copied messages");
 });
 whisperChunkSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 whisperChunkSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
