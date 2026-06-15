@@ -5,10 +5,20 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperSegment,
+};
 
 const WHISPER_STREAM_CHANNEL_DEPTH: usize = 64;
 const WHISPER_CHUNK_OVERLAP_SECONDS: usize = 1;
+const WHISPER_SPEECH_PEAK_THRESHOLD: f32 = 0.010;
+const WHISPER_SPEECH_RMS_THRESHOLD: f32 = 0.0015;
+const WHISPER_SPEECH_WINDOW_MS: usize = 30;
+const WHISPER_SPEECH_WINDOW_PEAK_THRESHOLD: f32 = 0.020;
+const WHISPER_SPEECH_WINDOW_RMS_THRESHOLD: f32 = 0.004;
+const WHISPER_MIN_ACTIVE_SPEECH_MS: usize = 120;
+const WHISPER_NO_SPEECH_PROBABILITY_THRESHOLD: f32 = 0.60;
+const WHISPER_MIN_AVG_TOKEN_PROBABILITY: f32 = 0.12;
 
 #[derive(Default)]
 pub struct TranscriptionService {
@@ -60,8 +70,14 @@ impl TranscriptionService {
         settings: &Settings,
         models: &ModelService,
     ) -> Result<Option<SyncSender<AudioFrame>>, String> {
-        self.start_session_with_cancel(settings, models, None)
-            .map(|start| start.audio_tx)
+        if self.session.is_some() {
+            return Err("Transcription session already in progress".to_string());
+        }
+
+        let transcriber = self.active.get_or_insert_with(WhisperTranscriber::default);
+        let model_path = models.path_for(settings.model);
+        transcriber.ensure_context(settings.model, &model_path, settings.use_gpu)?;
+        Ok(None)
     }
 
     pub fn start_session_with_cancel(
@@ -102,21 +118,19 @@ impl TranscriptionService {
         settings: &Settings,
         models: &ModelService,
     ) -> Result<String, String> {
-        let handle = self
-            .session
-            .take()
-            .ok_or_else(|| "No transcription session is active".to_string())?;
-        match handle.finish() {
-            Ok(transcript) => Ok(transcript),
-            Err(err) if err == "No audio frames were streamed to Whisper" => {
-                let model_path = models.path_for(settings.model);
-                let Some(transcriber) = self.active.as_mut() else {
-                    return Err("Whisper backend is unavailable".to_string());
-                };
-                transcriber.transcribe(recording, settings, &model_path)
+        if let Some(handle) = self.session.take() {
+            match handle.finish() {
+                Ok(transcript) => return Ok(transcript),
+                Err(err) if err == "No audio frames were streamed to Whisper" => {}
+                Err(err) => return Err(err),
             }
-            Err(err) => Err(err),
         }
+
+        let model_path = models.path_for(settings.model);
+        let Some(transcriber) = self.active.as_mut() else {
+            return Err("Whisper backend is unavailable".to_string());
+        };
+        transcriber.transcribe(recording, settings, &model_path)
     }
 
     pub fn cancel_session(&mut self) {
@@ -503,15 +517,18 @@ fn dispatch_ready_whisper_chunks(
     }
 
     while buffer.len() >= chunk_samples {
-        job_tx
-            .send(WhisperChunkJob {
-                index: *chunk_index,
-                pcm_i16: buffer[..chunk_samples].to_vec(),
-                sample_rate,
-            })
-            .map_err(|_| "Whisper chunk worker stopped while receiving audio".to_string())?;
+        let chunk = &buffer[..chunk_samples];
+        if contains_probable_speech(chunk, sample_rate) {
+            job_tx
+                .send(WhisperChunkJob {
+                    index: *chunk_index,
+                    pcm_i16: chunk.to_vec(),
+                    sample_rate,
+                })
+                .map_err(|_| "Whisper chunk worker stopped while receiving audio".to_string())?;
+            *dispatched_chunks += 1;
+        }
         *chunk_index += 1;
-        *dispatched_chunks += 1;
 
         let drain_samples = chunk_samples
             .saturating_sub(overlap_samples)
@@ -538,6 +555,10 @@ fn dispatch_final_whisper_chunk(
     if dispatched_chunks > 0 && buffer.len() <= overlap_samples {
         return Ok(());
     }
+    if !contains_probable_speech(buffer, sample_rate) {
+        buffer.clear();
+        return Ok(());
+    }
 
     job_tx
         .send(WhisperChunkJob {
@@ -560,6 +581,9 @@ fn transcribe_whisper_pcm(
     if samples.is_empty() {
         return Err("No audio samples were captured".to_string());
     }
+    if !contains_probable_speech(samples, sample_rate) {
+        return Err("No speech was transcribed".to_string());
+    }
 
     let mut state = context
         .create_state()
@@ -572,9 +596,7 @@ fn transcribe_whisper_pcm(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_no_context(true);
-    // Suppress non-speech tokens so silence or background noise does not emit
-    // bracketed annotations like "[BLANK_AUDIO]" or "(background noise)".
-    params.set_suppress_nst(true);
+    params.set_suppress_nst(false);
     if let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         params.set_initial_prompt(initial_prompt);
     }
@@ -592,7 +614,7 @@ fn transcribe_whisper_pcm(
 
     let transcript = state
         .as_iter()
-        .map(|segment| segment.to_string())
+        .filter_map(|segment| accepted_segment_text(&segment))
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
@@ -603,6 +625,74 @@ fn transcribe_whisper_pcm(
     }
 
     Ok(transcript)
+}
+
+fn accepted_segment_text(segment: &WhisperSegment<'_>) -> Option<String> {
+    let text = segment.to_string().trim().to_string();
+    if text.is_empty() || is_non_speech_annotation(&text) {
+        return None;
+    }
+
+    let no_speech_probability = segment.no_speech_probability();
+    if no_speech_probability.is_finite()
+        && no_speech_probability >= WHISPER_NO_SPEECH_PROBABILITY_THRESHOLD
+    {
+        return None;
+    }
+
+    if let Some(avg_probability) = average_segment_token_probability(segment) {
+        if avg_probability < WHISPER_MIN_AVG_TOKEN_PROBABILITY {
+            return None;
+        }
+    }
+
+    Some(text)
+}
+
+fn average_segment_token_probability(segment: &WhisperSegment<'_>) -> Option<f32> {
+    let mut sum = 0.0;
+    let mut count = 0;
+    for index in 0..segment.n_tokens() {
+        let Some(token) = segment.get_token(index) else {
+            continue;
+        };
+        let probability = token.token_probability();
+        if probability.is_finite() {
+            sum += probability;
+            count += 1;
+        }
+    }
+
+    (count > 0).then_some(sum / count as f32)
+}
+
+fn is_non_speech_annotation(text: &str) -> bool {
+    let trimmed = text.trim();
+    let bracketed = (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('(') && trimmed.ends_with(')'));
+    if !bracketed {
+        return false;
+    }
+
+    let normalized = trimmed
+        .trim_matches(|ch: char| !ch.is_alphanumeric() && !ch.is_whitespace())
+        .to_ascii_lowercase();
+    [
+        "audio",
+        "blank",
+        "inaudible",
+        "applause",
+        "laugh",
+        "laughter",
+        "music",
+        "noise",
+        "silence",
+        "sound",
+        "speaking",
+        "speech",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 fn merge_whisper_chunk_results(chunks: &[WhisperChunkResult]) -> String {
@@ -632,15 +722,10 @@ fn merge_transcript_text(previous: &str, next: &str) -> String {
     let max_overlap = previous_words.len().min(next_words.len()).min(20);
 
     for overlap in (1..=max_overlap).rev() {
-        let previous_tail = previous_words[previous_words.len() - overlap..]
-            .iter()
-            .map(|word| normalize_transcript_word(word))
-            .collect::<Vec<_>>();
-        let next_head = next_words[..overlap]
-            .iter()
-            .map(|word| normalize_transcript_word(word))
-            .collect::<Vec<_>>();
-        if previous_tail == next_head {
+        if transcript_overlap_matches(
+            &previous_words[previous_words.len() - overlap..],
+            &next_words[..overlap],
+        ) {
             let remainder = next_words[overlap..].join(" ");
             if remainder.is_empty() {
                 return previous.to_string();
@@ -652,9 +737,129 @@ fn merge_transcript_text(previous: &str, next: &str) -> String {
     format!("{previous} {next}")
 }
 
+fn transcript_overlap_matches(previous_tail: &[&str], next_head: &[&str]) -> bool {
+    let overlap = previous_tail.len();
+    if overlap != next_head.len() || overlap == 0 {
+        return false;
+    }
+
+    let allowed_mismatches = usize::from(overlap >= 4);
+    let mut mismatches = 0;
+    for (previous, next) in previous_tail.iter().zip(next_head.iter()) {
+        let previous = normalize_transcript_word(previous);
+        let next = normalize_transcript_word(next);
+        if previous.is_empty() || next.is_empty() || !transcript_words_similar(&previous, &next) {
+            mismatches += 1;
+            if mismatches > allowed_mismatches {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn transcript_words_similar(left: &str, right: &str) -> bool {
+    left == right || (left.len().min(right.len()) >= 4 && edit_distance_at_most_one(left, right))
+}
+
+fn edit_distance_at_most_one(left: &str, right: &str) -> bool {
+    let left_chars = left.chars().collect::<Vec<_>>();
+    let right_chars = right.chars().collect::<Vec<_>>();
+    if left_chars.len().abs_diff(right_chars.len()) > 1 {
+        return false;
+    }
+
+    if left_chars.len() == right_chars.len() {
+        return left_chars
+            .iter()
+            .zip(right_chars.iter())
+            .filter(|(left, right)| left != right)
+            .count()
+            <= 1;
+    }
+
+    let (shorter, longer) = if left_chars.len() < right_chars.len() {
+        (&left_chars, &right_chars)
+    } else {
+        (&right_chars, &left_chars)
+    };
+    let mut short_index = 0;
+    let mut long_index = 0;
+    let mut edits = 0;
+    while short_index < shorter.len() && long_index < longer.len() {
+        if shorter[short_index] == longer[long_index] {
+            short_index += 1;
+            long_index += 1;
+        } else {
+            edits += 1;
+            if edits > 1 {
+                return false;
+            }
+            long_index += 1;
+        }
+    }
+
+    true
+}
+
 fn normalize_transcript_word(word: &str) -> String {
     word.trim_matches(|ch: char| !ch.is_alphanumeric())
         .to_lowercase()
+}
+
+fn contains_probable_speech(samples: &[i16], sample_rate: u32) -> bool {
+    let stats = audio_activity_stats(samples, sample_rate);
+    if stats.peak < WHISPER_SPEECH_PEAK_THRESHOLD {
+        return false;
+    }
+
+    stats.rms >= WHISPER_SPEECH_RMS_THRESHOLD
+        || stats.active_speech_ms >= WHISPER_MIN_ACTIVE_SPEECH_MS
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AudioActivityStats {
+    peak: f32,
+    rms: f32,
+    active_speech_ms: usize,
+}
+
+fn audio_activity_stats(samples: &[i16], sample_rate: u32) -> AudioActivityStats {
+    let (peak, rms) = peak_and_rms(samples);
+    let window_samples = (sample_rate as usize * WHISPER_SPEECH_WINDOW_MS / 1000).max(1);
+    let mut active_windows = 0;
+    for window in samples.chunks(window_samples) {
+        let (window_peak, window_rms) = peak_and_rms(window);
+        if window_peak >= WHISPER_SPEECH_WINDOW_PEAK_THRESHOLD
+            || window_rms >= WHISPER_SPEECH_WINDOW_RMS_THRESHOLD
+        {
+            active_windows += 1;
+        }
+    }
+
+    AudioActivityStats {
+        peak,
+        rms,
+        active_speech_ms: active_windows * WHISPER_SPEECH_WINDOW_MS,
+    }
+}
+
+fn peak_and_rms(samples: &[i16]) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0);
+    }
+
+    let mut peak = 0.0_f32;
+    let mut sum_sq = 0.0_f64;
+    for sample in samples {
+        let normalized = f32::from(*sample) / 32768.0;
+        let abs = normalized.abs();
+        peak = peak.max(abs);
+        sum_sq += f64::from(normalized * normalized);
+    }
+
+    (peak, (sum_sq / samples.len() as f64).sqrt() as f32)
 }
 
 fn resample_i16_to_16khz_f32(samples: &[i16], source_rate: u32) -> Vec<f32> {
@@ -701,8 +906,9 @@ fn path_to_string(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_final_whisper_chunk, dispatch_ready_whisper_chunks, merge_transcript_text,
-        resample_i16_to_16khz_f32, WhisperChunkJob, WHISPER_CHUNK_OVERLAP_SECONDS,
+        contains_probable_speech, dispatch_final_whisper_chunk, dispatch_ready_whisper_chunks,
+        is_non_speech_annotation, merge_transcript_text, resample_i16_to_16khz_f32,
+        WhisperChunkJob, WHISPER_CHUNK_OVERLAP_SECONDS,
     };
     use std::sync::mpsc;
 
@@ -737,7 +943,7 @@ mod tests {
         let chunk_seconds = 20;
         let chunk_samples = sample_rate as usize * chunk_seconds;
         let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
-        let mut buffer = (0..chunk_samples as i16).collect::<Vec<_>>();
+        let mut buffer = vec![2_000_i16; chunk_samples];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 0;
         let mut dispatched_chunks = 0;
@@ -762,6 +968,33 @@ mod tests {
     }
 
     #[test]
+    fn skips_ready_whisper_chunks_without_probable_speech() {
+        let sample_rate = 10;
+        let chunk_seconds = 20;
+        let chunk_samples = sample_rate as usize * chunk_seconds;
+        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let mut buffer = vec![1_i16; chunk_samples];
+        let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
+        let mut chunk_index = 0;
+        let mut dispatched_chunks = 0;
+
+        dispatch_ready_whisper_chunks(
+            &mut buffer,
+            sample_rate,
+            chunk_seconds,
+            &tx,
+            &mut chunk_index,
+            &mut dispatched_chunks,
+        )
+        .expect("dispatch ready chunk");
+
+        assert!(rx.try_recv().is_err());
+        assert_eq!(buffer.len(), overlap_samples);
+        assert_eq!(chunk_index, 1);
+        assert_eq!(dispatched_chunks, 0);
+    }
+
+    #[test]
     fn skips_final_chunk_when_only_overlap_remains() {
         let sample_rate = 10;
         let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
@@ -781,7 +1014,7 @@ mod tests {
     fn dispatches_final_chunk_when_new_audio_follows_overlap() {
         let sample_rate = 10;
         let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
-        let mut buffer = vec![1; overlap_samples + 5];
+        let mut buffer = vec![2_000_i16; overlap_samples + 5];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;
 
@@ -793,6 +1026,22 @@ mod tests {
         assert_eq!(job.pcm_i16.len(), overlap_samples + 5);
         assert!(buffer.is_empty());
         assert_eq!(chunk_index, 2);
+    }
+
+    #[test]
+    fn skips_final_chunk_without_probable_speech() {
+        let sample_rate = 10;
+        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let mut buffer = vec![1_i16; overlap_samples + 5];
+        let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
+        let mut chunk_index = 1;
+
+        dispatch_final_whisper_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1)
+            .expect("dispatch final chunk");
+
+        assert!(rx.try_recv().is_err());
+        assert!(buffer.is_empty());
+        assert_eq!(chunk_index, 1);
     }
 
     #[test]
@@ -810,5 +1059,51 @@ mod tests {
         let merged = merge_transcript_text("Hello, world.", "world again");
 
         assert_eq!(merged, "Hello, world. again");
+    }
+
+    #[test]
+    fn merge_transcript_text_tolerates_one_overlap_mishearing() {
+        let merged = merge_transcript_text(
+            "it repeats the last three or four words",
+            "last three or four word when chunking fails",
+        );
+
+        assert_eq!(
+            merged,
+            "it repeats the last three or four words when chunking fails"
+        );
+    }
+
+    #[test]
+    fn merge_transcript_text_does_not_fuzzy_merge_short_overlap() {
+        let merged = merge_transcript_text("open mail", "male settings");
+
+        assert_eq!(merged, "open mail male settings");
+    }
+
+    #[test]
+    fn detects_probable_speech_from_active_windows() {
+        let mut samples = vec![0_i16; 48_000];
+        for sample in samples.iter_mut().take(8_000).skip(4_000) {
+            *sample = 2_000;
+        }
+
+        assert!(contains_probable_speech(&samples, 48_000));
+    }
+
+    #[test]
+    fn rejects_low_level_audio_as_probable_speech() {
+        let samples = vec![30_i16; 48_000];
+
+        assert!(!contains_probable_speech(&samples, 48_000));
+    }
+
+    #[test]
+    fn identifies_common_non_speech_annotations() {
+        assert!(is_non_speech_annotation("[BLANK_AUDIO]"));
+        assert!(is_non_speech_annotation("(background noise)"));
+        assert!(is_non_speech_annotation("[applause]"));
+        assert!(is_non_speech_annotation("(laughter)"));
+        assert!(!is_non_speech_annotation("thanks for watching"));
     }
 }
