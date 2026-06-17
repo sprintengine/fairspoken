@@ -87,7 +87,11 @@ jobs:
             hostBinary: src-tauri/target/aarch64-apple-darwin/release/transcription-host
             hostAsset: multivoice-tauri-transcription-host-macos-arm64.zip
           - name: linux
-            os: ubuntu-22.04
+            # ubuntu-24.04 (glibc 2.39): the prebuilt ONNX Runtime pulled in by
+            # the default Parakeet engine links against glibc >= 2.38, so it
+            # cannot be linked on ubuntu-22.04. This raises the glibc floor for
+            # the shipped Linux binaries accordingly.
+            os: ubuntu-24.04
             args: ""
             rustTargets: ""
             artifactName: multivoice-tauri-linux
