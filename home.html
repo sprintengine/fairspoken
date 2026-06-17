@@ -48,7 +48,7 @@
         </button>
       </nav>
       <div class="nav-spacer"></div>
-      <div class="sidebar-foot"><span class="dot good"></span> Ready · local whisper</div>
+      <div class="sidebar-foot"><span class="dot good"></span> Ready · local parakeet</div>
     </aside>
 
     <!-- ── Main ── -->
@@ -252,18 +252,12 @@
                 <div class="row" id="modelField">
                   <div class="row-text">
                     <label class="row-label" for="modelSelect">Model</label>
-                    <div class="row-help">Larger models are more accurate and use more memory.</div>
+                    <div class="row-help">Parakeet TDT runs locally for fast, accurate transcription.</div>
                   </div>
                   <div class="row-control">
-                    <span class="meta num" id="modelSize">RAM ~1.2G</span>
+                    <span class="meta num" id="modelSize">RAM ~2.5G</span>
                     <select id="modelSelect" class="setting-select w-md">
-                      <option value="tiny">Tiny</option>
-                      <option value="base">Base</option>
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large-v2">Large v2</option>
-                      <option value="large-v3">Large v3</option>
-                      <option value="large-v3-turbo">Large v3 Turbo</option>
+                      <option value="parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
                     </select>
                   </div>
                 </div>
@@ -333,7 +327,7 @@
                 <div class="row" id="useGpuRow">
                   <div class="row-text">
                     <label class="row-label" for="useGpu">GPU acceleration</label>
-                    <div class="row-help">Run Whisper on the GPU; turn off to force CPU.</div>
+                    <div class="row-help">Runs the Whisper engine on the GPU (whisper builds only); turn off to force CPU.</div>
                   </div>
                   <div class="row-control">
                     <input id="useGpu" class="switch" type="checkbox" role="switch" />
@@ -342,7 +336,7 @@
 
                 <div class="row" id="whisperChunkField">
                   <div class="row-text">
-                    <label class="row-label" for="whisperChunkSeconds">Whisper chunk</label>
+                    <label class="row-label" for="whisperChunkSeconds">Chunk length</label>
                     <div class="row-help">Seconds of audio per transcription pass.</div>
                   </div>
                   <div class="row-control">

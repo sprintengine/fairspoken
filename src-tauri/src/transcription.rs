@@ -1,29 +1,53 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::models::{ModelService, WhisperModel};
+use crate::models::{ModelService, SttModel};
 use crate::settings::Settings;
-use std::path::{Path, PathBuf};
+use parakeet_rs::{ParakeetTDT, Transcriber};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+
+#[cfg(feature = "whisper")]
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperSegment,
 };
 
-const WHISPER_STREAM_CHANNEL_DEPTH: usize = 64;
-const WHISPER_CHUNK_OVERLAP_SECONDS: usize = 1;
-const WHISPER_SPEECH_PEAK_THRESHOLD: f32 = 0.010;
-const WHISPER_SPEECH_RMS_THRESHOLD: f32 = 0.0015;
-const WHISPER_SPEECH_WINDOW_MS: usize = 30;
-const WHISPER_SPEECH_WINDOW_PEAK_THRESHOLD: f32 = 0.020;
-const WHISPER_SPEECH_WINDOW_RMS_THRESHOLD: f32 = 0.004;
-const WHISPER_MIN_ACTIVE_SPEECH_MS: usize = 120;
-const WHISPER_NO_SPEECH_PROBABILITY_THRESHOLD: f32 = 0.60;
-const WHISPER_MIN_AVG_TOKEN_PROBABILITY: f32 = 0.12;
+const STREAM_CHANNEL_DEPTH: usize = 64;
+const CHUNK_OVERLAP_SECONDS: usize = 1;
+const SPEECH_PEAK_THRESHOLD: f32 = 0.010;
+const SPEECH_RMS_THRESHOLD: f32 = 0.0015;
+const SPEECH_WINDOW_MS: usize = 30;
+const SPEECH_WINDOW_PEAK_THRESHOLD: f32 = 0.020;
+const SPEECH_WINDOW_RMS_THRESHOLD: f32 = 0.004;
+const MIN_ACTIVE_SPEECH_MS: usize = 120;
+#[cfg(feature = "whisper")]
+const NO_SPEECH_PROBABILITY_THRESHOLD: f32 = 0.60;
+#[cfg(feature = "whisper")]
+const MIN_AVG_TOKEN_PROBABILITY: f32 = 0.12;
+
+/// Sentinel returned by the chunking worker when no audio was ever streamed, so
+/// the caller can fall back to a direct (whole-recording) transcription.
+const NO_STREAMED_AUDIO: &str = "No audio frames were streamed to the transcriber";
+
+/// A loaded speech-to-text engine that can transcribe a single block of PCM.
+/// Both Parakeet and (optionally) Whisper implement this so the chunked
+/// streaming machinery is engine-agnostic.
+pub trait ChunkTranscriber: Send + Sync {
+    /// `language` and `initial_prompt` are honoured by Whisper; Parakeet
+    /// ignores them.
+    fn transcribe_pcm(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        language: &str,
+        initial_prompt: Option<&str>,
+    ) -> Result<String, String>;
+}
 
 #[derive(Default)]
 pub struct TranscriptionService {
-    active: Option<WhisperTranscriber>,
-    session: Option<WhisperSessionHandle>,
+    active: ActiveEngine,
+    session: Option<SessionHandle>,
 }
 
 pub struct TranscriptionSessionStart {
@@ -42,26 +66,28 @@ pub struct TranscriptPreview {
 
 #[derive(Clone)]
 pub struct TranscriptionCancelHandle {
-    sender: mpsc::Sender<WhisperControl>,
+    sender: mpsc::Sender<SessionControl>,
 }
 
-struct WhisperSessionHandle {
+struct SessionHandle {
     audio_tx: SyncSender<AudioFrame>,
-    control_tx: mpsc::Sender<WhisperControl>,
+    control_tx: mpsc::Sender<SessionControl>,
     result_rx: Receiver<Result<String, String>>,
     worker: Option<JoinHandle<()>>,
 }
 
-enum WhisperControl {
+enum SessionControl {
     Finish,
     Cancel,
 }
 
+/// Holds the currently loaded engine and the identity it was loaded for, so a
+/// repeated request with the same model/GPU setting reuses it.
 #[derive(Default)]
-struct WhisperTranscriber {
-    active_model: Option<WhisperModel>,
+struct ActiveEngine {
+    active_model: Option<SttModel>,
     active_use_gpu: Option<bool>,
-    context: Option<Arc<WhisperContext>>,
+    transcriber: Option<Arc<dyn ChunkTranscriber>>,
 }
 
 impl TranscriptionService {
@@ -74,9 +100,8 @@ impl TranscriptionService {
             return Err("Transcription session already in progress".to_string());
         }
 
-        let transcriber = self.active.get_or_insert_with(WhisperTranscriber::default);
-        let model_path = models.path_for(settings.model);
-        transcriber.ensure_context(settings.model, &model_path, settings.use_gpu)?;
+        self.active
+            .ensure(settings.model, models, settings.use_gpu)?;
         Ok(None)
     }
 
@@ -90,10 +115,9 @@ impl TranscriptionService {
             return Err("Transcription session already in progress".to_string());
         }
 
-        let transcriber = self.active.get_or_insert_with(WhisperTranscriber::default);
-        let model_path = models.path_for(settings.model);
-        transcriber.ensure_context(settings.model, &model_path, settings.use_gpu)?;
-        let handle = transcriber.start_chunked_session(settings, preview_tx)?;
+        self.active
+            .ensure(settings.model, models, settings.use_gpu)?;
+        let handle = self.active.start_chunked_session(settings, preview_tx)?;
         let audio_tx = handle.audio_tx.clone();
         let cancel_handle = handle.cancel_handle();
         self.session = Some(handle);
@@ -103,13 +127,11 @@ impl TranscriptionService {
         })
     }
 
-    /// Loads (or reuses) the Whisper context for the given settings without
-    /// starting a session, so a host worker can hold the model warm before
-    /// the first job arrives.
+    /// Loads (or reuses) the engine for the given settings without starting a
+    /// session, so a host worker can hold the model warm before the first job
+    /// arrives.
     pub fn preload(&mut self, settings: &Settings, models: &ModelService) -> Result<(), String> {
-        let transcriber = self.active.get_or_insert_with(WhisperTranscriber::default);
-        let model_path = models.path_for(settings.model);
-        transcriber.ensure_context(settings.model, &model_path, settings.use_gpu)
+        self.active.ensure(settings.model, models, settings.use_gpu)
     }
 
     pub fn finish_session(
@@ -121,16 +143,14 @@ impl TranscriptionService {
         if let Some(handle) = self.session.take() {
             match handle.finish() {
                 Ok(transcript) => return Ok(transcript),
-                Err(err) if err == "No audio frames were streamed to Whisper" => {}
+                Err(err) if err == NO_STREAMED_AUDIO => {}
                 Err(err) => return Err(err),
             }
         }
 
-        let model_path = models.path_for(settings.model);
-        let Some(transcriber) = self.active.as_mut() else {
-            return Err("Whisper backend is unavailable".to_string());
-        };
-        transcriber.transcribe(recording, settings, &model_path)
+        self.active
+            .ensure(settings.model, models, settings.use_gpu)?;
+        self.active.transcribe_recording(recording, settings)
     }
 
     pub fn cancel_session(&mut self) {
@@ -141,62 +161,159 @@ impl TranscriptionService {
 
     pub fn unload(&mut self) {
         self.cancel_session();
-        self.active.take();
+        self.active = ActiveEngine::default();
     }
 }
 
 impl TranscriptionCancelHandle {
     pub fn cancel(&self) {
-        let _ = self.sender.send(WhisperControl::Cancel);
+        let _ = self.sender.send(SessionControl::Cancel);
     }
 }
 
-impl WhisperTranscriber {
-    fn transcribe(
+impl ActiveEngine {
+    fn ensure(
         &mut self,
-        recording: &Recording,
-        settings: &Settings,
-        model_path: &Path,
-    ) -> Result<String, String> {
-        if recording.pcm_i16.is_empty() {
-            return Err("No audio samples were captured".to_string());
-        }
-
-        if !model_path.is_file() {
-            return Err(format!(
-                "Whisper model is missing: {}",
-                model_path.display()
-            ));
-        }
-
-        self.ensure_context(settings.model, model_path, settings.use_gpu)?;
-
-        let context = self
-            .context
-            .as_ref()
-            .ok_or_else(|| "Whisper context is unavailable".to_string())?;
-        transcribe_whisper_pcm(
-            Arc::clone(context),
-            &recording.pcm_i16,
-            recording.sample_rate,
-            &settings.language,
-            settings.whisper_initial_prompt().as_deref(),
-        )
-    }
-
-    fn ensure_context(
-        &mut self,
-        model: WhisperModel,
-        model_path: &Path,
+        model: SttModel,
+        models: &ModelService,
         use_gpu: bool,
     ) -> Result<(), String> {
         if self.active_model == Some(model)
             && self.active_use_gpu == Some(use_gpu)
-            && self.context.is_some()
+            && self.transcriber.is_some()
         {
             return Ok(());
         }
 
+        if !models.files_present(model) {
+            return Err(format!(
+                "Model files are missing: {}",
+                models.path_for(model).display()
+            ));
+        }
+
+        let path = models.path_for(model);
+        let transcriber: Arc<dyn ChunkTranscriber> = match model {
+            SttModel::Parakeet => Arc::new(ParakeetTranscriber::load(&path)?),
+            #[cfg(feature = "whisper")]
+            SttModel::Whisper(_) => Arc::new(WhisperTranscriber::load(&path, use_gpu)?),
+        };
+
+        self.transcriber = Some(transcriber);
+        self.active_model = Some(model);
+        self.active_use_gpu = Some(use_gpu);
+        Ok(())
+    }
+
+    fn start_chunked_session(
+        &self,
+        settings: &Settings,
+        preview_tx: Option<TranscriptionPreviewSender>,
+    ) -> Result<SessionHandle, String> {
+        let transcriber = self
+            .transcriber
+            .clone()
+            .ok_or_else(|| "Transcription engine is unavailable".to_string())?;
+        let initial_prompt = if settings.model.is_whisper() {
+            settings.whisper_initial_prompt()
+        } else {
+            None
+        };
+        SessionHandle::start(
+            transcriber,
+            settings.language.clone(),
+            initial_prompt,
+            settings.whisper_chunk_seconds,
+            preview_tx,
+        )
+    }
+
+    fn transcribe_recording(
+        &self,
+        recording: &Recording,
+        settings: &Settings,
+    ) -> Result<String, String> {
+        if recording.pcm_i16.is_empty() {
+            return Err("No audio samples were captured".to_string());
+        }
+        let transcriber = self
+            .transcriber
+            .as_ref()
+            .ok_or_else(|| "Transcription engine is unavailable".to_string())?;
+        let initial_prompt = if settings.model.is_whisper() {
+            settings.whisper_initial_prompt()
+        } else {
+            None
+        };
+        transcriber.transcribe_pcm(
+            &recording.pcm_i16,
+            recording.sample_rate,
+            &settings.language,
+            initial_prompt.as_deref(),
+        )
+    }
+}
+
+/// The default (and only, in a default build) engine: NVIDIA Parakeet TDT run
+/// in-process through `parakeet-rs`. The model is wrapped in a `Mutex` because
+/// transcription holds an exclusive ONNX session and the chunk worker calls it
+/// from a dedicated thread.
+struct ParakeetTranscriber {
+    model: Mutex<ParakeetTDT>,
+}
+
+impl ParakeetTranscriber {
+    fn load(model_dir: &Path) -> Result<Self, String> {
+        // `None` execution config defaults to CPU inference.
+        let model = ParakeetTDT::from_pretrained(model_dir, None)
+            .map_err(|err| format!("Failed to load Parakeet model: {err}"))?;
+        Ok(Self {
+            model: Mutex::new(model),
+        })
+    }
+}
+
+impl ChunkTranscriber for ParakeetTranscriber {
+    fn transcribe_pcm(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        _language: &str,
+        _initial_prompt: Option<&str>,
+    ) -> Result<String, String> {
+        if samples.is_empty() {
+            return Err("No audio samples were captured".to_string());
+        }
+        if !contains_probable_speech(samples, sample_rate) {
+            return Err("No speech was transcribed".to_string());
+        }
+
+        // Parakeet expects 16 kHz mono f32; resample to match before handing
+        // it the block. No timestamps are requested.
+        let audio = resample_i16_to_16khz_f32(samples, sample_rate);
+        let mut model = self
+            .model
+            .lock()
+            .map_err(|_| "Parakeet model lock was poisoned".to_string())?;
+        let result = model
+            .transcribe_samples(audio, 16_000, 1, None)
+            .map_err(|err| format!("Parakeet transcription failed: {err}"))?;
+        let transcript = result.text.trim().to_string();
+        if transcript.is_empty() {
+            return Err("No speech was transcribed".to_string());
+        }
+        Ok(transcript)
+    }
+}
+
+#[cfg(feature = "whisper")]
+struct WhisperTranscriber {
+    context: Arc<WhisperContext>,
+}
+
+#[cfg(feature = "whisper")]
+impl WhisperTranscriber {
+    fn load(model_path: &Path, use_gpu: bool) -> Result<Self, String> {
         let mut params = WhisperContextParameters::default();
         params.use_gpu(use_gpu);
         // Flash attention is the fast path for GPU decode but is only worth
@@ -214,48 +331,47 @@ impl WhisperTranscriber {
         let path = path_to_string(model_path)?;
         let context = WhisperContext::new_with_params(&path, params)
             .map_err(|err| format!("Failed to load Whisper model: {err}"))?;
-
-        self.context = Some(Arc::new(context));
-        self.active_model = Some(model);
-        self.active_use_gpu = Some(use_gpu);
-        Ok(())
+        Ok(Self {
+            context: Arc::new(context),
+        })
     }
+}
 
-    fn start_chunked_session(
+#[cfg(feature = "whisper")]
+impl ChunkTranscriber for WhisperTranscriber {
+    fn transcribe_pcm(
         &self,
-        settings: &Settings,
-        preview_tx: Option<TranscriptionPreviewSender>,
-    ) -> Result<WhisperSessionHandle, String> {
-        let context = self
-            .context
-            .as_ref()
-            .ok_or_else(|| "Whisper context is unavailable".to_string())?;
-        WhisperSessionHandle::start(
-            Arc::clone(context),
-            settings.language.clone(),
-            settings.whisper_initial_prompt(),
-            settings.whisper_chunk_seconds,
-            preview_tx,
+        samples: &[i16],
+        sample_rate: u32,
+        language: &str,
+        initial_prompt: Option<&str>,
+    ) -> Result<String, String> {
+        transcribe_whisper_pcm(
+            Arc::clone(&self.context),
+            samples,
+            sample_rate,
+            language,
+            initial_prompt,
         )
     }
 }
 
-impl WhisperSessionHandle {
+impl SessionHandle {
     fn start(
-        context: Arc<WhisperContext>,
+        transcriber: Arc<dyn ChunkTranscriber>,
         language: String,
         initial_prompt: Option<String>,
         chunk_seconds: u16,
         preview_tx: Option<TranscriptionPreviewSender>,
     ) -> Result<Self, String> {
-        let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(WHISPER_STREAM_CHANNEL_DEPTH);
-        let (control_tx, control_rx) = mpsc::channel::<WhisperControl>();
+        let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(STREAM_CHANNEL_DEPTH);
+        let (control_tx, control_rx) = mpsc::channel::<SessionControl>();
         let (result_tx, result_rx) = mpsc::channel::<Result<String, String>>();
         let worker = thread::Builder::new()
-            .name("whisper-chunked-transcription".to_string())
+            .name("chunked-transcription".to_string())
             .spawn(move || {
-                let result = run_whisper_chunked_session(
-                    context,
+                let result = run_chunked_session(
+                    transcriber,
                     language,
                     initial_prompt,
                     chunk_seconds,
@@ -265,7 +381,7 @@ impl WhisperSessionHandle {
                 );
                 let _ = result_tx.send(result);
             })
-            .map_err(|err| format!("Failed to start Whisper chunking worker: {err}"))?;
+            .map_err(|err| format!("Failed to start transcription worker: {err}"))?;
 
         Ok(Self {
             audio_tx,
@@ -276,12 +392,12 @@ impl WhisperSessionHandle {
     }
 
     fn finish(mut self) -> Result<String, String> {
-        let _ = self.control_tx.send(WhisperControl::Finish);
+        let _ = self.control_tx.send(SessionControl::Finish);
         drop(self.audio_tx);
         let result = self
             .result_rx
             .recv()
-            .map_err(|_| "Whisper chunking worker stopped without a transcript".to_string())?;
+            .map_err(|_| "Transcription worker stopped without a transcript".to_string())?;
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -289,7 +405,7 @@ impl WhisperSessionHandle {
     }
 
     fn cancel(mut self) {
-        let _ = self.control_tx.send(WhisperControl::Cancel);
+        let _ = self.control_tx.send(SessionControl::Cancel);
         drop(self.audio_tx);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -309,48 +425,49 @@ struct WhisperChunkJob {
     sample_rate: u32,
 }
 
-struct WhisperChunkResult {
+struct ChunkResult {
     index: usize,
     text: String,
 }
 
-fn run_whisper_chunked_session(
-    context: Arc<WhisperContext>,
+#[allow(clippy::too_many_arguments)]
+fn run_chunked_session(
+    transcriber: Arc<dyn ChunkTranscriber>,
     language: String,
     initial_prompt: Option<String>,
     chunk_seconds: u16,
     audio_rx: Receiver<AudioFrame>,
-    control_rx: Receiver<WhisperControl>,
+    control_rx: Receiver<SessionControl>,
     preview_tx: Option<TranscriptionPreviewSender>,
 ) -> Result<String, String> {
     let chunk_seconds = usize::from(chunk_seconds.clamp(5, 60));
     let (job_tx, job_rx) = mpsc::channel::<WhisperChunkJob>();
-    let (chunk_result_tx, chunk_result_rx) = mpsc::channel::<Result<WhisperChunkResult, String>>();
+    let (chunk_result_tx, chunk_result_rx) = mpsc::channel::<Result<ChunkResult, String>>();
     let worker = thread::Builder::new()
-        .name("whisper-chunk-worker".to_string())
+        .name("transcription-chunk-worker".to_string())
         .spawn(move || {
             for job in job_rx {
-                let result = transcribe_whisper_pcm(
-                    Arc::clone(&context),
-                    &job.pcm_i16,
-                    job.sample_rate,
-                    &language,
-                    initial_prompt.as_deref(),
-                )
-                .map(|text| WhisperChunkResult {
-                    index: job.index,
-                    text,
-                })
-                .or_else(|err| {
-                    if err == "No speech was transcribed" {
-                        Ok(WhisperChunkResult {
-                            index: job.index,
-                            text: String::new(),
-                        })
-                    } else {
-                        Err(err)
-                    }
-                });
+                let result = transcriber
+                    .transcribe_pcm(
+                        &job.pcm_i16,
+                        job.sample_rate,
+                        &language,
+                        initial_prompt.as_deref(),
+                    )
+                    .map(|text| ChunkResult {
+                        index: job.index,
+                        text,
+                    })
+                    .or_else(|err| {
+                        if err == "No speech was transcribed" {
+                            Ok(ChunkResult {
+                                index: job.index,
+                                text: String::new(),
+                            })
+                        } else {
+                            Err(err)
+                        }
+                    });
 
                 let should_stop = result.is_err();
                 if chunk_result_tx.send(result).is_err() || should_stop {
@@ -358,7 +475,7 @@ fn run_whisper_chunked_session(
                 }
             }
         })
-        .map_err(|err| format!("Failed to start Whisper chunk worker: {err}"))?;
+        .map_err(|err| format!("Failed to start transcription chunk worker: {err}"))?;
 
     let mut buffer = Vec::new();
     let mut sample_rate = 0;
@@ -369,10 +486,10 @@ fn run_whisper_chunked_session(
 
     loop {
         match control_rx.try_recv() {
-            Ok(WhisperControl::Finish) => break,
-            Ok(WhisperControl::Cancel) => {
+            Ok(SessionControl::Finish) => break,
+            Ok(SessionControl::Cancel) => {
                 drop(job_tx);
-                return Err("Whisper transcription was cancelled".to_string());
+                return Err("Transcription was cancelled".to_string());
             }
             Err(mpsc::TryRecvError::Disconnected) => break,
             Err(mpsc::TryRecvError::Empty) => {}
@@ -394,12 +511,12 @@ fn run_whisper_chunked_session(
                     &mut chunk_index,
                     &mut dispatched_chunks,
                 )?;
-                collect_available_whisper_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
+                collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        collect_available_whisper_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
+        collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
 
     for frame in audio_rx.try_iter() {
@@ -417,13 +534,13 @@ fn run_whisper_chunked_session(
             &mut chunk_index,
             &mut dispatched_chunks,
         )?;
-        collect_available_whisper_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
+        collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
 
     if !received_audio {
         drop(job_tx);
         let _ = worker.join();
-        return Err("No audio frames were streamed to Whisper".to_string());
+        return Err(NO_STREAMED_AUDIO.to_string());
     }
 
     dispatch_final_whisper_chunk(
@@ -438,11 +555,11 @@ fn run_whisper_chunked_session(
 
     for result in chunk_result_rx {
         chunks.push(result?);
-        emit_whisper_preview(&chunks, &preview_tx, false);
+        emit_chunk_preview(&chunks, &preview_tx, false);
     }
 
     chunks.sort_by_key(|chunk| chunk.index);
-    let transcript = merge_whisper_chunk_results(&chunks);
+    let transcript = merge_chunk_results(&chunks);
     if transcript.is_empty() {
         return Err("No speech was transcribed".to_string());
     }
@@ -450,16 +567,16 @@ fn run_whisper_chunked_session(
     Ok(transcript)
 }
 
-fn collect_available_whisper_results(
-    chunk_result_rx: &Receiver<Result<WhisperChunkResult, String>>,
-    chunks: &mut Vec<WhisperChunkResult>,
+fn collect_available_chunk_results(
+    chunk_result_rx: &Receiver<Result<ChunkResult, String>>,
+    chunks: &mut Vec<ChunkResult>,
     preview_tx: &Option<TranscriptionPreviewSender>,
 ) -> Result<(), String> {
     loop {
         match chunk_result_rx.try_recv() {
             Ok(result) => {
                 chunks.push(result?);
-                emit_whisper_preview(chunks, preview_tx, false);
+                emit_chunk_preview(chunks, preview_tx, false);
             }
             Err(mpsc::TryRecvError::Empty) => return Ok(()),
             Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
@@ -467,20 +584,20 @@ fn collect_available_whisper_results(
     }
 }
 
-fn emit_whisper_preview(
-    chunks: &[WhisperChunkResult],
+fn emit_chunk_preview(
+    chunks: &[ChunkResult],
     preview_tx: &Option<TranscriptionPreviewSender>,
     final_preview: bool,
 ) {
     let mut sorted = chunks
         .iter()
-        .map(|chunk| WhisperChunkResult {
+        .map(|chunk| ChunkResult {
             index: chunk.index,
             text: chunk.text.clone(),
         })
         .collect::<Vec<_>>();
     sorted.sort_by_key(|chunk| chunk.index);
-    let text = merge_whisper_chunk_results(&sorted);
+    let text = merge_chunk_results(&sorted);
     if !text.is_empty() {
         let index = sorted.last().map(|chunk| chunk.index).unwrap_or_default();
         emit_preview(preview_tx, index, text, final_preview);
@@ -511,7 +628,7 @@ fn dispatch_ready_whisper_chunks(
     dispatched_chunks: &mut usize,
 ) -> Result<(), String> {
     let chunk_samples = sample_rate as usize * chunk_seconds;
-    let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+    let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
     if chunk_samples == 0 {
         return Ok(());
     }
@@ -525,7 +642,7 @@ fn dispatch_ready_whisper_chunks(
                     pcm_i16: chunk.to_vec(),
                     sample_rate,
                 })
-                .map_err(|_| "Whisper chunk worker stopped while receiving audio".to_string())?;
+                .map_err(|_| "Transcription chunk worker stopped while receiving audio".to_string())?;
             *dispatched_chunks += 1;
         }
         *chunk_index += 1;
@@ -551,7 +668,7 @@ fn dispatch_final_whisper_chunk(
         return Ok(());
     }
 
-    let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+    let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
     if dispatched_chunks > 0 && buffer.len() <= overlap_samples {
         return Ok(());
     }
@@ -566,11 +683,12 @@ fn dispatch_final_whisper_chunk(
             pcm_i16: std::mem::take(buffer),
             sample_rate,
         })
-        .map_err(|_| "Whisper chunk worker stopped while receiving final audio".to_string())?;
+        .map_err(|_| "Transcription chunk worker stopped while receiving final audio".to_string())?;
     *chunk_index += 1;
     Ok(())
 }
 
+#[cfg(feature = "whisper")]
 fn transcribe_whisper_pcm(
     context: Arc<WhisperContext>,
     samples: &[i16],
@@ -627,6 +745,7 @@ fn transcribe_whisper_pcm(
     Ok(transcript)
 }
 
+#[cfg(feature = "whisper")]
 fn accepted_segment_text(segment: &WhisperSegment<'_>) -> Option<String> {
     let text = segment.to_string().trim().to_string();
     if text.is_empty() || is_non_speech_annotation(&text) {
@@ -634,14 +753,13 @@ fn accepted_segment_text(segment: &WhisperSegment<'_>) -> Option<String> {
     }
 
     let no_speech_probability = segment.no_speech_probability();
-    if no_speech_probability.is_finite()
-        && no_speech_probability >= WHISPER_NO_SPEECH_PROBABILITY_THRESHOLD
+    if no_speech_probability.is_finite() && no_speech_probability >= NO_SPEECH_PROBABILITY_THRESHOLD
     {
         return None;
     }
 
     if let Some(avg_probability) = average_segment_token_probability(segment) {
-        if avg_probability < WHISPER_MIN_AVG_TOKEN_PROBABILITY {
+        if avg_probability < MIN_AVG_TOKEN_PROBABILITY {
             return None;
         }
     }
@@ -649,6 +767,7 @@ fn accepted_segment_text(segment: &WhisperSegment<'_>) -> Option<String> {
     Some(text)
 }
 
+#[cfg(feature = "whisper")]
 fn average_segment_token_probability(segment: &WhisperSegment<'_>) -> Option<f32> {
     let mut sum = 0.0;
     let mut count = 0;
@@ -666,6 +785,7 @@ fn average_segment_token_probability(segment: &WhisperSegment<'_>) -> Option<f32
     (count > 0).then_some(sum / count as f32)
 }
 
+#[cfg_attr(not(feature = "whisper"), allow(dead_code))]
 fn is_non_speech_annotation(text: &str) -> bool {
     let trimmed = text.trim();
     let bracketed = (trimmed.starts_with('[') && trimmed.ends_with(']'))
@@ -695,7 +815,7 @@ fn is_non_speech_annotation(text: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
-fn merge_whisper_chunk_results(chunks: &[WhisperChunkResult]) -> String {
+fn merge_chunk_results(chunks: &[ChunkResult]) -> String {
     let mut transcript = String::new();
     for chunk in chunks {
         let text = chunk.text.trim();
@@ -810,12 +930,11 @@ fn normalize_transcript_word(word: &str) -> String {
 
 fn contains_probable_speech(samples: &[i16], sample_rate: u32) -> bool {
     let stats = audio_activity_stats(samples, sample_rate);
-    if stats.peak < WHISPER_SPEECH_PEAK_THRESHOLD {
+    if stats.peak < SPEECH_PEAK_THRESHOLD {
         return false;
     }
 
-    stats.rms >= WHISPER_SPEECH_RMS_THRESHOLD
-        || stats.active_speech_ms >= WHISPER_MIN_ACTIVE_SPEECH_MS
+    stats.rms >= SPEECH_RMS_THRESHOLD || stats.active_speech_ms >= MIN_ACTIVE_SPEECH_MS
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -827,13 +946,11 @@ struct AudioActivityStats {
 
 fn audio_activity_stats(samples: &[i16], sample_rate: u32) -> AudioActivityStats {
     let (peak, rms) = peak_and_rms(samples);
-    let window_samples = (sample_rate as usize * WHISPER_SPEECH_WINDOW_MS / 1000).max(1);
+    let window_samples = (sample_rate as usize * SPEECH_WINDOW_MS / 1000).max(1);
     let mut active_windows = 0;
     for window in samples.chunks(window_samples) {
         let (window_peak, window_rms) = peak_and_rms(window);
-        if window_peak >= WHISPER_SPEECH_WINDOW_PEAK_THRESHOLD
-            || window_rms >= WHISPER_SPEECH_WINDOW_RMS_THRESHOLD
-        {
+        if window_peak >= SPEECH_WINDOW_PEAK_THRESHOLD || window_rms >= SPEECH_WINDOW_RMS_THRESHOLD {
             active_windows += 1;
         }
     }
@@ -841,7 +958,7 @@ fn audio_activity_stats(samples: &[i16], sample_rate: u32) -> AudioActivityStats
     AudioActivityStats {
         peak,
         rms,
-        active_speech_ms: active_windows * WHISPER_SPEECH_WINDOW_MS,
+        active_speech_ms: active_windows * SPEECH_WINDOW_MS,
     }
 }
 
@@ -887,14 +1004,16 @@ fn resample_i16_to_16khz_f32(samples: &[i16], source_rate: u32) -> Vec<f32> {
     output
 }
 
+#[cfg(feature = "whisper")]
 fn default_thread_count() -> i32 {
     std::thread::available_parallelism()
         .map(|threads| threads.get().min(4) as i32)
         .unwrap_or(1)
 }
 
+#[cfg(feature = "whisper")]
 fn path_to_string(path: &Path) -> Result<String, String> {
-    let absolute: PathBuf = path
+    let absolute: std::path::PathBuf = path
         .canonicalize()
         .map_err(|err| format!("Failed to resolve model path: {err}"))?;
     absolute
@@ -907,8 +1026,8 @@ fn path_to_string(path: &Path) -> Result<String, String> {
 mod tests {
     use super::{
         contains_probable_speech, dispatch_final_whisper_chunk, dispatch_ready_whisper_chunks,
-        is_non_speech_annotation, merge_transcript_text, resample_i16_to_16khz_f32,
-        WhisperChunkJob, WHISPER_CHUNK_OVERLAP_SECONDS,
+        is_non_speech_annotation, merge_transcript_text, resample_i16_to_16khz_f32, WhisperChunkJob,
+        CHUNK_OVERLAP_SECONDS,
     };
     use std::sync::mpsc;
 
@@ -942,7 +1061,7 @@ mod tests {
         let sample_rate = 10;
         let chunk_seconds = 20;
         let chunk_samples = sample_rate as usize * chunk_seconds;
-        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
         let mut buffer = vec![2_000_i16; chunk_samples];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 0;
@@ -972,7 +1091,7 @@ mod tests {
         let sample_rate = 10;
         let chunk_seconds = 20;
         let chunk_samples = sample_rate as usize * chunk_seconds;
-        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
         let mut buffer = vec![1_i16; chunk_samples];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 0;
@@ -997,7 +1116,7 @@ mod tests {
     #[test]
     fn skips_final_chunk_when_only_overlap_remains() {
         let sample_rate = 10;
-        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
         let mut buffer = vec![1; overlap_samples];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;
@@ -1013,7 +1132,7 @@ mod tests {
     #[test]
     fn dispatches_final_chunk_when_new_audio_follows_overlap() {
         let sample_rate = 10;
-        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
         let mut buffer = vec![2_000_i16; overlap_samples + 5];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;
@@ -1031,7 +1150,7 @@ mod tests {
     #[test]
     fn skips_final_chunk_without_probable_speech() {
         let sample_rate = 10;
-        let overlap_samples = sample_rate as usize * WHISPER_CHUNK_OVERLAP_SECONDS;
+        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
         let mut buffer = vec![1_i16; overlap_samples + 5];
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;

@@ -74,7 +74,11 @@ pub fn build_capture_result(
         transcript,
         recording_seconds,
         transcribe_ms,
-        engine: "whisper".to_string(),
+        engine: if settings.model.is_whisper() {
+            "whisper".to_string()
+        } else {
+            "parakeet".to_string()
+        },
         model: settings.model.model_id().to_string(),
         preview_mode: capture_preview_mode(settings.transcription_location),
     }
@@ -158,7 +162,6 @@ fn default_speed_test_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::WhisperModel;
 
     fn service_at(name: &str) -> SpeedTestService {
         SpeedTestService {
@@ -223,7 +226,6 @@ mod tests {
     fn capture_result_builder_only_projects_measurement_metadata() {
         let settings = Settings {
             transcription_location: TranscriptionLocation::Local,
-            model: WhisperModel::Tiny,
             ..Settings::default()
         };
 
@@ -232,8 +234,8 @@ mod tests {
         assert_eq!(capture.transcript, "hello world");
         assert_eq!(capture.recording_seconds, 1.25);
         assert_eq!(capture.transcribe_ms, 42);
-        assert_eq!(capture.engine, "whisper");
-        assert_eq!(capture.model, "tiny");
+        assert_eq!(capture.engine, "parakeet");
+        assert_eq!(capture.model, "parakeet-tdt-0.6b-v3");
         assert_eq!(capture.preview_mode, CapturePreviewMode::Chunked);
     }
 }

@@ -1,3 +1,5 @@
+use serde::de::Deserializer;
+use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -5,9 +7,94 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+#[cfg(feature = "whisper")]
+const WHISPER_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
+/// Source repo for the ONNX export of NVIDIA Parakeet TDT 0.6B v3 that
+/// `parakeet-rs` loads. The four files below use the exact names the
+/// `ParakeetTDT` loader expects in its model directory.
+const PARAKEET_BASE_URL: &str =
+    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+const PARAKEET_DIR: &str = "parakeet-tdt-0.6b-v3";
+const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
+const PARAKEET_FILES: [&str; 4] = [
+    "encoder-model.onnx",
+    "encoder-model.onnx.data",
+    "decoder_joint-model.onnx",
+    "vocab.txt",
+];
+
+/// The set of speech-to-text models the app can run. Parakeet is the default
+/// and the only engine compiled into a default build; the Whisper family is
+/// only available when the `whisper` Cargo feature is enabled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SttModel {
+    Parakeet,
+    #[cfg(feature = "whisper")]
+    Whisper(WhisperModel),
+}
+
+impl Default for SttModel {
+    fn default() -> Self {
+        Self::Parakeet
+    }
+}
+
+impl SttModel {
+    pub fn from_model_id(model_id: &str) -> Option<Self> {
+        match model_id {
+            PARAKEET_MODEL_ID | "parakeet" => Some(Self::Parakeet),
+            #[cfg(feature = "whisper")]
+            other => WhisperModel::from_model_id(other).map(Self::Whisper),
+            #[cfg(not(feature = "whisper"))]
+            _ => None,
+        }
+    }
+
+    pub fn model_id(self) -> &'static str {
+        match self {
+            Self::Parakeet => PARAKEET_MODEL_ID,
+            #[cfg(feature = "whisper")]
+            Self::Whisper(model) => model.model_id(),
+        }
+    }
+
+    /// True when this model runs on the Whisper engine (and therefore honours
+    /// the language and vocabulary-prompt settings).
+    pub fn is_whisper(self) -> bool {
+        match self {
+            Self::Parakeet => false,
+            #[cfg(feature = "whisper")]
+            Self::Whisper(_) => true,
+        }
+    }
+}
+
+// A flat string wire format ("parakeet-tdt-0.6b-v3", "base", ...) keeps the
+// settings file, the host config, and the frontend simple. Unknown ids fall
+// back to the default model so an upgraded build that no longer recognises a
+// persisted Whisper id (e.g. the default Parakeet-only build) migrates
+// gracefully instead of failing to load the whole settings file.
+impl Serialize for SttModel {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.model_id())
+    }
+}
+
+impl<'de> Deserialize<'de> for SttModel {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from_model_id(&raw).unwrap_or_default())
+    }
+}
+
+/// The Whisper model family. Kept compiled even without the `whisper` feature
+/// (it is pure metadata with no dependencies); it is only *reachable* through
+/// `SttModel::Whisper`, which is feature-gated, so a default build can never
+/// select it.
+#[cfg_attr(not(feature = "whisper"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WhisperModel {
@@ -23,7 +110,7 @@ pub enum WhisperModel {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
-    pub model: WhisperModel,
+    pub model: SttModel,
     pub cached: bool,
     pub message: String,
     pub model_path: String,
@@ -41,6 +128,16 @@ pub struct ModelPrepareProgress {
     pub percentage: u8,
 }
 
+/// One downloadable artefact belonging to a model. Multi-file models (Parakeet)
+/// list several; single-file models (Whisper) list one. `hash` is optional
+/// because the published checksums for the Parakeet ONNX export are not pinned
+/// yet — when absent, presence on disk is the only validation.
+struct ModelFile {
+    name: &'static str,
+    url: String,
+    hash: Option<ModelHash>,
+}
+
 impl Default for ModelService {
     fn default() -> Self {
         Self {
@@ -50,30 +147,48 @@ impl Default for ModelService {
 }
 
 impl ModelService {
-    pub fn status(&self, model: WhisperModel) -> ModelStatus {
-        let path = self.path_for(model);
-        let cached = path.is_file() && file_hash_matches(&path, model.hash()).unwrap_or(false);
+    pub fn status(&self, model: SttModel) -> ModelStatus {
+        let (dir, files) = self.storage(model);
+        let mut cached = true;
+        let mut first_problem: Option<String> = None;
+        for file in &files {
+            let path = dir.join(file.name);
+            if !path.is_file() {
+                cached = false;
+                first_problem.get_or_insert_with(|| {
+                    format!("Missing model file: {}", path.display())
+                });
+                continue;
+            }
+            if let Some(hash) = file.hash {
+                if !file_hash_matches(&path, hash).unwrap_or(false) {
+                    cached = false;
+                    first_problem.get_or_insert_with(|| {
+                        format!("Model file failed checksum validation: {}", path.display())
+                    });
+                }
+            }
+        }
+
         ModelStatus {
             model,
             cached,
             message: if cached {
                 "Model file is available".to_string()
-            } else if path.is_file() {
-                format!("Model file failed checksum validation: {}", path.display())
             } else {
-                format!("Missing model file: {}", path.display())
+                first_problem.unwrap_or_else(|| "Model files are missing".to_string())
             },
-            model_path: path.display().to_string(),
+            model_path: self.path_for(model).display().to_string(),
         }
     }
 
-    pub fn prepare(&self, model: WhisperModel) -> Result<ModelStatus, String> {
+    pub fn prepare(&self, model: SttModel) -> Result<ModelStatus, String> {
         self.prepare_with_progress(model, |_| {})
     }
 
     pub fn prepare_with_progress(
         &self,
-        model: WhisperModel,
+        model: SttModel,
         mut progress: impl FnMut(ModelPrepareProgress),
     ) -> Result<ModelStatus, String> {
         let status = self.status(model);
@@ -86,31 +201,62 @@ impl ModelService {
             return Ok(status);
         }
 
-        fs::create_dir_all(&self.base_dir)
+        let (dir, files) = self.storage(model);
+        fs::create_dir_all(&dir)
             .map_err(|err| format!("Failed to create model directory: {err}"))?;
 
-        let url = format!("{MODEL_BASE_URL}/{}", model.file_name());
-        let target = self.path_for(model);
-        let tmp = target.with_extension("download");
-        download_to_file_with_progress(&url, &tmp, |percentage| {
-            progress(ModelPrepareProgress {
-                stage: "downloading",
-                message: format!("Downloading {}", model.model_id()),
-                percentage,
-            })
-        })?;
+        let file_count = files.len().max(1) as u32;
+        for (index, file) in files.iter().enumerate() {
+            let target = dir.join(file.name);
+            // Skip artefacts already present (and valid, when a checksum is
+            // known) so an interrupted multi-file download resumes cheaply.
+            let already_valid = target.is_file()
+                && file
+                    .hash
+                    .map(|hash| file_hash_matches(&target, hash).unwrap_or(false))
+                    .unwrap_or(true);
+            if already_valid {
+                continue;
+            }
 
-        progress(ModelPrepareProgress {
-            stage: "validating",
-            message: "Validating model checksum".to_string(),
-            percentage: 95,
-        });
-        if !file_hash_matches(&tmp, model.hash())? {
-            let _ = fs::remove_file(&tmp);
-            return Err("Downloaded model failed checksum validation".to_string());
+            let tmp = target.with_extension("download");
+            let label = format!(
+                "Downloading {} ({}/{})",
+                model.model_id(),
+                index + 1,
+                file_count
+            );
+            let file_index = index as u32;
+            download_to_file_with_progress(&file.url, &tmp, |file_percentage| {
+                // Map this file's 0-100 onto its slice of the overall 0-95 band.
+                let overall =
+                    ((file_index * 100 + u32::from(file_percentage)) / file_count).min(95) as u8;
+                progress(ModelPrepareProgress {
+                    stage: "downloading",
+                    message: label.clone(),
+                    percentage: overall.max(1),
+                });
+            })?;
+
+            if let Some(hash) = file.hash {
+                progress(ModelPrepareProgress {
+                    stage: "validating",
+                    message: "Validating model checksum".to_string(),
+                    percentage: 96,
+                });
+                if !file_hash_matches(&tmp, hash)? {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(format!(
+                        "Downloaded model file failed checksum validation: {}",
+                        file.name
+                    ));
+                }
+            }
+
+            fs::rename(&tmp, &target)
+                .map_err(|err| format!("Failed to install model file: {err}"))?;
         }
 
-        fs::rename(&tmp, &target).map_err(|err| format!("Failed to install model file: {err}"))?;
         let status = self.status(model);
         progress(ModelPrepareProgress {
             stage: "ready",
@@ -120,12 +266,71 @@ impl ModelService {
         Ok(status)
     }
 
-    pub fn path_for(&self, model: WhisperModel) -> PathBuf {
-        self.base_dir.join(model.file_name())
+    /// The path handed to the inference engine: the model *directory* for
+    /// Parakeet (its loader reads several files from it) and the single model
+    /// *file* for Whisper.
+    pub fn path_for(&self, model: SttModel) -> PathBuf {
+        match model {
+            SttModel::Parakeet => self.base_dir.join(PARAKEET_DIR),
+            #[cfg(feature = "whisper")]
+            SttModel::Whisper(whisper) => self.base_dir.join(whisper.file_name()),
+        }
+    }
+
+    /// Cheap existence check used where loading would be too expensive (host
+    /// worker availability, dashboard snapshot): every artefact present, no
+    /// checksum verification.
+    pub fn files_present(&self, model: SttModel) -> bool {
+        let (dir, files) = self.storage(model);
+        files.iter().all(|file| dir.join(file.name).is_file())
+    }
+
+    /// Newest modification time across the model's installed files, used by the
+    /// host worker to decide whether a previously failed load is worth
+    /// retrying after the files on disk changed.
+    pub fn installed_mtime(&self, model: SttModel) -> Option<SystemTime> {
+        let (dir, files) = self.storage(model);
+        files
+            .iter()
+            .filter_map(|file| {
+                fs::metadata(dir.join(file.name))
+                    .and_then(|meta| meta.modified())
+                    .ok()
+            })
+            .max()
+    }
+
+    /// The on-disk directory holding a model's files, plus the file manifest.
+    fn storage(&self, model: SttModel) -> (PathBuf, Vec<ModelFile>) {
+        match model {
+            SttModel::Parakeet => {
+                let files = PARAKEET_FILES
+                    .iter()
+                    .map(|name| ModelFile {
+                        name,
+                        url: format!("{PARAKEET_BASE_URL}/{name}"),
+                        // TODO: pin SHA256 for each Parakeet file once the
+                        // checksums can be fetched from Hugging Face.
+                        hash: None,
+                    })
+                    .collect();
+                (self.base_dir.join(PARAKEET_DIR), files)
+            }
+            #[cfg(feature = "whisper")]
+            SttModel::Whisper(whisper) => {
+                let file = ModelFile {
+                    name: whisper.file_name(),
+                    url: format!("{WHISPER_BASE_URL}/{}", whisper.file_name()),
+                    hash: Some(whisper.hash()),
+                };
+                (self.base_dir.clone(), vec![file])
+            }
+        }
     }
 }
 
 impl WhisperModel {
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     pub fn from_model_id(model_id: &str) -> Option<Self> {
         match model_id {
             "tiny" => Some(Self::Tiny),
@@ -139,6 +344,7 @@ impl WhisperModel {
         }
     }
 
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     pub fn model_id(self) -> &'static str {
         match self {
             Self::Tiny => "tiny",
@@ -151,6 +357,7 @@ impl WhisperModel {
         }
     }
 
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     fn file_name(self) -> &'static str {
         match self {
             Self::Tiny => "ggml-tiny.bin",
@@ -163,6 +370,7 @@ impl WhisperModel {
         }
     }
 
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     fn hash(self) -> ModelHash {
         match self {
             Self::Tiny => ModelHash::Sha1("bd577a113a864445d4c299885e0cb97d4ba92b5f"),
@@ -228,14 +436,14 @@ fn download_to_file_with_progress(
             .map_err(|err| format!("Failed to write model download: {err}"))?;
         downloaded += read as u64;
         if let Some(total) = total.filter(|value| *value > 0) {
-            let percentage = ((downloaded.saturating_mul(70) / total).min(70)) as u8;
+            let percentage = ((downloaded.saturating_mul(100) / total).min(100)) as u8;
             if percentage > last_percentage {
                 last_percentage = percentage;
                 progress(percentage.max(1));
             }
         }
     }
-    progress(70);
+    progress(100);
     Ok(())
 }
 
@@ -288,7 +496,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_hash_matches, ModelHash, ModelService, WhisperModel};
+    use super::{file_hash_matches, ModelHash, ModelService, SttModel};
     use std::fs;
 
     #[test]
@@ -329,29 +537,51 @@ mod tests {
     }
 
     #[test]
-    fn maps_large_v3_turbo_model_metadata() {
-        let model = WhisperModel::from_model_id("large-v3-turbo").expect("model");
+    fn parakeet_is_the_default_model() {
+        assert_eq!(SttModel::default(), SttModel::Parakeet);
+        assert_eq!(SttModel::default().model_id(), "parakeet-tdt-0.6b-v3");
+        assert_eq!(
+            SttModel::from_model_id("parakeet-tdt-0.6b-v3"),
+            Some(SttModel::Parakeet)
+        );
+        assert_eq!(SttModel::from_model_id("parakeet"), Some(SttModel::Parakeet));
+    }
 
-        assert_eq!(model.model_id(), "large-v3-turbo");
-        assert_eq!(model.file_name(), "ggml-large-v3-turbo.bin");
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn maps_whisper_model_ids_when_compiled_in() {
+        use super::WhisperModel;
+        assert_eq!(
+            SttModel::from_model_id("large-v3-turbo"),
+            Some(SttModel::Whisper(WhisperModel::LargeV3Turbo))
+        );
+        assert_eq!(SttModel::from_model_id("base").unwrap().model_id(), "base");
+    }
+
+    #[cfg(not(feature = "whisper"))]
+    #[test]
+    fn whisper_ids_are_unknown_in_a_parakeet_only_build() {
+        assert_eq!(SttModel::from_model_id("base"), None);
     }
 
     #[test]
-    fn reports_missing_model_status() {
+    fn reports_missing_model_status_for_parakeet() {
         let service = ModelService {
             base_dir: std::env::temp_dir()
                 .join(format!("multivoice-tauri-models-{}", std::process::id())),
         };
-        let status = service.status(WhisperModel::Tiny);
+        let status = service.status(SttModel::Parakeet);
 
         assert!(!status.cached);
         assert!(status.message.contains("Missing model file"));
-        assert!(status.model_path.ends_with("ggml-tiny.bin"));
+        assert!(status.model_path.ends_with("parakeet-tdt-0.6b-v3"));
     }
 
+    #[cfg(feature = "whisper")]
     #[test]
     #[ignore = "downloads the tiny whisper.cpp model"]
     fn downloads_tiny_model() {
+        use super::WhisperModel;
         let service = ModelService {
             base_dir: std::env::temp_dir().join(format!(
                 "multivoice-tauri-model-download-{}",
@@ -359,7 +589,7 @@ mod tests {
             )),
         };
         let status = service
-            .prepare(WhisperModel::Tiny)
+            .prepare(SttModel::Whisper(WhisperModel::Tiny))
             .expect("prepare tiny model");
 
         assert!(status.cached);

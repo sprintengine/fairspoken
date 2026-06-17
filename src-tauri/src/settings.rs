@@ -1,4 +1,4 @@
-use crate::models::WhisperModel;
+use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -25,7 +25,8 @@ pub enum RecordingShortcutMode {
 pub struct Settings {
     #[serde(default)]
     pub transcription_location: TranscriptionLocation,
-    pub model: WhisperModel,
+    #[serde(default)]
+    pub model: SttModel,
     #[serde(default)]
     pub remote_url: String,
     #[serde(default)]
@@ -105,7 +106,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             transcription_location: TranscriptionLocation::Local,
-            model: WhisperModel::Base,
+            model: SttModel::default(),
             remote_url: String::new(),
             remote_auth_token: String::new(),
             remote_timeout_seconds: default_remote_timeout_seconds(),

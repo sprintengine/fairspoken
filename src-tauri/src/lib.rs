@@ -17,7 +17,7 @@ pub use host::run_transcription_host;
 
 use audio::{AudioService, Recording};
 use clipboard::ClipboardService;
-use models::{ModelPrepareProgress, ModelService, ModelStatus, WhisperModel};
+use models::{ModelPrepareProgress, ModelService, ModelStatus, SttModel};
 use notes::{NewNote, Note, NotesService};
 use post_processing::apply_transcript_post_processing;
 use remote_transcription::{
@@ -215,7 +215,7 @@ fn save_dictionary(
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptionModelRequest {
-    model: Option<WhisperModel>,
+    model: Option<SttModel>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -254,7 +254,7 @@ struct TranscriptHistoryUpdatedEvent {
 
 #[tauri::command]
 fn get_model_status(
-    model: WhisperModel,
+    model: SttModel,
     services: State<'_, AppServices>,
 ) -> Result<ModelStatus, String> {
     Ok(services.models.status(model))
@@ -262,7 +262,7 @@ fn get_model_status(
 
 #[tauri::command]
 fn prepare_model(
-    model: WhisperModel,
+    model: SttModel,
     services: State<'_, AppServices>,
 ) -> Result<ModelStatus, String> {
     services.models.prepare(model)
@@ -317,8 +317,8 @@ fn begin_prepare_transcription_model(
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
-    let whisper_model = request.model.unwrap_or(settings.model);
-    let model_id = whisper_model.model_id().to_string();
+    let model = request.model.unwrap_or(settings.model);
+    let model_id = model.model_id().to_string();
     let models = services.models.clone();
     let running = Arc::clone(&services.model_prepare_running);
 
@@ -338,7 +338,7 @@ fn begin_prepare_transcription_model(
                 None,
             );
 
-            let result = models.prepare_with_progress(whisper_model, |progress| {
+            let result = models.prepare_with_progress(model, |progress| {
                 emit_model_prepare_event(&app, &model_id, progress, false, None, None);
             });
 

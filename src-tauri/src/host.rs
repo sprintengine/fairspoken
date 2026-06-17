@@ -1,5 +1,5 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::models::{ModelService, WhisperModel};
+use crate::models::{ModelService, SttModel};
 use crate::remote_transcription::{
     decode_wav, read_stream_frame, RemoteHealth, RemoteTranscriptionResponse, BACKEND_ID,
 };
@@ -36,7 +36,7 @@ const MIN_HOST_MAX_ACTIVE_STREAMS: u32 = 1;
 const MAX_HOST_MAX_ACTIVE_STREAMS: u32 = 32;
 const MIN_HOST_MAX_RECORDING_SECONDS: u16 = 10;
 const MAX_HOST_MAX_RECORDING_SECONDS: u16 = 600;
-const DEFAULT_HOST_MODEL: WhisperModel = WhisperModel::Base;
+const DEFAULT_HOST_MODEL: SttModel = SttModel::Parakeet;
 // How long an idle worker blocks on the job queue before re-checking its
 // assigned model, so runtime model changes and freshly downloaded model files
 // are picked up without a job arriving.
@@ -280,7 +280,7 @@ struct HostRuntimeConfig {
     max_active_streams: u32,
     max_recording_seconds: u16,
     use_gpu: bool,
-    worker_models: Vec<WhisperModel>,
+    worker_models: Vec<SttModel>,
 }
 
 impl HostRuntimeConfig {
@@ -324,7 +324,7 @@ impl HostRuntimeConfig {
 fn parse_worker_models(
     raw: Option<&str>,
     worker_count: usize,
-) -> Result<Vec<WhisperModel>, String> {
+) -> Result<Vec<SttModel>, String> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(vec![DEFAULT_HOST_MODEL; worker_count]);
     };
@@ -332,8 +332,8 @@ fn parse_worker_models(
         .split(',')
         .map(|id| {
             let id = id.trim();
-            WhisperModel::from_model_id(id).ok_or_else(|| {
-                format!("MULTIVOICE_HOST_MODEL has an unsupported Whisper model: {id}")
+            SttModel::from_model_id(id).ok_or_else(|| {
+                format!("MULTIVOICE_HOST_MODEL has an unsupported model: {id}")
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -359,7 +359,7 @@ struct PersistedHostConfig {
     max_active_streams: u32,
     max_recording_seconds: u16,
     use_gpu: bool,
-    worker_models: Vec<WhisperModel>,
+    worker_models: Vec<SttModel>,
 }
 
 fn default_host_config_path() -> PathBuf {
@@ -466,7 +466,7 @@ struct HostLiveConfig {
     max_active_streams: AtomicU32,
     max_recording_seconds: AtomicU32,
     use_gpu: AtomicBool,
-    worker_models: Mutex<Vec<WhisperModel>>,
+    worker_models: Mutex<Vec<SttModel>>,
 }
 
 impl HostLiveConfig {
@@ -491,7 +491,7 @@ impl HostLiveConfig {
         self.use_gpu.load(Ordering::Relaxed)
     }
 
-    fn worker_models_lock(&self) -> MutexGuard<'_, Vec<WhisperModel>> {
+    fn worker_models_lock(&self) -> MutexGuard<'_, Vec<SttModel>> {
         // The critical sections only read or swap the Vec, so a poisoned lock
         // still holds a usable value.
         self.worker_models
@@ -499,18 +499,18 @@ impl HostLiveConfig {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn worker_model(&self, worker_index: usize) -> WhisperModel {
+    fn worker_model(&self, worker_index: usize) -> SttModel {
         self.worker_models_lock()
             .get(worker_index)
             .copied()
             .unwrap_or(DEFAULT_HOST_MODEL)
     }
 
-    fn worker_models(&self) -> Vec<WhisperModel> {
+    fn worker_models(&self) -> Vec<SttModel> {
         self.worker_models_lock().clone()
     }
 
-    fn set_worker_models(&self, next: Vec<WhisperModel>) {
+    fn set_worker_models(&self, next: Vec<SttModel>) {
         *self.worker_models_lock() = next;
     }
 
@@ -611,8 +611,8 @@ fn apply_config_update(update: &HostConfigUpdate, live: &HostLiveConfig) -> Resu
             return Err("Provide either model or workerModels, not both".to_string())
         }
         (Some(id), None) => {
-            let model = WhisperModel::from_model_id(id)
-                .ok_or_else(|| format!("Unsupported Whisper model: {id}"))?;
+            let model = SttModel::from_model_id(id)
+                .ok_or_else(|| format!("Unsupported model: {id}"))?;
             Some(vec![model; worker_count])
         }
         (None, Some(ids)) => {
@@ -624,8 +624,8 @@ fn apply_config_update(update: &HostConfigUpdate, live: &HostLiveConfig) -> Resu
             Some(
                 ids.iter()
                     .map(|id| {
-                        WhisperModel::from_model_id(id)
-                            .ok_or_else(|| format!("Unsupported Whisper model: {id}"))
+                        SttModel::from_model_id(id)
+                            .ok_or_else(|| format!("Unsupported model: {id}"))
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )
@@ -674,11 +674,11 @@ fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Res
             )
         }
     };
-    let Some(model) = WhisperModel::from_model_id(&download.model) else {
+    let Some(model) = SttModel::from_model_id(&download.model) else {
         return respond_error(
             request,
             StatusCode(400),
-            &format!("Unsupported Whisper model: {}", download.model),
+            &format!("Unsupported model: {}", download.model),
         );
     };
 
@@ -1015,11 +1015,11 @@ fn run_host_worker(
     // Mirrors the model/GPU pair held by this worker's Whisper context, so
     // the dashboard can show a "loading model" phase when a context (re)load
     // is in flight.
-    let mut loaded: Option<(WhisperModel, bool)> = None;
+    let mut loaded: Option<(SttModel, bool)> = None;
     // Last (model, GPU, file mtime) whose load failed; retried only when the
     // target or the file on disk changes, so a corrupt model file is not
     // re-read on every idle poll.
-    let mut last_failed: Option<(WhisperModel, bool, Option<SystemTime>)> = None;
+    let mut last_failed: Option<(SttModel, bool, Option<SystemTime>)> = None;
     loop {
         // The served model is host configuration: load the assigned model
         // while idle so the first dictation never pays the load wait, and so
@@ -1027,8 +1027,7 @@ fn run_host_worker(
         let assigned_model = live.worker_model(worker_index);
         let target = (assigned_model, live.use_gpu());
         if loaded != Some(target) {
-            let path = models.path_for(assigned_model);
-            if !path.is_file() {
+            if !models.files_present(assigned_model) {
                 if loaded.is_some() {
                     // Free the previous context: serving the old model would
                     // be a silent fallback, so the worker holds nothing.
@@ -1046,7 +1045,7 @@ fn run_host_worker(
                     );
                 }
             } else {
-                let mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+                let mtime = models.installed_mtime(assigned_model);
                 if last_failed != Some((target.0, target.1, mtime)) {
                     if let Ok(mut metrics) = metrics.lock() {
                         metrics.worker_preloading(worker_index);
@@ -1301,7 +1300,7 @@ fn transcribe_recording(
 }
 
 fn settings_from_headers(request: &Request) -> Result<Settings, String> {
-    let backend = header_value(request, "x-multivoice-backend").unwrap_or("whisper");
+    let backend = header_value(request, "x-multivoice-backend").unwrap_or(BACKEND_ID);
     let language = header_value(request, "x-multivoice-language")
         .unwrap_or("en")
         .to_string();
@@ -1319,7 +1318,7 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
         vocabulary_hints,
         ..Default::default()
     };
-    if backend != "whisper" {
+    if backend != "parakeet" && backend != "whisper" {
         return Err(format!("Unsupported transcription backend: {backend}"));
     }
     // The served model is host configuration. Older clients still send an
@@ -1784,7 +1783,7 @@ impl HostMetrics {
                     assigned_model: assigned.model_id(),
                     // A cheap existence check: load/checksum failures surface
                     // through the worker state and last error instead.
-                    model_available: models.path_for(assigned).is_file(),
+                    model_available: models.files_present(assigned),
                     loaded_model: worker.loaded_model.clone(),
                     completed_jobs: worker.completed_jobs,
                     last_error: worker.last_error.clone(),
@@ -1985,7 +1984,9 @@ mod tests {
         TranscriptionOutcome, MAX_TRACKED_CLIENTS,
     };
     use crate::audio::Recording;
-    use crate::models::{ModelService, WhisperModel};
+    use crate::models::{ModelService, SttModel};
+    #[cfg(feature = "whisper")]
+    use crate::models::WhisperModel;
     use crate::settings::Settings;
     use std::io::Cursor;
     use std::sync::atomic::AtomicU64;
@@ -2008,7 +2009,7 @@ mod tests {
             max_active_streams: 1,
             max_recording_seconds: 10,
             use_gpu: true,
-            worker_models: vec![WhisperModel::Base],
+            worker_models: vec![SttModel::Parakeet],
         }
     }
 
@@ -2319,7 +2320,7 @@ mod tests {
             max_active_streams: 3,
             max_recording_seconds: 120,
             use_gpu: true,
-            worker_models: vec![WhisperModel::LargeV3Turbo, WhisperModel::Small],
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
         };
         let live = HostLiveConfig::new(&config);
         let models = ModelService::default();
@@ -2335,12 +2336,12 @@ mod tests {
             true,
             test_running_job(Some("192.168.1.31")),
         );
-        metrics.worker_model_ready(0, "large-v3-turbo".to_string());
+        metrics.worker_model_ready(0, "parakeet-tdt-0.6b-v3".to_string());
         metrics.complete_job(
             0,
             2.5,
-            "whisper".to_string(),
-            "large-v3-turbo".to_string(),
+            "parakeet".to_string(),
+            "parakeet-tdt-0.6b-v3".to_string(),
             "stream",
             Some("192.168.1.31"),
             Duration::from_millis(30),
@@ -2365,17 +2366,17 @@ mod tests {
         assert_eq!(snapshot.recent[0].processing_ms, 90);
         assert_eq!(snapshot.recent[0].client.as_deref(), Some("192.168.1.31"));
 
-        assert_eq!(snapshot.model, "mixed");
+        assert_eq!(snapshot.model, "parakeet-tdt-0.6b-v3");
         assert_eq!(snapshot.workers.len(), 2);
         assert_eq!(snapshot.workers[0].state, "idle");
-        assert_eq!(snapshot.workers[0].assigned_model, "large-v3-turbo");
+        assert_eq!(snapshot.workers[0].assigned_model, "parakeet-tdt-0.6b-v3");
         assert_eq!(
             snapshot.workers[0].loaded_model.as_deref(),
-            Some("large-v3-turbo")
+            Some("parakeet-tdt-0.6b-v3")
         );
         assert_eq!(snapshot.workers[0].completed_jobs, 1);
         assert_eq!(snapshot.workers[1].state, "idle");
-        assert_eq!(snapshot.workers[1].assigned_model, "small");
+        assert_eq!(snapshot.workers[1].assigned_model, "parakeet-tdt-0.6b-v3");
         assert_eq!(snapshot.workers[1].loaded_model, None);
 
         assert_eq!(snapshot.streams.len(), 1);
@@ -2387,7 +2388,7 @@ mod tests {
         assert_eq!(snapshot.clients[0].completed, 1);
         assert_eq!(
             snapshot.clients[0].last_model.as_deref(),
-            Some("large-v3-turbo")
+            Some("parakeet-tdt-0.6b-v3")
         );
     }
 
@@ -2557,30 +2558,52 @@ mod tests {
     fn config_update_sets_served_model_for_all_workers() {
         let config = HostRuntimeConfig {
             worker_count: 2,
-            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
             ..test_config()
         };
         let live = HostLiveConfig::new(&config);
 
-        super::apply_config_update(&model_update(Some("large-v3-turbo"), None), &live)
+        super::apply_config_update(&model_update(Some("parakeet"), None), &live)
             .expect("model update applies");
         assert_eq!(
             live.worker_models(),
-            vec![WhisperModel::LargeV3Turbo, WhisperModel::LargeV3Turbo]
+            vec![SttModel::Parakeet, SttModel::Parakeet]
         );
-        assert_eq!(live.model_summary(), "large-v3-turbo");
+        assert_eq!(live.model_summary(), "parakeet-tdt-0.6b-v3");
 
         let err = super::apply_config_update(&model_update(Some("gpt-4"), None), &live)
             .expect_err("unknown model rejects");
-        assert!(err.contains("Unsupported Whisper model"));
-        assert_eq!(live.model_summary(), "large-v3-turbo");
+        assert!(err.contains("Unsupported model"));
+        assert_eq!(live.model_summary(), "parakeet-tdt-0.6b-v3");
     }
 
     #[test]
-    fn config_update_assigns_models_per_worker() {
+    fn config_update_rejects_ambiguous_and_wrong_length_model_lists() {
         let config = HostRuntimeConfig {
             worker_count: 2,
-            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
+            ..test_config()
+        };
+        let live = HostLiveConfig::new(&config);
+
+        let err = super::apply_config_update(&model_update(None, Some(vec!["parakeet"])), &live)
+            .expect_err("wrong list length rejects");
+        assert!(err.contains("exactly 2"));
+
+        let err = super::apply_config_update(
+            &model_update(Some("parakeet"), Some(vec!["parakeet", "parakeet"])),
+            &live,
+        )
+        .expect_err("ambiguous update rejects");
+        assert!(err.contains("not both"));
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn config_update_assigns_whisper_models_per_worker() {
+        let config = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
             ..test_config()
         };
         let live = HostLiveConfig::new(&config);
@@ -2592,21 +2615,11 @@ mod tests {
         .expect("per-worker update applies");
         assert_eq!(
             live.worker_models(),
-            vec![WhisperModel::LargeV3Turbo, WhisperModel::Small]
+            vec![
+                SttModel::Whisper(WhisperModel::LargeV3Turbo),
+                SttModel::Whisper(WhisperModel::Small)
+            ]
         );
-        assert_eq!(live.model_summary(), "mixed");
-
-        let err =
-            super::apply_config_update(&model_update(None, Some(vec!["small"])), &live)
-                .expect_err("wrong list length rejects");
-        assert!(err.contains("exactly 2"));
-
-        let err = super::apply_config_update(
-            &model_update(Some("small"), Some(vec!["small", "small"])),
-            &live,
-        )
-        .expect_err("ambiguous update rejects");
-        assert!(err.contains("not both"));
         assert_eq!(live.model_summary(), "mixed");
     }
 
@@ -2614,22 +2627,30 @@ mod tests {
     fn parse_worker_models_expands_defaults_and_rejects_bad_values() {
         assert_eq!(
             parse_worker_models(None, 2).expect("default models"),
-            vec![WhisperModel::Base, WhisperModel::Base]
+            vec![SttModel::Parakeet, SttModel::Parakeet]
         );
         assert_eq!(
-            parse_worker_models(Some("large-v3-turbo"), 2).expect("single model expands"),
-            vec![WhisperModel::LargeV3Turbo, WhisperModel::LargeV3Turbo]
-        );
-        assert_eq!(
-            parse_worker_models(Some(" large-v3-turbo , small "), 2).expect("per-worker list"),
-            vec![WhisperModel::LargeV3Turbo, WhisperModel::Small]
+            parse_worker_models(Some("parakeet"), 2).expect("single model expands"),
+            vec![SttModel::Parakeet, SttModel::Parakeet]
         );
 
         let err = parse_worker_models(Some("turbo-9000"), 1).expect_err("unknown model fails");
-        assert!(err.contains("unsupported Whisper model"));
-        let err =
-            parse_worker_models(Some("small,base,tiny"), 2).expect_err("wrong count fails");
+        assert!(err.contains("unsupported model"));
+        let err = parse_worker_models(Some("parakeet,parakeet,parakeet"), 2)
+            .expect_err("wrong count fails");
         assert!(err.contains("3 models for 2 workers"));
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn parse_worker_models_assigns_whisper_models_per_worker() {
+        assert_eq!(
+            parse_worker_models(Some(" large-v3-turbo , small "), 2).expect("per-worker list"),
+            vec![
+                SttModel::Whisper(WhisperModel::LargeV3Turbo),
+                SttModel::Whisper(WhisperModel::Small)
+            ]
+        );
     }
 
     #[test]
@@ -2640,7 +2661,7 @@ mod tests {
         ));
         let config = HostRuntimeConfig {
             worker_count: 2,
-            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
             ..test_config()
         };
         let live = HostLiveConfig::new(&config);
@@ -2650,7 +2671,7 @@ mod tests {
                 max_recording_seconds: Some(120),
                 use_gpu: Some(false),
                 model: None,
-                worker_models: Some(vec!["large-v3-turbo".to_string(), "small".to_string()]),
+                worker_models: Some(vec!["parakeet".to_string(), "parakeet".to_string()]),
             },
             &live,
         )
@@ -2663,7 +2684,7 @@ mod tests {
 
         let mut restarted = HostRuntimeConfig {
             worker_count: 2,
-            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
             ..test_config()
         };
         super::overlay_persisted_config(&mut restarted, persisted);
@@ -2672,7 +2693,7 @@ mod tests {
         assert!(!restarted.use_gpu);
         assert_eq!(
             restarted.worker_models,
-            vec![WhisperModel::LargeV3Turbo, WhisperModel::Small]
+            vec![SttModel::Parakeet, SttModel::Parakeet]
         );
 
         let _ = std::fs::remove_file(path);
@@ -2682,7 +2703,7 @@ mod tests {
     fn overlay_clamps_ranges_and_adapts_stale_worker_model_lists() {
         let mut config = HostRuntimeConfig {
             worker_count: 2,
-            worker_models: vec![WhisperModel::Base, WhisperModel::Base],
+            worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
             ..test_config()
         };
         super::overlay_persisted_config(
@@ -2693,9 +2714,9 @@ mod tests {
                 use_gpu: false,
                 // Written when the host ran three workers; now it runs two.
                 worker_models: vec![
-                    WhisperModel::Small,
-                    WhisperModel::Tiny,
-                    WhisperModel::Base,
+                    SttModel::Parakeet,
+                    SttModel::Parakeet,
+                    SttModel::Parakeet,
                 ],
             },
         );
@@ -2704,7 +2725,7 @@ mod tests {
         assert!(!config.use_gpu);
         assert_eq!(
             config.worker_models,
-            vec![WhisperModel::Small, WhisperModel::Small]
+            vec![SttModel::Parakeet, SttModel::Parakeet]
         );
     }
 
