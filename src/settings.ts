@@ -3,7 +3,17 @@ import { listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
 import { playRecordingStartSound, setInteractionSoundsEnabled } from "./sounds";
 
-type WhisperModel = "tiny" | "base" | "small" | "medium" | "large-v2" | "large-v3" | "large-v3-turbo";
+// Parakeet is the default engine; the whisper.cpp ids are only meaningful when
+// the backend was built with the `whisper` Cargo feature.
+type SttModel =
+  | "parakeet-tdt-0.6b-v3"
+  | "tiny"
+  | "base"
+  | "small"
+  | "medium"
+  | "large-v2"
+  | "large-v3"
+  | "large-v3-turbo";
 type TranscriptionLocation = "local" | "remote-host";
 type RecordingShortcutMode = "toggle" | "push-to-talk";
 
@@ -17,7 +27,7 @@ interface TranscriptCorrection {
 
 interface Settings {
   transcriptionLocation: TranscriptionLocation;
-  model: WhisperModel;
+  model: SttModel;
   remoteUrl: string;
   remoteAuthToken: string;
   remoteTimeoutSeconds: number;
@@ -43,7 +53,7 @@ interface Settings {
 }
 
 interface ModelStatus {
-  model: WhisperModel;
+  model: SttModel;
   cached: boolean;
   message: string;
   modelPath: string;
@@ -68,7 +78,7 @@ interface ModelPrepareProgressEvent {
 
 const DEFAULTS: Settings = {
   transcriptionLocation: "local",
-  model: "base",
+  model: "parakeet-tdt-0.6b-v3",
   remoteUrl: "",
   remoteAuthToken: "",
   remoteTimeoutSeconds: 60,
@@ -132,7 +142,8 @@ const remoteTimeoutSeconds = required<HTMLInputElement>("remoteTimeoutSeconds");
 const remoteStatus = required<HTMLElement>("remoteStatus");
 const remoteTest = required<HTMLButtonElement>("remoteTest");
 
-const MODEL_MEMORY_FOOTPRINTS: Record<WhisperModel, string> = {
+const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
+  "parakeet-tdt-0.6b-v3": "RAM ~2.5G",
   tiny: "RAM ~0.7G",
   base: "RAM ~1.2G",
   small: "RAM ~2.5G",
@@ -311,7 +322,7 @@ function applyToForm(settings: Settings): void {
 function readFromForm(): Settings {
   return normalizeSettings({
     transcriptionLocation: locationSeg.get() as TranscriptionLocation,
-    model: modelSelect.value as WhisperModel,
+    model: modelSelect.value as SttModel,
     remoteUrl: remoteUrl.value,
     remoteAuthToken: remoteAuthToken.value,
     remoteTimeoutSeconds: Number(remoteTimeoutSeconds.value),
@@ -511,10 +522,10 @@ function formatModelStatus(status: ModelStatus): string {
 
 async function requestModelStatus(): Promise<void> {
   if (locationSeg.get() === "remote-host") {
-    updateModelSize(modelSelect.value as WhisperModel);
+    updateModelSize(modelSelect.value as SttModel);
     return;
   }
-  const model = modelSelect.value as WhisperModel;
+  const model = modelSelect.value as SttModel;
   updateModelSize(model);
   modelPrepare.textContent = "Checking";
   modelPrepare.disabled = true;
@@ -530,7 +541,7 @@ async function requestModelStatus(): Promise<void> {
 
 async function beginModelPreload(): Promise<void> {
   if (locationSeg.get() === "remote-host") return;
-  const model = modelSelect.value as WhisperModel;
+  const model = modelSelect.value as SttModel;
   updateModelSize(model);
   setModelDownloadStatus("Preparing model...", 1);
   modelPrepare.textContent = "Preparing";
@@ -583,8 +594,8 @@ function formatPrepareStage(stage: string, message: string): string {
   return message || "Preparing model";
 }
 
-function updateModelSize(model: WhisperModel): void {
-  modelSize.textContent = MODEL_MEMORY_FOOTPRINTS[model];
+function updateModelSize(model: SttModel): void {
+  modelSize.textContent = MODEL_MEMORY_FOOTPRINTS[model] ?? "";
 }
 
 // The GPU toggle only affects local Whisper inference: a remote host's GPU

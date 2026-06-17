@@ -333,8 +333,9 @@ pub fn decode_wav(bytes: &[u8]) -> Result<Recording, String> {
 }
 
 /// Engine identifier sent over the remote-host protocol and stored in
-/// transcript history; whisper.cpp is the only supported engine.
-pub const BACKEND_ID: &str = "whisper";
+/// transcript history. Parakeet is the default engine; a host built with the
+/// `whisper` feature also accepts the legacy "whisper" identifier.
+pub const BACKEND_ID: &str = "parakeet";
 
 pub fn selected_model_id(settings: &Settings) -> &'static str {
     settings.model.model_id()

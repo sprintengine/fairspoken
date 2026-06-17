@@ -24,7 +24,14 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal = "0.17.3"
-whisper-rs = "0.16.0"
+# Parakeet is the default (and only) engine compiled by default. It runs NVIDIA
+# Parakeet TDT in-process via ONNX Runtime (pulled in transitively as the `ort`
+# crate), mirroring how `whisper-rs` wraps whisper.cpp.
+parakeet-rs = "0.3.6"
+# Whisper is opt-in: build with `--features whisper` to compile the whisper.cpp
+# engine back in. Kept optional so the default build carries no whisper.cpp /
+# GGML toolchain dependency.
+whisper-rs = { version = "0.16.0", optional = true }
 arboard = "3.6.1"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
@@ -33,20 +40,27 @@ tauri-plugin-global-shortcut = "2"
 hound = "3.5.1"
 tiny_http = "0.12.0"
 
-# Metal stays macOS-only: the feature compiles GGML Metal kernels that do not
-# exist on Windows/Linux. Cargo merges these features into the base whisper-rs
-# dependency for macOS targets, so both the desktop app and the
-# transcription-host binary get GPU inference.
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["metal"] }
 core-graphics = "0.25.0"
 core-foundation = "0.10.1"
 
-# Opt-in GPU backends for a future non-Mac transcription host. These are
-# build-time choices: `cuda` needs the NVIDIA CUDA Toolkit on the build
-# machine and CUDA runtime libraries on the target; `vulkan` is the
-# vendor-neutral option. Neither has been exercised yet — no non-Mac GPU
-# host hardware exists; validate on real hardware before relying on them.
+# Metal stays macOS-only and only matters when Whisper is compiled in: the
+# feature builds GGML Metal kernels that do not exist on Windows/Linux. It is
+# layered onto the optional whisper-rs dependency for macOS targets so a
+# `--features whisper` build there gets GPU inference.
+[target.'cfg(target_os = "macos")'.dependencies.whisper-rs]
+version = "0.16.0"
+features = ["metal"]
+optional = true
+
 [features]
-cuda = ["whisper-rs/cuda"]
-vulkan = ["whisper-rs/vulkan"]
+# Default build = Parakeet only. No Whisper, no whisper.cpp toolchain.
+default = []
+# Opt back into the whisper.cpp engine and the Whisper model family.
+whisper = ["dep:whisper-rs"]
+# GPU backends for the (optional) Whisper engine on a non-Mac transcription
+# host. Build-time choices: `cuda` needs the NVIDIA CUDA Toolkit on the build
+# machine and CUDA runtime libraries on the target; `vulkan` is the
+# vendor-neutral option. Both imply the whisper feature.
+cuda = ["whisper", "whisper-rs/cuda"]
+vulkan = ["whisper", "whisper-rs/vulkan"]

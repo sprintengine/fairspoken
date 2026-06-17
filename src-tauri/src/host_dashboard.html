@@ -480,9 +480,21 @@
     el[id] = document.getElementById(id);
   }
 
-  // Must match the WhisperModel ids the host accepts.
-  const MODEL_IDS = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"];
+  // Must match the SttModel ids the host accepts. Parakeet is the default
+  // engine; the Whisper ids only resolve on a host built with the `whisper`
+  // Cargo feature.
+  const MODEL_IDS = [
+    "parakeet-tdt-0.6b-v3",
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+  ];
   const MODEL_NAMES = {
+    "parakeet-tdt-0.6b-v3": "Parakeet TDT 0.6B v3",
     "tiny": "Whisper Tiny",
     "base": "Whisper Base",
     "small": "Whisper Small",
