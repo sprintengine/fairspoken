@@ -1012,9 +1012,10 @@ fn run_host_worker(
     live: Arc<HostLiveConfig>,
 ) {
     let mut transcription = TranscriptionService::default();
-    // Mirrors the model/GPU pair held by this worker's Whisper context, so
-    // the dashboard can show a "loading model" phase when a context (re)load
-    // is in flight.
+    // Mirrors the model/GPU pair held by this worker's loaded engine, so the
+    // dashboard can show a "loading model" phase when an engine (re)load is in
+    // flight. Each worker owns its own engine instance, so workers transcribe
+    // in parallel off the shared job queue without sharing a model.
     let mut loaded: Option<(SttModel, bool)> = None;
     // Last (model, GPU, file mtime) whose load failed; retried only when the
     // target or the file on disk changes, so a corrupt model file is not
