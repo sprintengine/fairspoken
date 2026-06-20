@@ -545,6 +545,36 @@ mod tests {
             Some(SttModel::Parakeet)
         );
         assert_eq!(SttModel::from_model_id("parakeet"), Some(SttModel::Parakeet));
+        assert!(!SttModel::Parakeet.is_whisper());
+    }
+
+    #[test]
+    fn stt_model_serde_round_trips_and_migrates_unknown_ids() {
+        // Flat string wire format.
+        let json = serde_json::to_string(&SttModel::Parakeet).expect("serialize");
+        assert_eq!(json, "\"parakeet-tdt-0.6b-v3\"");
+        let back: SttModel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, SttModel::Parakeet);
+
+        // Unknown / legacy ids migrate to the default rather than failing the
+        // whole settings/host-config load.
+        let migrated: SttModel =
+            serde_json::from_str("\"totally-unknown-model\"").expect("graceful migration");
+        assert_eq!(migrated, SttModel::default());
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_model_serde_round_trips_when_compiled_in() {
+        use super::WhisperModel;
+        let model = SttModel::Whisper(WhisperModel::LargeV3Turbo);
+        let json = serde_json::to_string(&model).expect("serialize");
+        assert_eq!(json, "\"large-v3-turbo\"");
+        assert_eq!(
+            serde_json::from_str::<SttModel>(&json).expect("deserialize"),
+            model
+        );
+        assert!(model.is_whisper());
     }
 
     #[cfg(feature = "whisper")]

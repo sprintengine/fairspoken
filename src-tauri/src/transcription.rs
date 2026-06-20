@@ -1026,10 +1026,148 @@ fn path_to_string(path: &Path) -> Result<String, String> {
 mod tests {
     use super::{
         contains_probable_speech, dispatch_final_whisper_chunk, dispatch_ready_whisper_chunks,
-        is_non_speech_annotation, merge_transcript_text, resample_i16_to_16khz_f32, WhisperChunkJob,
-        CHUNK_OVERLAP_SECONDS,
+        is_non_speech_annotation, merge_transcript_text, resample_i16_to_16khz_f32, ChunkTranscriber,
+        SessionHandle, WhisperChunkJob, CHUNK_OVERLAP_SECONDS, NO_STREAMED_AUDIO,
     };
+    use crate::audio::AudioFrame;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+
+    /// A fake engine that records how many chunks it was asked to transcribe and
+    /// returns a distinct token per call, so a merged transcript reveals both
+    /// the chunk count and their order. Used to exercise the engine-agnostic
+    /// streaming pipeline (the same path Parakeet runs through) without loading
+    /// a real model.
+    struct CountingTranscriber {
+        calls: Arc<AtomicUsize>,
+        seen_rates: Arc<Mutex<Vec<u32>>>,
+    }
+
+    impl ChunkTranscriber for CountingTranscriber {
+        fn transcribe_pcm(
+            &self,
+            samples: &[i16],
+            sample_rate: u32,
+            _language: &str,
+            _initial_prompt: Option<&str>,
+        ) -> Result<String, String> {
+            assert!(!samples.is_empty(), "engine received an empty chunk");
+            self.seen_rates.lock().unwrap().push(sample_rate);
+            let index = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(format!("c{index}"))
+        }
+    }
+
+    fn speech_frame(sample_rate: u32, samples: usize) -> AudioFrame {
+        AudioFrame {
+            pcm_i16: vec![2_000_i16; samples],
+            sample_rate,
+        }
+    }
+
+    #[test]
+    fn streaming_session_transcribes_and_merges_chunks_in_order() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen_rates = Arc::new(Mutex::new(Vec::new()));
+        let transcriber: Arc<dyn ChunkTranscriber> = Arc::new(CountingTranscriber {
+            calls: Arc::clone(&calls),
+            seen_rates: Arc::clone(&seen_rates),
+        });
+        let sample_rate = 16_000;
+        let chunk_seconds = 5_u16;
+        let handle = SessionHandle::start(transcriber, "en".to_string(), None, chunk_seconds, None)
+            .expect("start session");
+
+        // Three chunks' worth of speech so the dispatcher emits several jobs.
+        let chunk_samples = sample_rate as usize * usize::from(chunk_seconds);
+        handle
+            .audio_tx
+            .send(speech_frame(sample_rate, chunk_samples * 3))
+            .expect("send audio frame");
+
+        let transcript = handle.finish().expect("finish session");
+
+        let count = calls.load(Ordering::SeqCst);
+        assert!(count >= 2, "expected multiple chunks, transcribed {count}");
+        // Distinct, non-overlapping tokens merge into one ordered transcript.
+        let expected = (0..count)
+            .map(|index| format!("c{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(transcript, expected);
+        // Every chunk is handed to the engine at the captured sample rate.
+        assert_eq!(seen_rates.lock().unwrap().len(), count);
+        assert!(seen_rates
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|rate| *rate == sample_rate));
+    }
+
+    #[test]
+    fn streaming_session_without_audio_reports_no_streamed_audio() {
+        let transcriber: Arc<dyn ChunkTranscriber> = Arc::new(CountingTranscriber {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen_rates: Arc::new(Mutex::new(Vec::new())),
+        });
+        let handle = SessionHandle::start(transcriber, "en".to_string(), None, 5, None)
+            .expect("start session");
+
+        let err = handle.finish().expect_err("no audio should error");
+        assert_eq!(err, NO_STREAMED_AUDIO);
+    }
+
+    #[test]
+    fn streaming_session_cancel_stops_the_worker_without_a_transcript() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transcriber: Arc<dyn ChunkTranscriber> = Arc::new(CountingTranscriber {
+            calls: Arc::clone(&calls),
+            seen_rates: Arc::new(Mutex::new(Vec::new())),
+        });
+        let handle = SessionHandle::start(transcriber, "en".to_string(), None, 5, None)
+            .expect("start session");
+        handle
+            .audio_tx
+            .send(speech_frame(16_000, 16_000))
+            .expect("send audio frame");
+
+        // Cancelling must join the worker (and its chunk thread) without hanging.
+        handle.cancel();
+    }
+
+    #[test]
+    fn streaming_session_emits_a_final_preview() {
+        let transcriber: Arc<dyn ChunkTranscriber> = Arc::new(CountingTranscriber {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen_rates: Arc::new(Mutex::new(Vec::new())),
+        });
+        let (preview_tx, preview_rx) = mpsc::channel();
+        let sample_rate = 16_000;
+        let chunk_seconds = 5_u16;
+        let handle = SessionHandle::start(
+            transcriber,
+            "en".to_string(),
+            None,
+            chunk_seconds,
+            Some(preview_tx),
+        )
+        .expect("start session");
+        let chunk_samples = sample_rate as usize * usize::from(chunk_seconds);
+        handle
+            .audio_tx
+            .send(speech_frame(sample_rate, chunk_samples * 2))
+            .expect("send audio frame");
+
+        let transcript = handle.finish().expect("finish session");
+        let previews: Vec<_> = preview_rx.iter().collect();
+        assert!(!previews.is_empty(), "expected at least one preview");
+        let final_preview = previews
+            .iter()
+            .rfind(|preview| preview.final_preview)
+            .expect("a final preview");
+        assert_eq!(final_preview.text, transcript);
+    }
 
     #[test]
     fn converts_16khz_i16_to_f32_without_resampling() {
