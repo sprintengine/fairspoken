@@ -2,9 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { isRegistered, register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
-import { playRecordingStartSound, playRecordingStopSound, preloadInteractionSounds, setInteractionSoundsEnabled } from "./sounds";
 
-type AppState = "idle" | "recording" | "transcribing" | "error";
+// "starting" covers the window between the start request and the backend
+// confirming native capture — visible when the model or device is slow.
+type AppState = "idle" | "starting" | "recording" | "transcribing" | "error";
 
 interface BackendStatus {
   state: AppState;
@@ -45,7 +46,17 @@ interface ShortcutSettings {
   interactionSounds: boolean;
 }
 
-type PillLayout = "idle" | "hover" | "recording" | "transcribing" | "copied" | "error";
+type PillLayout = "idle" | "hover" | "starting" | "recording" | "transcribing" | "copied" | "error";
+
+interface AudioLevelEvent {
+  peak: number;
+  rms: number;
+}
+
+interface RecordingAutoStoppedEvent {
+  committed: boolean;
+  message: string;
+}
 
 const RECORD_SHORTCUT_MACOS_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Command+Shift+Digit1", "Command+Shift+1"];
 const RECORD_SHORTCUT_DEFAULT_CANDIDATES = ["CommandOrControl+Shift+Digit1", "CommandOrControl+Shift+1", "Ctrl+Alt+Digit1", "Ctrl+Alt+1"];
@@ -106,7 +117,7 @@ function setState(state: AppState, message?: string): void {
   recordBtn.setAttribute("aria-pressed", String(state === "recording"));
   recordBtn.setAttribute(
     "aria-label",
-    state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : state === "error" ? "Recording failed, click to retry" : "Start recording",
+    state === "recording" ? "Stop recording" : state === "starting" ? "Starting recording" : state === "transcribing" ? "Cancel transcription" : state === "error" ? "Recording failed, click to retry" : "Start recording",
   );
   recordBtn.title = state === "recording" ? "Stop recording" : state === "transcribing" ? "Cancel transcription" : state === "error" ? "Click to retry" : "Click to record";
   recordBtn.disabled = false;
@@ -114,15 +125,120 @@ function setState(state: AppState, message?: string): void {
 
   if (state === "recording") {
     startTimer();
+    startMeter();
+    scheduleCantHearHint();
   } else {
     stopTimer();
     clearMaxRecordingTimer();
+    stopMeter();
+    clearCantHearHint();
   }
 
   updatePillLayout();
 }
 
+/* ── Voice-reactive level meter ─────────────────────────────────
+   The five wave bars are driven by real capture levels streamed from the
+   backend as `audio-level` events; they sit flat through silence instead of
+   pulsing on a loop. */
+
+const waveBars = Array.from(document.querySelectorAll<HTMLElement>(".wave span"));
+// Gate matches the backend's per-window speech RMS threshold, so the bars
+// consider "voice" exactly what the transcriber's gap detection does.
+const METER_GATE_RMS = 0.004;
+const METER_FULL_RMS = 0.055;
+const METER_FLOOR_SCALE = 0.16;
+const METER_BAR_WEIGHTS = [0.62, 0.95, 1, 0.78, 0.88];
+const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+let meterTarget = 0;
+let meterDisplay = 0;
+let meterRafId: number | null = null;
+let voiceHeard = false;
+let cantHearTimer: ReturnType<typeof setTimeout> | null = null;
+
+function meterLevelFromRms(rms: number): number {
+  const normalized = Math.min(1, Math.max(0, (rms - METER_GATE_RMS) / (METER_FULL_RMS - METER_GATE_RMS)));
+  // Square root for a perceptual response: quiet speech still visibly moves.
+  return Math.sqrt(normalized);
+}
+
+function startMeter(): void {
+  meterTarget = 0;
+  meterDisplay = 0;
+  if (meterRafId === null) meterFrame();
+}
+
+function stopMeter(): void {
+  meterTarget = 0;
+  if (meterRafId !== null) {
+    cancelAnimationFrame(meterRafId);
+    meterRafId = null;
+  }
+  resetMeterBars();
+}
+
+function meterFrame(): void {
+  meterRafId = requestAnimationFrame((time) => {
+    const attack = 0.45;
+    const decay = reducedMotionQuery.matches ? 0.08 : 0.18;
+    meterDisplay += (meterTarget - meterDisplay) * (meterTarget > meterDisplay ? attack : decay);
+    // A slight per-bar shimmer while there is signal keeps the meter reading
+    // as a waveform; with reduced motion the bars track level only.
+    const shimmer = !reducedMotionQuery.matches && meterDisplay > 0.03;
+    waveBars.forEach((bar, index) => {
+      const wobble = shimmer ? 0.89 + 0.11 * Math.sin(time / 90 + index * 1.7) : 1;
+      const scale = METER_FLOOR_SCALE + meterDisplay * METER_BAR_WEIGHTS[index] * wobble * (1 - METER_FLOOR_SCALE);
+      bar.style.transform = `scaleY(${Math.min(1, Math.max(METER_FLOOR_SCALE, scale)).toFixed(3)})`;
+    });
+    if (appState === "recording" || meterDisplay > 0.02) {
+      meterFrame();
+    } else {
+      meterRafId = null;
+      resetMeterBars();
+    }
+  });
+}
+
+function resetMeterBars(): void {
+  for (const bar of waveBars) {
+    bar.style.transform = `scaleY(${METER_FLOOR_SCALE})`;
+  }
+}
+
+/* Live "we can't hear you": if no voice crosses the gate in the first
+   seconds of a recording, say so now instead of rejecting the whole
+   dictation as silence after the user finishes talking. */
+const CANT_HEAR_AFTER_MS = 3000;
+
+function scheduleCantHearHint(): void {
+  clearCantHearHint();
+  voiceHeard = false;
+  cantHearTimer = setTimeout(() => {
+    cantHearTimer = null;
+    if (appState === "recording" && !voiceHeard) {
+      statusLabel.textContent = "Can't hear you";
+    }
+  }, CANT_HEAR_AFTER_MS);
+}
+
+function clearCantHearHint(): void {
+  if (cantHearTimer !== null) {
+    clearTimeout(cantHearTimer);
+    cantHearTimer = null;
+  }
+}
+
+function markVoiceHeard(): void {
+  if (voiceHeard) return;
+  voiceHeard = true;
+  if (appState === "recording" && statusLabel.textContent === "Can't hear you") {
+    statusLabel.textContent = stateLabel("recording");
+  }
+}
+
 function computePillLayout(): PillLayout {
+  if (appState === "starting") return "starting";
   if (appState === "recording") return "recording";
   if (appState === "transcribing") return "transcribing";
   if (appState === "error") return "error";
@@ -143,10 +259,23 @@ function updatePillLayout(): void {
 }
 
 function stateLabel(state: AppState): string {
+  if (state === "starting") return "Starting";
   if (state === "recording") return "Recording";
   if (state === "transcribing") return "Transcribing";
   if (state === "error") return "Error";
   return "Ready";
+}
+
+// Reduce a backend error to something the 280px error capsule can carry;
+// the full message still lands in the Activity log.
+function shortErrorMessage(message: string): string {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLowerCase();
+  if (lower.includes("microphone permission")) return "Mic access denied";
+  if (lower.includes("no default input device") || lower.includes("input device")) return "No microphone found";
+  if (lower.includes("model files are missing")) return "Model not downloaded";
+  if (!normalized) return "Error";
+  return normalized.length <= 40 ? normalized : `${normalized.slice(0, 39)}…`;
 }
 
 function currentAppState(): AppState {
@@ -160,7 +289,13 @@ function canStartRecording(): boolean {
 }
 
 function isRecoverableRecordingStopError(message: string): boolean {
-  return message === "Recording was too short" || message.startsWith("No speech detected");
+  return (
+    message === "Recording was too short"
+    || message.startsWith("No speech detected")
+    // The backend watchdog (or a stream failure) already stopped this
+    // recording; the pill just returns to Ready.
+    || message === "No recording in progress"
+  );
 }
 
 function startTimer(): void {
@@ -291,8 +426,9 @@ async function copyTranscriptItem(id: string): Promise<void> {
     renderTranscriptShelf();
     showCopiedStatus();
   } catch (error) {
-    addEvent("error", error instanceof Error ? error.message : String(error));
-    setState("error", "Error");
+    const message = error instanceof Error ? error.message : String(error);
+    addEvent("error", message);
+    setState("error", shortErrorMessage(message));
   }
 }
 
@@ -399,7 +535,8 @@ async function startRecording(): Promise<boolean> {
 
   try {
     startRecordingRequestPending = true;
-    playRecordingStartSound();
+    // The start click plays from the backend once capture is confirmed live.
+    setState("starting");
     const maxRecordingSeconds = await invoke<number>("start_recording");
     startRecordingRequestPending = false;
     cancelTranscriptionRequestPending = false;
@@ -412,7 +549,7 @@ async function startRecording(): Promise<boolean> {
     stopRecordingRequestPending = false;
     const message = error instanceof Error ? error.message : String(error);
     addEvent("error", message);
-    await refreshStateAfterStartError();
+    await refreshStateAfterStartError(message);
     return false;
   }
 }
@@ -438,17 +575,17 @@ async function stopPushToTalkRecording(): Promise<void> {
   }
 }
 
-async function refreshStateAfterStartError(): Promise<void> {
+async function refreshStateAfterStartError(message: string): Promise<void> {
   try {
     const status = await invoke<BackendStatus>("get_app_status");
     if (status.state === "recording") {
       setState("recording", status.message);
       addEvent("warning", "Recovered recording state after a UI error");
     } else {
-      setState("error", "Error");
+      setState("error", shortErrorMessage(message));
     }
   } catch {
-    setState("error", "Error");
+    setState("error", shortErrorMessage(message));
   }
 }
 
@@ -457,7 +594,7 @@ async function stopAndTranscribe(): Promise<void> {
   stopRecordingRequestPending = true;
   cancelTranscriptionRequestPending = false;
   clearMaxRecordingTimer();
-  playRecordingStopSound();
+  // The stop click plays from the backend once capture actually stops.
   setState("transcribing");
   await waitForPaint();
 
@@ -488,7 +625,7 @@ async function stopAndTranscribe(): Promise<void> {
       setState("idle", "Ready");
     } else {
       addEvent("error", message);
-      setState("error", "Error");
+      setState("error", shortErrorMessage(message));
     }
   } finally {
     stopRecordingRequestPending = false;
@@ -645,7 +782,6 @@ async function registerGlobalShortcuts(settings = shortcutSettings): Promise<voi
   const version = ++shortcutRegistrationVersion;
   const normalized = normalizeShortcutSettings(settings);
   shortcutSettings = normalized;
-  setInteractionSoundsEnabled(normalized.interactionSounds);
   pillHint.textContent = shortcutHint(normalized.recordingShortcut);
 
   try {
@@ -720,6 +856,37 @@ void listen<{ pressed: boolean }>("fn-push-to-talk", (event) => {
   }
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
+// Real capture levels for the recording meter (~25 Hz while recording).
+void listen<AudioLevelEvent>("audio-level", (event) => {
+  meterTarget = meterLevelFromRms(event.payload.rms);
+  if (meterTarget > 0) markVoiceHeard();
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
+// The capture stream died mid-recording (e.g. microphone unplugged). Stop
+// through the normal pipeline so whatever audio was captured is preserved.
+void listen<string>("recording-stream-error", (event) => {
+  addEvent("error", `Microphone stream failed: ${event.payload}`);
+  if (appState === "recording" || appState === "starting") {
+    void stopAndTranscribe();
+  }
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
+// The backend watchdog committed (or failed) a recording the webview never
+// stopped; resync the pill instead of showing a stuck recording state.
+void listen<RecordingAutoStoppedEvent>("recording-auto-stopped", (event) => {
+  addEvent(event.payload.committed ? "info" : "warning", event.payload.message);
+  if (appState !== "recording" && appState !== "transcribing") return;
+  stopRecordingRequestPending = false;
+  cancelTranscriptionRequestPending = false;
+  resetLiveTranscript();
+  if (event.payload.committed) {
+    void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+    showCopiedStatus();
+  } else {
+    setState("idle", "Ready");
+  }
+}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+
 void loadBackendStatus().catch((error) => {
   addEvent("error", error instanceof Error ? error.message : String(error));
   setState("error", "Error");
@@ -731,4 +898,4 @@ void loadShortcutSettings()
 wirePillHover();
 updatePillLayout();
 updateSettingsEventBadge();
-preloadInteractionSounds();
+resetMeterBars();

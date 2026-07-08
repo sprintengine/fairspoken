@@ -224,8 +224,10 @@ fn normalize(settings: Settings) -> Settings {
     }
 }
 
+// Since gap-based chunking landed, this is only the *forced* cut ceiling for
+// continuous speech with no detectable pause; most chunks cut earlier at gaps.
 fn default_whisper_chunk_seconds() -> u16 {
-    20
+    15
 }
 
 fn default_use_gpu() -> bool {

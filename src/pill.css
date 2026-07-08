@@ -118,6 +118,7 @@ body[data-pill="transcribing"] .pill {
 
 body[data-pill="recording"] .status-dot,
 body[data-pill="error"] .status-dot { background: var(--accent); }
+body[data-pill="starting"] .status-dot,
 body[data-pill="transcribing"] .status-dot { background: var(--transcribing); }
 
 .brand {
@@ -148,6 +149,9 @@ body[data-pill="transcribing"] .status-dot { background: var(--transcribing); }
 body[data-pill="hover"] .pill-label,
 body[data-pill="hover"] .timer,
 body[data-pill="hover"] .wave,
+body[data-pill="starting"] .wave,
+body[data-pill="starting"] .timer,
+body[data-pill="starting"] .pill-hint,
 body[data-pill="recording"] .brand,
 body[data-pill="recording"] .pill-label,
 body[data-pill="recording"] .pill-hint,
@@ -166,7 +170,10 @@ body[data-pill="error"] .pill-hint {
   display: none;
 }
 
-/* ── Waveform — the single motion while recording ─────────────── */
+/* ── Waveform — a real level meter while recording ─────────────
+   Bar heights are driven by main.ts from backend `audio-level` events; the
+   bars sit at their floor scale through silence and rise with the voice.
+   No keyframe loop: motion means signal. */
 .wave {
   display: flex;
   align-items: center;
@@ -178,19 +185,16 @@ body[data-pill="error"] .pill-hint {
   width: 2px;
   border-radius: 1px;
   background: var(--accent);
-  animation: wave 900ms ease-in-out infinite;
+  transform: scaleY(0.16);
+  transform-origin: center;
+  will-change: transform;
 }
 
-.wave span:nth-child(1) { height: 5px;  animation-delay: 0ms; }
-.wave span:nth-child(2) { height: 11px; animation-delay: 120ms; }
-.wave span:nth-child(3) { height: 14px; animation-delay: 240ms; }
-.wave span:nth-child(4) { height: 8px;  animation-delay: 360ms; }
-.wave span:nth-child(5) { height: 12px; animation-delay: 480ms; }
-
-@keyframes wave {
-  0%, 100% { transform: scaleY(0.5); }
-  50%      { transform: scaleY(1); }
-}
+.wave span:nth-child(1) { height: 5px; }
+.wave span:nth-child(2) { height: 11px; }
+.wave span:nth-child(3) { height: 14px; }
+.wave span:nth-child(4) { height: 8px; }
+.wave span:nth-child(5) { height: 12px; }
 
 /* ── Transcribing underline — the single motion while working ── */
 .progress {

@@ -36,6 +36,10 @@ pub struct RemoteStreamingSession {
     audio_tx: SyncSender<AudioFrame>,
     result_rx: Receiver<Result<RemoteTranscriptionResponse, String>>,
     worker: Option<JoinHandle<()>>,
+    /// How long `finish()` waits for the host's transcript once the audio
+    /// stream has ended, so a host that accepts the stream and then hangs
+    /// cannot block the dictation forever.
+    finish_timeout: Duration,
 }
 
 pub fn test_remote_transcription_host(settings: &Settings) -> Result<RemoteHealth, String> {
@@ -68,6 +72,7 @@ pub fn test_remote_transcription_host(settings: &Settings) -> Result<RemoteHealt
 pub fn start_remote_streaming_session(
     settings: &Settings,
 ) -> Result<(RemoteStreamingSession, SyncSender<AudioFrame>), String> {
+    let finish_timeout = remote_connect_timeout(settings);
     let settings = settings.clone();
     let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(STREAM_CHANNEL_DEPTH);
     let (result_tx, result_rx) = mpsc::channel::<Result<RemoteTranscriptionResponse, String>>();
@@ -83,6 +88,7 @@ pub fn start_remote_streaming_session(
         audio_tx: audio_tx.clone(),
         result_rx,
         worker: Some(worker),
+        finish_timeout,
     };
     Ok((session, audio_tx))
 }
@@ -90,10 +96,22 @@ pub fn start_remote_streaming_session(
 impl RemoteStreamingSession {
     pub fn finish(mut self) -> Result<RemoteTranscriptionResponse, String> {
         drop(self.audio_tx);
-        let result = self
-            .result_rx
-            .recv()
-            .map_err(|_| "Remote streaming worker stopped without a transcript".to_string())?;
+        let result = match self.result_rx.recv_timeout(self.finish_timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // The worker is blocked on a host that stopped responding.
+                // Abandon it instead of joining — joining would hang the app
+                // exactly the way this timeout exists to prevent.
+                self.worker.take();
+                return Err(format!(
+                    "Remote transcription host did not respond within {}s of the recording ending",
+                    self.finish_timeout.as_secs()
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("Remote streaming worker stopped without a transcript".to_string())
+            }
+        };
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -114,6 +132,9 @@ fn transcribe_remote_stream(
 ) -> Result<RemoteTranscriptionResponse, String> {
     let base_url = validate_remote_base_url(&settings.remote_url)?;
     let client = Client::builder()
+        // No total timeout: the streaming body lasts as long as the recording.
+        // The hung-host protection lives in RemoteStreamingSession::finish(),
+        // which stops waiting `finish_timeout` after the audio stream ends.
         .timeout(None)
         .connect_timeout(remote_connect_timeout(settings))
         .build()

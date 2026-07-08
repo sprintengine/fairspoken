@@ -36,6 +36,18 @@ pub struct AudioStats {
     pub dropped_stream_frames: u64,
 }
 
+/// One capture-callback's worth of input level, normalized to [0, 1].
+/// Streamed to the UI so the recording meter reflects the real signal.
+#[derive(Clone, Copy, Debug)]
+pub struct LevelSample {
+    pub peak: f32,
+    pub rms: f32,
+}
+
+/// Invoked (from the audio thread) when the input stream reports an error,
+/// e.g. the capture device disappearing mid-recording.
+pub type StreamErrorCallback = Box<dyn Fn(String) + Send + Sync + 'static>;
+
 impl Recording {
     pub fn stats(&self) -> AudioStats {
         let mut sum_sq = 0.0_f64;
@@ -68,6 +80,8 @@ impl AudioService {
         max_recording_seconds: u16,
         input_gain: u8,
         stream_sink: Option<SyncSender<AudioFrame>>,
+        level_sink: Option<SyncSender<LevelSample>>,
+        on_stream_error: Option<StreamErrorCallback>,
     ) -> Result<(), String> {
         if self.is_recording {
             return Err("Recording already in progress".to_string());
@@ -94,30 +108,70 @@ impl AudioService {
         };
 
         let stream = match supported_config.sample_format() {
-            SampleFormat::F32 => {
-                build_input_stream::<f32>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::F64 => {
-                build_input_stream::<f64>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::I8 => {
-                build_input_stream::<i8>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::I16 => {
-                build_input_stream::<i16>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::I32 => {
-                build_input_stream::<i32>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::U8 => {
-                build_input_stream::<u8>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::U16 => {
-                build_input_stream::<u16>(&device, &config, capture_config, stream_sink)
-            }
-            SampleFormat::U32 => {
-                build_input_stream::<u32>(&device, &config, capture_config, stream_sink)
-            }
+            SampleFormat::F32 => build_input_stream::<f32>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::F64 => build_input_stream::<f64>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::I8 => build_input_stream::<i8>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::I16 => build_input_stream::<i16>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::I32 => build_input_stream::<i32>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::U8 => build_input_stream::<u8>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::U16 => build_input_stream::<u16>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
+            SampleFormat::U32 => build_input_stream::<u32>(
+                &device,
+                &config,
+                capture_config,
+                stream_sink,
+                level_sink,
+                on_stream_error,
+            ),
             other => Err(format!("Unsupported input sample format: {other:?}")),
         }?;
 
@@ -308,6 +362,8 @@ fn build_input_stream<T>(
     config: &StreamConfig,
     capture: InputCaptureConfig<'_>,
     stream_sink: Option<SyncSender<AudioFrame>>,
+    level_sink: Option<SyncSender<LevelSample>>,
+    on_stream_error: Option<StreamErrorCallback>,
 ) -> Result<Stream, String>
 where
     T: ToI16Sample + cpal::SizedSample + Copy + Send + 'static,
@@ -315,7 +371,12 @@ where
     let buffer = Arc::clone(capture.buffer);
     let captured_samples = Arc::new(AtomicUsize::new(0));
     let dropped_stream_frames = Arc::clone(capture.dropped_stream_frames);
-    let err_fn = |err| eprintln!("Audio input stream error: {err}");
+    let err_fn = move |err: cpal::StreamError| {
+        eprintln!("Audio input stream error: {err}");
+        if let Some(on_stream_error) = &on_stream_error {
+            on_stream_error(err.to_string());
+        }
+    };
     let sink = stream_sink;
     let sample_rate = config.sample_rate;
     let channels = capture.channels;
@@ -351,6 +412,12 @@ where
                     return;
                 }
 
+                // Live level for the recording meter. Non-blocking: a full
+                // channel just drops the sample — the meter is display-only.
+                if let Some(level_sink) = &level_sink {
+                    let _ = level_sink.try_send(chunk_level(&chunk));
+                }
+
                 if let Some(sink) = &sink {
                     let frame = AudioFrame {
                         pcm_i16: chunk.clone(),
@@ -378,6 +445,20 @@ struct InputCaptureConfig<'a> {
     max_samples: usize,
     buffer: &'a Arc<Mutex<Vec<i16>>>,
     dropped_stream_frames: &'a Arc<AtomicU64>,
+}
+
+fn chunk_level(chunk: &[i16]) -> LevelSample {
+    let mut peak = 0.0_f32;
+    let mut sum_sq = 0.0_f64;
+    for sample in chunk {
+        let normalized = f32::from(*sample) / 32768.0;
+        peak = peak.max(normalized.abs());
+        sum_sq += f64::from(normalized * normalized);
+    }
+    LevelSample {
+        peak,
+        rms: (sum_sq / chunk.len().max(1) as f64).sqrt() as f32,
+    }
 }
 
 fn append_mono_samples<T>(

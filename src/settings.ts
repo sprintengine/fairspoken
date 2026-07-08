@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
-import { playRecordingStartSound, setInteractionSoundsEnabled } from "./sounds";
 
 // Parakeet is the default engine; the whisper.cpp ids are only meaningful when
 // the backend was built with the `whisper` Cargo feature.
@@ -599,11 +598,13 @@ function updateModelSize(model: SttModel): void {
 }
 
 // The GPU toggle only affects local Whisper inference: a remote host's GPU
-// use is the host operator's configuration.
+// use is the host operator's configuration, and the Parakeet engine is
+// CPU-only — showing a toggle it ignores would be a lie.
 function updateUseGpuUi(): void {
   const local = locationSeg.get() === "local";
-  useGpuRow.hidden = !local;
-  useGpu.disabled = !local;
+  const gpuCapableEngine = !modelSelect.value.startsWith("parakeet");
+  useGpuRow.hidden = !local || !gpuCapableEngine;
+  useGpu.disabled = !local || !gpuCapableEngine;
 }
 
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
@@ -759,6 +760,7 @@ locationSeg.onChange((value) => {
 });
 
 modelSelect.addEventListener("change", () => {
+  updateUseGpuUi();
   void persistSettings()
     .then((saved) => {
       if (saved) return requestModelStatus();
@@ -811,8 +813,8 @@ interactionSounds.addEventListener("change", () => {
   void persistSettings()
     .then((saved) => {
       if (saved && interactionSounds.checked) {
-        setInteractionSoundsEnabled(true);
-        playRecordingStartSound();
+        // Preview through the same Rust playback path the real clicks use.
+        return invoke("preview_interaction_sound", { sound: "recording-start" });
       }
     })
     .catch(reportAsyncError);

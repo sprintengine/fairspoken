@@ -8,6 +8,7 @@ mod notes;
 mod post_processing;
 mod remote_transcription;
 mod settings;
+mod sounds;
 mod speed_test;
 mod transcript_history;
 mod transcription;
@@ -15,7 +16,7 @@ mod usage_stats;
 
 pub use host::run_transcription_host;
 
-use audio::{AudioService, Recording};
+use audio::{AudioService, LevelSample, Recording, StreamErrorCallback};
 use clipboard::ClipboardService;
 use models::{ModelPrepareProgress, ModelService, ModelStatus, SttModel};
 use notes::{NewNote, Note, NotesService};
@@ -27,6 +28,7 @@ use remote_transcription::{
 };
 use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsService, Snippet, TranscriptCorrection, TranscriptionLocation};
+use sounds::{play_interaction_sound, InteractionSound};
 use speed_test::{
     build_capture_result, SpeedTestCapture, SpeedTestRecord, SpeedTestService, SpeedTestSummary,
 };
@@ -57,6 +59,9 @@ struct AppServices {
     audio: Mutex<AudioService>,
     clipboard: ClipboardService,
     models: ModelService,
+    /// Bumped on every recording start so the max-duration watchdog can tell
+    /// whether the session it armed for is still the active one.
+    recording_generation: AtomicU64,
     model_prepare_running: Arc<AtomicBool>,
     transcription_cancel_requested: Arc<AtomicBool>,
     local_transcription_cancel: Mutex<Option<TranscriptionCancelHandle>>,
@@ -423,7 +428,7 @@ fn pill_window_bounds(state: &str) -> Option<(f64, f64)> {
     match state {
         "idle" => Some((76.0, 24.0)),
         "hover" => Some((212.0, 46.0)),
-        "recording" | "transcribing" => Some((212.0, 46.0)),
+        "starting" | "recording" | "transcribing" => Some((212.0, 46.0)),
         "copied" => Some((140.0, 46.0)),
         "error" => Some((280.0, 46.0)),
         _ => None,
@@ -708,6 +713,17 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         }
     };
 
+    let level_sink = start_audio_level_forwarder(app.clone());
+    let stream_error_app = app.clone();
+    let on_stream_error: StreamErrorCallback = Box::new(move |message: String| {
+        emit_backend_event(
+            &stream_error_app,
+            "error",
+            format!("Microphone stream failed: {message}"),
+        );
+        let _ = stream_error_app.emit("recording-stream-error", message);
+    });
+
     if let Err(err) = services
         .audio
         .lock()
@@ -716,6 +732,8 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
             settings.max_recording_seconds,
             settings.input_gain,
             stream_sink,
+            Some(level_sink),
+            Some(on_stream_error),
         )
     {
         if settings.transcription_location == TranscriptionLocation::Local {
@@ -731,6 +749,15 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         return Err(err);
     }
 
+    // The start click plays only once native capture is confirmed, so the
+    // click never lies about recording being live.
+    if settings.interaction_sounds {
+        play_interaction_sound(InteractionSound::RecordingStart);
+    }
+
+    let generation = services.recording_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    start_max_duration_watchdog(app.clone(), generation, settings.max_recording_seconds);
+
     emit_backend_event(
         &app,
         "info",
@@ -742,8 +769,112 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
     Ok(settings.max_recording_seconds)
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioLevelEvent {
+    peak: f32,
+    rms: f32,
+}
+
+const AUDIO_LEVEL_EMIT_INTERVAL: Duration = Duration::from_millis(40);
+
+/// Receives per-callback capture levels and forwards them to the pill as a
+/// throttled `audio-level` event stream (~25 Hz). Ends when capture stops and
+/// the audio stream drops its sender, parking the meter at zero.
+fn start_audio_level_forwarder(app: AppHandle) -> mpsc::SyncSender<LevelSample> {
+    let (tx, rx) = mpsc::sync_channel::<LevelSample>(32);
+    thread::Builder::new()
+        .name("audio-level-forwarder".to_string())
+        .spawn(move || {
+            let mut window_peak = 0.0_f32;
+            let mut window_rms = 0.0_f32;
+            let mut last_emit = std::time::Instant::now();
+            while let Ok(sample) = rx.recv() {
+                window_peak = window_peak.max(sample.peak);
+                window_rms = window_rms.max(sample.rms);
+                if last_emit.elapsed() >= AUDIO_LEVEL_EMIT_INTERVAL {
+                    let _ = app.emit(
+                        "audio-level",
+                        AudioLevelEvent {
+                            peak: window_peak,
+                            rms: window_rms,
+                        },
+                    );
+                    window_peak = 0.0;
+                    window_rms = 0.0;
+                    last_emit = std::time::Instant::now();
+                }
+            }
+            let _ = app.emit("audio-level", AudioLevelEvent { peak: 0.0, rms: 0.0 });
+        })
+        .ok();
+    tx
+}
+
+/// Grace past the frontend's own max-duration timer, so the watchdog only
+/// ever acts when the webview failed to stop the recording itself.
+const MAX_DURATION_WATCHDOG_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingAutoStoppedEvent {
+    committed: bool,
+    message: String,
+}
+
+/// Backend enforcement of the recording cap. The frontend stops recordings on
+/// its own timer; if the webview is wedged, this thread commits the dictation
+/// through the real stop pipeline so capture can never silently run forever.
+fn start_max_duration_watchdog(app: AppHandle, generation: u64, max_recording_seconds: u16) {
+    thread::Builder::new()
+        .name("max-recording-watchdog".to_string())
+        .spawn(move || {
+            thread::sleep(
+                Duration::from_secs(u64::from(max_recording_seconds)) + MAX_DURATION_WATCHDOG_GRACE,
+            );
+            let services = app.state::<AppServices>();
+            if services.recording_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let still_recording = services
+                .audio
+                .lock()
+                .map(|audio| audio.is_recording())
+                .unwrap_or(false);
+            if !still_recording {
+                return;
+            }
+
+            emit_backend_event(
+                &app,
+                "warning",
+                "Max recording duration reached; committing the dictation from the backend",
+            );
+            let event = match perform_stop_and_transcribe(&app, &services) {
+                Ok(_) => RecordingAutoStoppedEvent {
+                    committed: true,
+                    message: "Recording hit the maximum duration and was transcribed".to_string(),
+                },
+                Err(err) => RecordingAutoStoppedEvent {
+                    committed: false,
+                    message: format!(
+                        "Recording hit the maximum duration but could not be transcribed: {err}"
+                    ),
+                },
+            };
+            let _ = app.emit("recording-auto-stopped", event);
+        })
+        .ok();
+}
+
 #[tauri::command]
 fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Result<String, String> {
+    perform_stop_and_transcribe(&app, &services)
+}
+
+/// The full dictation commit pipeline. Free of the command layer so both the
+/// `stop_and_transcribe` command and the max-duration watchdog can run it.
+fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Result<String, String> {
     services
         .transcription_cancel_requested
         .store(false, Ordering::SeqCst);
@@ -753,23 +884,23 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
-    let recording = stop_and_validate_recording(&app, &services, &settings)?;
+    let recording = stop_and_validate_recording(app, services, &settings)?;
     let stats = recording.stats();
 
     emit_backend_event(
-        &app,
+        app,
         "info",
         format!(
             "Finishing transcription with location={:?}, model={:?}",
             settings.transcription_location, settings.model
         ),
     );
-    let raw_transcript = finish_transcription_raw(&app, &services, &recording, &settings)?;
+    let raw_transcript = finish_transcription_raw(app, services, &recording, &settings)?;
 
     let processed = apply_transcript_post_processing(&raw_transcript, &settings);
     if processed.corrections_applied > 0 {
         emit_backend_event(
-            &app,
+            app,
             "info",
             format!(
                 "Applied {} transcript correction{}",
@@ -809,19 +940,19 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
 
     #[cfg(target_os = "macos")]
     if will_insert_at_cursor {
-        deliver_transcript_at_cursor(&app);
+        deliver_transcript_at_cursor(app);
     } else {
-        emit_backend_event(&app, "info", "Transcript copied to clipboard");
+        emit_backend_event(app, "info", "Transcript copied to clipboard");
     }
     #[cfg(not(target_os = "macos"))]
-    emit_backend_event(&app, "info", "Transcript copied to clipboard");
+    emit_backend_event(app, "info", "Transcript copied to clipboard");
 
     // Usage stats are best-effort: a stats write must never fail the dictation
     // the user just completed.
     let word_count = transcript.split_whitespace().count() as u64;
-    if let Err(err) = record_usage_stats(&services, word_count, stats.duration_seconds) {
+    if let Err(err) = record_usage_stats(services, word_count, stats.duration_seconds) {
         emit_backend_event(
-            &app,
+            app,
             "warning",
             format!("Could not update usage stats: {err}"),
         );
@@ -829,11 +960,11 @@ fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Resu
 
     // Save to the durable notes library (also best-effort), then notify the
     // home window so the Notes screen refreshes live.
-    match save_note(&services, transcript.clone(), stats.duration_seconds) {
+    match save_note(services, transcript.clone(), stats.duration_seconds) {
         Ok(note) => {
             let _ = app.emit("notes-updated", &note);
         }
-        Err(err) => emit_backend_event(&app, "warning", format!("Could not save note: {err}")),
+        Err(err) => emit_backend_event(app, "warning", format!("Could not save note: {err}")),
     }
 
     Ok(transcript)
@@ -912,7 +1043,7 @@ mod tests {
 /// validation. On rejection the in-flight transcription session is cancelled.
 fn stop_and_validate_recording(
     app: &AppHandle,
-    services: &State<'_, AppServices>,
+    services: &AppServices,
     settings: &Settings,
 ) -> Result<Recording, String> {
     let recording = match services
@@ -927,6 +1058,13 @@ fn stop_and_validate_recording(
             return Err(err);
         }
     };
+
+    // Played on confirmed capture stop — before validation, because the user
+    // action being acknowledged is "recording ended", not "transcript OK".
+    if settings.interaction_sounds {
+        play_interaction_sound(InteractionSound::RecordingStop);
+    }
+
     let stats = recording.stats();
     emit_backend_event(
         app,
@@ -936,6 +1074,17 @@ fn stop_and_validate_recording(
             stats.duration_seconds, stats.peak, stats.rms, stats.dropped_stream_frames
         ),
     );
+
+    if stats.dropped_stream_frames > 0 {
+        emit_backend_event(
+            app,
+            "warning",
+            format!(
+                "{} audio frames were dropped while streaming to the transcriber; the transcript may be missing words",
+                stats.dropped_stream_frames
+            ),
+        );
+    }
 
     if stats.duration_seconds < MIN_RECORDING_SECONDS {
         emit_backend_event(app, "warning", "Recording rejected as too short");
@@ -963,7 +1112,7 @@ fn stop_and_validate_recording(
 /// post-processing). Shared by the dictation commit path and the speed test.
 fn finish_transcription_raw(
     app: &AppHandle,
-    services: &State<'_, AppServices>,
+    services: &AppServices,
     recording: &Recording,
     settings: &Settings,
 ) -> Result<String, String> {
@@ -1127,7 +1276,7 @@ fn set_measured_typing_wpm(
 }
 
 fn save_note(
-    services: &State<'_, AppServices>,
+    services: &AppServices,
     text: String,
     duration_seconds: f32,
 ) -> Result<Note, String> {
@@ -1142,7 +1291,7 @@ fn save_note(
 }
 
 fn record_usage_stats(
-    services: &State<'_, AppServices>,
+    services: &AppServices,
     words: u64,
     recording_seconds: f32,
 ) -> Result<(), String> {
@@ -1158,6 +1307,19 @@ fn current_epoch_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+/// Plays an interaction sound on demand (the Settings screen's preview when
+/// the toggle is switched on). Deliberately ignores the interaction-sounds
+/// setting: the user just asked to hear it.
+#[tauri::command]
+fn preview_interaction_sound(sound: String) -> Result<(), String> {
+    match sound.as_str() {
+        "recording-start" => play_interaction_sound(InteractionSound::RecordingStart),
+        "recording-stop" => play_interaction_sound(InteractionSound::RecordingStop),
+        other => return Err(format!("Unknown interaction sound: {other}")),
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1247,7 +1409,7 @@ fn location_id(location: TranscriptionLocation) -> &'static str {
 }
 
 fn cancel_transcription_for_location(
-    services: &State<'_, AppServices>,
+    services: &AppServices,
     location: TranscriptionLocation,
 ) -> Result<(), String> {
     match location {
@@ -1256,7 +1418,7 @@ fn cancel_transcription_for_location(
     }
 }
 
-fn cancel_local_transcription_if_needed(services: &State<'_, AppServices>) -> Result<(), String> {
+fn cancel_local_transcription_if_needed(services: &AppServices) -> Result<(), String> {
     services
         .transcription
         .lock()
@@ -1266,7 +1428,7 @@ fn cancel_local_transcription_if_needed(services: &State<'_, AppServices>) -> Re
     Ok(())
 }
 
-fn clear_local_transcription_cancel(services: &State<'_, AppServices>) -> Result<(), String> {
+fn clear_local_transcription_cancel(services: &AppServices) -> Result<(), String> {
     *services
         .local_transcription_cancel
         .lock()
@@ -1274,7 +1436,7 @@ fn clear_local_transcription_cancel(services: &State<'_, AppServices>) -> Result
     Ok(())
 }
 
-fn cancel_remote_transcription_if_needed(services: &State<'_, AppServices>) -> Result<(), String> {
+fn cancel_remote_transcription_if_needed(services: &AppServices) -> Result<(), String> {
     if let Some(session) = services
         .remote_transcription
         .lock()
@@ -1305,6 +1467,7 @@ pub fn run() {
             audio: Mutex::new(AudioService::default()),
             clipboard: ClipboardService,
             models: ModelService::default(),
+            recording_generation: AtomicU64::new(0),
             model_prepare_running: Arc::new(AtomicBool::new(false)),
             transcription_cancel_requested: Arc::new(AtomicBool::new(false)),
             local_transcription_cancel: Mutex::new(None),
@@ -1367,6 +1530,7 @@ pub fn run() {
             start_recording,
             stop_and_transcribe,
             cancel_transcription,
+            preview_interaction_sound,
             stop_speed_test_capture,
             stop_voice_test_capture,
             save_speed_test_result,

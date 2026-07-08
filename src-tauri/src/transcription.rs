@@ -14,6 +14,15 @@ use whisper_rs::{
 
 const STREAM_CHANNEL_DEPTH: usize = 64;
 const CHUNK_OVERLAP_SECONDS: usize = 1;
+/// Trailing silence that ends an utterance and cuts a chunk at the gap.
+const GAP_SILENCE_MS: usize = 500;
+/// Do not gap-cut before this much audio has accumulated, so brief pauses in
+/// the first words do not produce confetti chunks.
+const MIN_GAP_CHUNK_SECONDS: usize = 2;
+/// Backpressure: while this many chunk jobs are still transcribing, defer
+/// further cuts and let the buffer coalesce into fewer, larger chunks instead
+/// of queueing unbounded PCM copies behind a slow engine.
+const MAX_PENDING_CHUNK_JOBS: usize = 2;
 const SPEECH_PEAK_THRESHOLD: f32 = 0.010;
 const SPEECH_RMS_THRESHOLD: f32 = 0.0015;
 const SPEECH_WINDOW_MS: usize = 30;
@@ -423,11 +432,16 @@ struct WhisperChunkJob {
     index: usize,
     pcm_i16: Vec<i16>,
     sample_rate: u32,
+    /// True when this chunk repeats the previous chunk's tail (a forced
+    /// wall-clock cut); false when the cut landed in a silence gap and the
+    /// transcripts can simply be concatenated.
+    overlaps_previous: bool,
 }
 
 struct ChunkResult {
     index: usize,
     text: String,
+    overlaps_previous: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -457,12 +471,14 @@ fn run_chunked_session(
                     .map(|text| ChunkResult {
                         index: job.index,
                         text,
+                        overlaps_previous: job.overlaps_previous,
                     })
                     .or_else(|err| {
                         if err == "No speech was transcribed" {
                             Ok(ChunkResult {
                                 index: job.index,
                                 text: String::new(),
+                                overlaps_previous: job.overlaps_previous,
                             })
                         } else {
                             Err(err)
@@ -483,6 +499,7 @@ fn run_chunked_session(
     let mut dispatched_chunks = 0;
     let mut received_audio = false;
     let mut chunks = Vec::new();
+    let mut cut_state = ChunkCutState::default();
 
     loop {
         match control_rx.try_recv() {
@@ -503,15 +520,17 @@ fn run_chunked_session(
                 received_audio = true;
                 sample_rate = frame.sample_rate;
                 buffer.extend_from_slice(&frame.pcm_i16);
-                dispatch_ready_whisper_chunks(
+                collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
+                dispatch_ready_chunks(
                     &mut buffer,
                     sample_rate,
                     chunk_seconds,
                     &job_tx,
                     &mut chunk_index,
                     &mut dispatched_chunks,
+                    &mut cut_state,
+                    chunks.len(),
                 )?;
-                collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -526,15 +545,17 @@ fn run_chunked_session(
         received_audio = true;
         sample_rate = frame.sample_rate;
         buffer.extend_from_slice(&frame.pcm_i16);
-        dispatch_ready_whisper_chunks(
+        collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
+        dispatch_ready_chunks(
             &mut buffer,
             sample_rate,
             chunk_seconds,
             &job_tx,
             &mut chunk_index,
             &mut dispatched_chunks,
+            &mut cut_state,
+            chunks.len(),
         )?;
-        collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
 
     if !received_audio {
@@ -543,12 +564,13 @@ fn run_chunked_session(
         return Err(NO_STREAMED_AUDIO.to_string());
     }
 
-    dispatch_final_whisper_chunk(
+    dispatch_final_chunk(
         &mut buffer,
         sample_rate,
         &job_tx,
         &mut chunk_index,
         dispatched_chunks,
+        cut_state.next_overlaps_previous,
     )?;
     drop(job_tx);
     let _ = worker.join();
@@ -594,6 +616,7 @@ fn emit_chunk_preview(
         .map(|chunk| ChunkResult {
             index: chunk.index,
             text: chunk.text.clone(),
+            overlaps_previous: chunk.overlaps_previous,
         })
         .collect::<Vec<_>>();
     sorted.sort_by_key(|chunk| chunk.index);
@@ -619,57 +642,165 @@ fn emit_preview(
     }
 }
 
-fn dispatch_ready_whisper_chunks(
+/// Tracks how the pending buffer relates to the previously dispatched chunk.
+#[derive(Default)]
+struct ChunkCutState {
+    gap: Option<GapTracker>,
+    /// True when the last cut retained the 1s overlap tail, so the next
+    /// dispatched chunk's transcript repeats the previous chunk's ending.
+    next_overlaps_previous: bool,
+}
+
+/// Incrementally classifies the pending buffer into 30ms active/silent
+/// windows (same thresholds as `contains_probable_speech`) so chunk cuts can
+/// land in real speech gaps instead of on a wall clock.
+struct GapTracker {
+    window_samples: usize,
+    scanned_samples: usize,
+    trailing_silence_ms: usize,
+    has_speech: bool,
+}
+
+impl GapTracker {
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            window_samples: (sample_rate as usize * SPEECH_WINDOW_MS / 1000).max(1),
+            scanned_samples: 0,
+            trailing_silence_ms: 0,
+            has_speech: false,
+        }
+    }
+
+    fn scan(&mut self, buffer: &[i16]) {
+        while self.scanned_samples + self.window_samples <= buffer.len() {
+            let window = &buffer[self.scanned_samples..self.scanned_samples + self.window_samples];
+            let (peak, rms) = peak_and_rms(window);
+            if peak >= SPEECH_WINDOW_PEAK_THRESHOLD || rms >= SPEECH_WINDOW_RMS_THRESHOLD {
+                self.trailing_silence_ms = 0;
+                self.has_speech = true;
+            } else {
+                self.trailing_silence_ms += SPEECH_WINDOW_MS;
+            }
+            self.scanned_samples += self.window_samples;
+        }
+    }
+
+    /// After a gap cut the buffer is empty and the next utterance starts
+    /// fresh.
+    fn reset(&mut self) {
+        self.scanned_samples = 0;
+        self.trailing_silence_ms = 0;
+        self.has_speech = false;
+    }
+
+    /// After a forced cut the buffer keeps the overlap tail; a fresh gap cut
+    /// must wait for new speech so it never dispatches an overlap-only chunk.
+    fn after_drain(&mut self, drained: usize) {
+        self.scanned_samples = self.scanned_samples.saturating_sub(drained);
+        self.has_speech = false;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_ready_chunks(
     buffer: &mut Vec<i16>,
     sample_rate: u32,
-    chunk_seconds: usize,
+    max_chunk_seconds: usize,
     job_tx: &mpsc::Sender<WhisperChunkJob>,
     chunk_index: &mut usize,
     dispatched_chunks: &mut usize,
+    cut: &mut ChunkCutState,
+    completed_chunks: usize,
 ) -> Result<(), String> {
-    let chunk_samples = sample_rate as usize * chunk_seconds;
+    let max_chunk_samples = sample_rate as usize * max_chunk_seconds;
     let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
-    if chunk_samples == 0 {
+    let min_gap_samples = sample_rate as usize * MIN_GAP_CHUNK_SECONDS;
+    if max_chunk_samples == 0 {
         return Ok(());
     }
 
-    while buffer.len() >= chunk_samples {
-        let chunk = &buffer[..chunk_samples];
-        if contains_probable_speech(chunk, sample_rate) {
+    let gap = cut.gap.get_or_insert_with(|| GapTracker::new(sample_rate));
+    gap.scan(buffer);
+
+    loop {
+        // Backpressure: while the engine is behind, keep accumulating (the
+        // buffer is bounded by the recording cap) instead of queueing jobs.
+        if dispatched_chunks.saturating_sub(completed_chunks) >= MAX_PENDING_CHUNK_JOBS {
+            return Ok(());
+        }
+
+        if gap.has_speech
+            && gap.trailing_silence_ms >= GAP_SILENCE_MS
+            && buffer.len() >= min_gap_samples
+        {
+            // Gap cut: the boundary sits in silence, so the whole utterance
+            // ships as one chunk and the next chunk needs no overlap.
+            job_tx
+                .send(WhisperChunkJob {
+                    index: *chunk_index,
+                    pcm_i16: std::mem::take(buffer),
+                    sample_rate,
+                    overlaps_previous: cut.next_overlaps_previous,
+                })
+                .map_err(|_| {
+                    "Transcription chunk worker stopped while receiving audio".to_string()
+                })?;
+            *chunk_index += 1;
+            *dispatched_chunks += 1;
+            cut.next_overlaps_previous = false;
+            gap.reset();
+            return Ok(());
+        }
+
+        if buffer.len() < max_chunk_samples {
+            return Ok(());
+        }
+
+        // Forced wall-clock cut mid-speech: keep the 1s overlap tail so the
+        // text merge can reconcile the boundary, exactly as before.
+        let chunk = &buffer[..max_chunk_samples];
+        let has_speech = contains_probable_speech(chunk, sample_rate);
+        if has_speech {
             job_tx
                 .send(WhisperChunkJob {
                     index: *chunk_index,
                     pcm_i16: chunk.to_vec(),
                     sample_rate,
+                    overlaps_previous: cut.next_overlaps_previous,
                 })
-                .map_err(|_| "Transcription chunk worker stopped while receiving audio".to_string())?;
+                .map_err(|_| {
+                    "Transcription chunk worker stopped while receiving audio".to_string()
+                })?;
             *dispatched_chunks += 1;
         }
         *chunk_index += 1;
 
-        let drain_samples = chunk_samples
+        let drain_samples = max_chunk_samples
             .saturating_sub(overlap_samples)
             .max(1)
             .min(buffer.len());
         buffer.drain(..drain_samples);
+        gap.after_drain(drain_samples);
+        // A silent forced chunk contributes no text, so the next chunk must
+        // not fuzzy-merge against older transcript.
+        cut.next_overlaps_previous = has_speech;
     }
-
-    Ok(())
 }
 
-fn dispatch_final_whisper_chunk(
+fn dispatch_final_chunk(
     buffer: &mut Vec<i16>,
     sample_rate: u32,
     job_tx: &mpsc::Sender<WhisperChunkJob>,
     chunk_index: &mut usize,
     dispatched_chunks: usize,
+    overlaps_previous: bool,
 ) -> Result<(), String> {
     if buffer.is_empty() {
         return Ok(());
     }
 
     let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
-    if dispatched_chunks > 0 && buffer.len() <= overlap_samples {
+    if dispatched_chunks > 0 && overlaps_previous && buffer.len() <= overlap_samples {
         return Ok(());
     }
     if !contains_probable_speech(buffer, sample_rate) {
@@ -682,6 +813,7 @@ fn dispatch_final_whisper_chunk(
             index: *chunk_index,
             pcm_i16: std::mem::take(buffer),
             sample_rate,
+            overlaps_previous,
         })
         .map_err(|_| "Transcription chunk worker stopped while receiving final audio".to_string())?;
     *chunk_index += 1;
@@ -822,9 +954,28 @@ fn merge_chunk_results(chunks: &[ChunkResult]) -> String {
         if text.is_empty() {
             continue;
         }
-        transcript = merge_transcript_text(&transcript, text);
+        transcript = if chunk.overlaps_previous {
+            merge_transcript_text(&transcript, text)
+        } else {
+            join_transcript_text(&transcript, text)
+        };
     }
     transcript
+}
+
+/// Plain concatenation for gap-cut boundaries: the cut landed in silence, so
+/// nothing was transcribed twice and fuzzy overlap matching would only risk
+/// eating genuinely repeated words.
+fn join_transcript_text(previous: &str, next: &str) -> String {
+    let previous = previous.trim();
+    let next = next.trim();
+    if previous.is_empty() {
+        return next.to_string();
+    }
+    if next.is_empty() {
+        return previous.to_string();
+    }
+    format!("{previous} {next}")
 }
 
 fn merge_transcript_text(previous: &str, next: &str) -> String {
@@ -1025,9 +1176,11 @@ fn path_to_string(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_probable_speech, dispatch_final_whisper_chunk, dispatch_ready_whisper_chunks,
-        is_non_speech_annotation, merge_transcript_text, resample_i16_to_16khz_f32, ChunkTranscriber,
-        SessionHandle, WhisperChunkJob, CHUNK_OVERLAP_SECONDS, NO_STREAMED_AUDIO,
+        contains_probable_speech, dispatch_final_chunk, dispatch_ready_chunks,
+        is_non_speech_annotation, merge_chunk_results, merge_transcript_text,
+        resample_i16_to_16khz_f32, ChunkCutState, ChunkResult, ChunkTranscriber, SessionHandle,
+        WhisperChunkJob, CHUNK_OVERLAP_SECONDS, GAP_SILENCE_MS, MAX_PENDING_CHUNK_JOBS,
+        MIN_GAP_CHUNK_SECONDS, NO_STREAMED_AUDIO,
     };
     use crate::audio::AudioFrame;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1194,9 +1347,18 @@ mod tests {
         assert!(audio.is_empty());
     }
 
+    /// Synthetic PCM: `speech_ms` of loud samples followed by `silence_ms`
+    /// of near-silence, at `sample_rate`.
+    fn speech_then_silence(sample_rate: u32, speech_ms: usize, silence_ms: usize) -> Vec<i16> {
+        let per_ms = sample_rate as usize / 1000;
+        let mut samples = vec![2_000_i16; speech_ms * per_ms];
+        samples.extend(vec![0_i16; silence_ms * per_ms]);
+        samples
+    }
+
     #[test]
-    fn dispatches_ready_whisper_chunks_with_overlap_retained() {
-        let sample_rate = 10;
+    fn forced_cut_retains_overlap_and_marks_next_chunk_overlapping() {
+        let sample_rate = 1_000;
         let chunk_seconds = 20;
         let chunk_samples = sample_rate as usize * chunk_seconds;
         let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
@@ -1204,14 +1366,17 @@ mod tests {
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 0;
         let mut dispatched_chunks = 0;
+        let mut cut = ChunkCutState::default();
 
-        dispatch_ready_whisper_chunks(
+        dispatch_ready_chunks(
             &mut buffer,
             sample_rate,
             chunk_seconds,
             &tx,
             &mut chunk_index,
             &mut dispatched_chunks,
+            &mut cut,
+            0,
         )
         .expect("dispatch ready chunk");
 
@@ -1219,36 +1384,120 @@ mod tests {
         assert_eq!(job.index, 0);
         assert_eq!(job.sample_rate, sample_rate);
         assert_eq!(job.pcm_i16.len(), chunk_samples);
+        assert!(!job.overlaps_previous, "first chunk has nothing to overlap");
         assert_eq!(buffer.len(), overlap_samples);
         assert_eq!(chunk_index, 1);
         assert_eq!(dispatched_chunks, 1);
+        assert!(
+            cut.next_overlaps_previous,
+            "next chunk repeats the retained overlap tail"
+        );
     }
 
     #[test]
-    fn skips_ready_whisper_chunks_without_probable_speech() {
-        let sample_rate = 10;
-        let chunk_seconds = 20;
-        let chunk_samples = sample_rate as usize * chunk_seconds;
-        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
-        let mut buffer = vec![1_i16; chunk_samples];
+    fn gap_cut_dispatches_whole_utterance_without_overlap() {
+        let sample_rate = 1_000;
+        let mut buffer = speech_then_silence(
+            sample_rate,
+            MIN_GAP_CHUNK_SECONDS * 1000 + 500,
+            GAP_SILENCE_MS + 100,
+        );
+        let total = buffer.len();
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 0;
         let mut dispatched_chunks = 0;
+        let mut cut = ChunkCutState::default();
 
-        dispatch_ready_whisper_chunks(
+        dispatch_ready_chunks(
             &mut buffer,
             sample_rate,
-            chunk_seconds,
+            20,
             &tx,
             &mut chunk_index,
             &mut dispatched_chunks,
+            &mut cut,
+            0,
         )
-        .expect("dispatch ready chunk");
+        .expect("dispatch gap chunk");
 
-        assert!(rx.try_recv().is_err());
-        assert_eq!(buffer.len(), overlap_samples);
-        assert_eq!(chunk_index, 1);
-        assert_eq!(dispatched_chunks, 0);
+        let job = rx.try_recv().expect("gap chunk job");
+        assert_eq!(job.index, 0);
+        assert_eq!(job.pcm_i16.len(), total, "gap cut ships the whole utterance");
+        assert!(!job.overlaps_previous);
+        assert!(buffer.is_empty(), "gap cut leaves no overlap tail");
+        assert_eq!(dispatched_chunks, 1);
+        assert!(
+            !cut.next_overlaps_previous,
+            "the next chunk starts fresh after a gap cut"
+        );
+    }
+
+    #[test]
+    fn gap_cut_waits_for_minimum_audio_and_a_real_gap() {
+        let sample_rate = 1_000;
+        let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
+        let mut chunk_index = 0;
+        let mut dispatched_chunks = 0;
+        let mut cut = ChunkCutState::default();
+
+        // Speech with a short (sub-threshold) pause: no cut.
+        let mut buffer = speech_then_silence(sample_rate, 2_500, GAP_SILENCE_MS - 200);
+        dispatch_ready_chunks(
+            &mut buffer,
+            sample_rate,
+            20,
+            &tx,
+            &mut chunk_index,
+            &mut dispatched_chunks,
+            &mut cut,
+            0,
+        )
+        .expect("dispatch");
+        assert!(rx.try_recv().is_err(), "short pauses must not cut");
+        assert!(!buffer.is_empty());
+
+        // Too little audio before the gap: no cut either.
+        let mut short_buffer = speech_then_silence(sample_rate, 500, GAP_SILENCE_MS + 200);
+        let mut short_cut = ChunkCutState::default();
+        dispatch_ready_chunks(
+            &mut short_buffer,
+            sample_rate,
+            20,
+            &tx,
+            &mut chunk_index,
+            &mut dispatched_chunks,
+            &mut short_cut,
+            0,
+        )
+        .expect("dispatch");
+        assert!(rx.try_recv().is_err(), "tiny utterances wait for more audio");
+    }
+
+    #[test]
+    fn backpressure_defers_cuts_while_jobs_are_pending() {
+        let sample_rate = 1_000;
+        let mut buffer = speech_then_silence(sample_rate, 3_000, GAP_SILENCE_MS + 100);
+        let before = buffer.len();
+        let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
+        let mut chunk_index = MAX_PENDING_CHUNK_JOBS;
+        let mut dispatched_chunks = MAX_PENDING_CHUNK_JOBS;
+        let mut cut = ChunkCutState::default();
+
+        dispatch_ready_chunks(
+            &mut buffer,
+            sample_rate,
+            20,
+            &tx,
+            &mut chunk_index,
+            &mut dispatched_chunks,
+            &mut cut,
+            0, // nothing completed yet: MAX_PENDING_CHUNK_JOBS still in flight
+        )
+        .expect("dispatch");
+
+        assert!(rx.try_recv().is_err(), "no new job while the engine is behind");
+        assert_eq!(buffer.len(), before, "audio keeps accumulating instead");
+        assert_eq!(dispatched_chunks, MAX_PENDING_CHUNK_JOBS);
     }
 
     #[test]
@@ -1259,7 +1508,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;
 
-        dispatch_final_whisper_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1)
+        dispatch_final_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1, true)
             .expect("dispatch final chunk");
 
         assert!(rx.try_recv().is_err());
@@ -1275,13 +1524,32 @@ mod tests {
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;
 
-        dispatch_final_whisper_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1)
+        dispatch_final_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1, true)
             .expect("dispatch final chunk");
 
         let job = rx.try_recv().expect("final chunk job");
         assert_eq!(job.index, 1);
         assert_eq!(job.pcm_i16.len(), overlap_samples + 5);
+        assert!(job.overlaps_previous);
         assert!(buffer.is_empty());
+        assert_eq!(chunk_index, 2);
+    }
+
+    #[test]
+    fn dispatches_small_final_chunk_after_a_gap_cut() {
+        // After a gap cut the buffer holds fresh audio only, so even a
+        // sub-overlap-length tail must be transcribed rather than skipped.
+        let sample_rate = 1_000;
+        let overlap_samples = sample_rate as usize * CHUNK_OVERLAP_SECONDS;
+        let mut buffer = vec![2_000_i16; overlap_samples / 2];
+        let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
+        let mut chunk_index = 1;
+
+        dispatch_final_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1, false)
+            .expect("dispatch final chunk");
+
+        let job = rx.try_recv().expect("final chunk job");
+        assert!(!job.overlaps_previous);
         assert_eq!(chunk_index, 2);
     }
 
@@ -1293,12 +1561,48 @@ mod tests {
         let (tx, rx) = mpsc::channel::<WhisperChunkJob>();
         let mut chunk_index = 1;
 
-        dispatch_final_whisper_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1)
+        dispatch_final_chunk(&mut buffer, sample_rate, &tx, &mut chunk_index, 1, true)
             .expect("dispatch final chunk");
 
         assert!(rx.try_recv().is_err());
         assert!(buffer.is_empty());
         assert_eq!(chunk_index, 1);
+    }
+
+    #[test]
+    fn gap_cut_chunks_concatenate_and_forced_cut_chunks_fuzzy_merge() {
+        let chunks = vec![
+            ChunkResult {
+                index: 0,
+                text: "let's go".to_string(),
+                overlaps_previous: false,
+            },
+            ChunkResult {
+                index: 1,
+                text: "go now".to_string(),
+                overlaps_previous: false,
+            },
+        ];
+        // Gap boundaries: genuinely repeated words survive.
+        assert_eq!(merge_chunk_results(&chunks), "let's go go now");
+
+        let chunks = vec![
+            ChunkResult {
+                index: 0,
+                text: "we should ship this carefully".to_string(),
+                overlaps_previous: false,
+            },
+            ChunkResult {
+                index: 1,
+                text: "ship this carefully and measure latency".to_string(),
+                overlaps_previous: true,
+            },
+        ];
+        // Forced-cut boundaries keep the overlap dedup.
+        assert_eq!(
+            merge_chunk_results(&chunks),
+            "we should ship this carefully and measure latency"
+        );
     }
 
     #[test]
