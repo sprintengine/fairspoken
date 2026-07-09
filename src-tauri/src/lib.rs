@@ -5,6 +5,7 @@ mod host;
 mod macos_input;
 mod models;
 mod notes;
+mod polish;
 mod post_processing;
 mod remote_transcription;
 mod settings;
@@ -430,6 +431,7 @@ fn pill_window_bounds(state: &str) -> Option<(f64, f64)> {
         "hover" => Some((212.0, 46.0)),
         "starting" | "recording" | "transcribing" => Some((212.0, 46.0)),
         "copied" => Some((140.0, 46.0)),
+        "polished" => Some((220.0, 46.0)),
         "error" => Some((280.0, 46.0)),
         _ => None,
     }
@@ -638,6 +640,38 @@ fn copy_transcript_history_item(
         .clipboard
         .write_text(&transcript_clipboard_text(&item.text))?;
     let _ = app.emit("transcript-copied", &item);
+    Ok(item)
+}
+
+/// Copies the pre-polish transcript of a polished dictation to the clipboard
+/// (the pill's "Undo AI edit" and history's "Copy original"). Undo is a copy,
+/// not an in-place replacement: synthetic ⌘Z+⌘V and AX replacement were both
+/// rejected as fragile (see backlog/client-polish-undo.md).
+#[tauri::command]
+fn copy_original_transcript(
+    app: AppHandle,
+    id: String,
+    services: State<'_, AppServices>,
+) -> Result<TranscriptHistoryItem, String> {
+    let item = services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())?
+        .find(&id)
+        .ok_or_else(|| "Transcript history item was not found".to_string())?;
+    let raw_text = item
+        .raw_text
+        .clone()
+        .ok_or_else(|| "No original transcript is stored for this dictation".to_string())?;
+
+    services
+        .clipboard
+        .write_text(&transcript_clipboard_text(&raw_text))?;
+    emit_backend_event(
+        &app,
+        "info",
+        "Original transcript copied — paste to replace",
+    );
     Ok(item)
 }
 
@@ -902,7 +936,52 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     let raw_transcription = finish_transcription_raw(app, services, &recording, &settings)?;
     let raw_transcript = raw_transcription.text;
 
-    let processed = apply_transcript_post_processing(&raw_transcript, &settings);
+    // AI polish sits between the raw transcript and the user's deterministic
+    // rules — user-authored corrections/snippets stay authoritative and run
+    // last. Any polish failure falls back to the raw transcript silently
+    // (event-logged): polish must never turn a successful dictation into a
+    // failure.
+    #[cfg(target_os = "macos")]
+    let frontmost_app = macos_input::frontmost_app().map(|app| polish::PolishTargetApp {
+        bundle_id: app.bundle_id,
+        name: app.name,
+    });
+    #[cfg(not(target_os = "macos"))]
+    let frontmost_app: Option<polish::PolishTargetApp> = None;
+
+    let (transcript_for_rules, polished) =
+        match polish::maybe_polish(&raw_transcript, &settings, frontmost_app.as_ref()) {
+            polish::PolishDecision::Polished(outcome) => {
+                emit_backend_event(
+                    app,
+                    "info",
+                    format!(
+                        "Transcript polished ({}ms, {})",
+                        outcome.duration_ms, outcome.model
+                    ),
+                );
+                (outcome.text, true)
+            }
+            polish::PolishDecision::Unchanged { duration_ms } => {
+                emit_backend_event(
+                    app,
+                    "info",
+                    format!("Transcript polish made no changes ({duration_ms}ms)"),
+                );
+                (raw_transcript.clone(), false)
+            }
+            polish::PolishDecision::Skipped(reason) => {
+                emit_backend_event(app, "info", format!("Polish skipped: {reason}"));
+                (raw_transcript.clone(), false)
+            }
+            polish::PolishDecision::Failed(reason) => {
+                emit_backend_event(app, "warning", format!("Polish skipped: {reason}"));
+                (raw_transcript.clone(), false)
+            }
+            polish::PolishDecision::Disabled => (raw_transcript.clone(), false),
+        };
+
+    let processed = apply_transcript_post_processing(&transcript_for_rules, &settings);
     if processed.corrections_applied > 0 {
         emit_backend_event(
             app,
@@ -929,6 +1008,8 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             backend: raw_transcription.backend,
             location: location_id(settings.transcription_location).to_string(),
             duration_seconds: stats.duration_seconds,
+            polished,
+            raw_text: polished.then(|| raw_transcript.clone()),
         })?;
 
     let clipboard_text = transcript_clipboard_text(&transcript);
@@ -1548,6 +1629,7 @@ pub fn run() {
             get_transcript_history,
             clear_transcript_history,
             copy_transcript_history_item,
+            copy_original_transcript,
             delete_transcript_history_item,
             start_recording,
             stop_and_transcribe,

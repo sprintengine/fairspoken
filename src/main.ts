@@ -31,6 +31,8 @@ interface TranscriptHistoryItem {
   backend: string;
   location: string;
   durationSeconds: number;
+  polished?: boolean;
+  rawText?: string | null;
 }
 
 interface TranscriptHistoryUpdatedEvent {
@@ -46,7 +48,7 @@ interface ShortcutSettings {
   interactionSounds: boolean;
 }
 
-type PillLayout = "idle" | "hover" | "starting" | "recording" | "transcribing" | "copied" | "error";
+type PillLayout = "idle" | "hover" | "starting" | "recording" | "transcribing" | "copied" | "polished" | "error";
 
 interface AudioLevelEvent {
   peak: number;
@@ -70,6 +72,7 @@ const DEFAULT_SHORTCUT_SETTINGS: ShortcutSettings = {
 };
 
 const recordBtn = required<HTMLButtonElement>("recordBtn");
+const undoPolishBtn = required<HTMLButtonElement>("undoPolishBtn");
 const settingsBtn = required<HTMLButtonElement>("settingsBtn");
 const settingsEventBadge = required<HTMLElement>("settingsEventBadge");
 const pillHint = required<HTMLElement>("pillHint");
@@ -97,6 +100,9 @@ let shelfVisible = false;
 let shortcutSettings: ShortcutSettings = { ...DEFAULT_SHORTCUT_SETTINGS };
 let pushToTalkReleasePending = false;
 let shortcutRegistrationVersion = 0;
+const POLISH_UNDO_WINDOW_MS = 8_000;
+let polishUndoOffer: { id: string } | null = null;
+let polishUndoTimer: ReturnType<typeof setTimeout> | null = null;
 
 const SHELF_VISIBLE_MS = 18_000;
 
@@ -111,6 +117,10 @@ function setState(state: AppState, message?: string): void {
     clearTimeout(copiedStatusTimer);
     copiedStatusTimer = null;
     copiedShowing = false;
+  }
+  // Leaving idle (next recording, error, …) withdraws the undo affordance.
+  if (state !== "idle") {
+    dropPolishUndoOffer();
   }
 
   appState = state;
@@ -242,6 +252,7 @@ function computePillLayout(): PillLayout {
   if (appState === "recording") return "recording";
   if (appState === "transcribing") return "transcribing";
   if (appState === "error") return "error";
+  if (polishUndoOffer !== null) return "polished";
   if (copiedShowing) return "copied";
   return pillHovering ? "hover" : "idle";
 }
@@ -350,6 +361,9 @@ function waitForPaint(): Promise<void> {
 }
 
 function showCopiedStatus(): void {
+  // The polished state carries the undo affordance; the plain Copied flash
+  // must not replace it (both fire for the same dictation).
+  if (polishUndoOffer !== null) return;
   if (copiedStatusTimer !== null) {
     clearTimeout(copiedStatusTimer);
   }
@@ -364,6 +378,62 @@ function showCopiedStatus(): void {
       updatePillLayout();
     }
   }, 1400);
+}
+
+/* ── AI polish undo affordance ─────────────────────────────────
+   After a polished transcript pastes, the pill shows "AI polished" with an
+   Undo button for 8 s (or until the next recording). Undo copies the RAW
+   transcript to the clipboard — deliberately not a synthetic ⌘Z+⌘V or AX
+   replacement, both rejected as fragile. */
+
+function offerPolishUndo(id: string): void {
+  if (copiedStatusTimer !== null) {
+    clearTimeout(copiedStatusTimer);
+    copiedStatusTimer = null;
+    copiedShowing = false;
+  }
+  polishUndoOffer = { id };
+  if (polishUndoTimer !== null) clearTimeout(polishUndoTimer);
+  polishUndoTimer = setTimeout(() => {
+    dropPolishUndoOffer();
+    if (appState === "idle") setState("idle", "Ready");
+  }, POLISH_UNDO_WINDOW_MS);
+  if (appState === "idle") {
+    setState("idle", "AI polished");
+  } else {
+    updatePillLayout();
+  }
+}
+
+/** Withdraw the offer without touching the pill state (callers decide). */
+function dropPolishUndoOffer(): void {
+  if (polishUndoTimer !== null) {
+    clearTimeout(polishUndoTimer);
+    polishUndoTimer = null;
+  }
+  polishUndoOffer = null;
+}
+
+async function undoPolishedTranscript(): Promise<void> {
+  const offer = polishUndoOffer;
+  if (offer === null) return;
+  dropPolishUndoOffer();
+  try {
+    await invoke("copy_original_transcript", { id: offer.id });
+    addEvent("info", "Original transcript copied — paste to replace.");
+    if (appState === "idle") {
+      copiedShowing = true;
+      setState("idle", "Original copied");
+      copiedStatusTimer = setTimeout(() => {
+        copiedStatusTimer = null;
+        copiedShowing = false;
+        if (appState === "idle") setState("idle", "Ready");
+      }, 1400);
+    }
+  } catch (error) {
+    addEvent("warning", error instanceof Error ? error.message : String(error));
+    if (appState === "idle") setState("idle", "Ready");
+  }
 }
 
 function updateSettingsEventBadge(): void {
@@ -811,6 +881,10 @@ recordBtn.addEventListener("click", () => {
   void toggleRecording();
 });
 
+undoPolishBtn.addEventListener("click", () => {
+  void undoPolishedTranscript();
+});
+
 settingsBtn.addEventListener("click", () => {
   void invoke("open_home_window", { screen: "settings" });
 });
@@ -833,6 +907,9 @@ void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
 void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event) => {
   addOrReplaceTranscriptItem(event.payload.item);
   resetLiveTranscript();
+  if (event.payload.item.polished && event.payload.item.rawText) {
+    offerPolishUndo(event.payload.item.id);
+  }
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
 void listen<TranscriptHistoryItem>("transcript-copied", (event) => {

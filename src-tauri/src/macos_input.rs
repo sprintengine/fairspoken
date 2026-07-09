@@ -76,6 +76,28 @@ pub fn paste_clipboard_at_cursor() -> Result<(), String> {
     Ok(())
 }
 
+/// The app the user is dictating into, captured at finish time so the AI
+/// polish pass can match its register (and skip terminals).
+#[derive(Clone, Debug)]
+pub struct FrontmostApp {
+    pub bundle_id: String,
+    pub name: String,
+}
+
+/// Identity of the frontmost application via NSWorkspace. Needs no macOS
+/// permission. Returns None when there is no frontmost app or it exposes no
+/// bundle identifier (e.g. some daemon-owned windows).
+pub fn frontmost_app() -> Option<FrontmostApp> {
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let app = workspace.frontmostApplication()?;
+    let bundle_id = app.bundleIdentifier()?.to_string();
+    let name = app
+        .localizedName()
+        .map(|name| name.to_string())
+        .unwrap_or_default();
+    Some(FrontmostApp { bundle_id, name })
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FnPushToTalkEvent {

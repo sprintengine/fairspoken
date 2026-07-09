@@ -15,6 +15,13 @@ pub struct TranscriptHistoryItem {
     pub backend: String,
     pub location: String,
     pub duration_seconds: f32,
+    /// True when the stored text went through the AI polish pass.
+    #[serde(default)]
+    pub polished: bool,
+    /// The pre-polish transcript, kept only when polish changed the text so
+    /// the original is always recoverable ("Copy original" / pill Undo).
+    #[serde(default)]
+    pub raw_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +30,8 @@ pub struct NewTranscriptHistoryItem {
     pub backend: String,
     pub location: String,
     pub duration_seconds: f32,
+    pub polished: bool,
+    pub raw_text: Option<String>,
 }
 
 pub struct TranscriptHistoryService {
@@ -65,6 +74,8 @@ impl TranscriptHistoryService {
             backend: item.backend,
             location: item.location,
             duration_seconds: item.duration_seconds,
+            polished: item.polished,
+            raw_text: item.raw_text.filter(|raw| !raw.trim().is_empty()),
         };
         self.items.insert(0, stored.clone());
         self.items.truncate(MAX_TRANSCRIPTS);
@@ -198,6 +209,26 @@ mod tests {
             backend: "whisper".to_string(),
             location: "local".to_string(),
             duration_seconds: 1.0,
+            polished: false,
+            raw_text: None,
         }
+    }
+
+    #[test]
+    fn legacy_history_json_loads_without_polish_fields() {
+        let legacy = r#"[{
+            "id": "transcript-1",
+            "createdAt": 1,
+            "text": "Hello world",
+            "backend": "parakeet",
+            "location": "local",
+            "durationSeconds": 2.5
+        }]"#;
+
+        let items: Vec<TranscriptHistoryItem> =
+            serde_json::from_str(legacy).expect("legacy history loads");
+
+        assert!(!items[0].polished);
+        assert!(items[0].raw_text.is_none());
     }
 }

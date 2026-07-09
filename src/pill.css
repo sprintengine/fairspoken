@@ -216,6 +216,43 @@ body[data-pill="transcribing"] .progress { display: block; }
   100% { transform: translateX(350%); }
 }
 
+/* ── AI polish undo — trailing action in the polished state ──── */
+body[data-pill="polished"] .brand,
+body[data-pill="polished"] .wave,
+body[data-pill="polished"] .timer,
+body[data-pill="polished"] .pill-hint {
+  display: none;
+}
+
+.undo-polish-btn {
+  position: absolute;
+  right: calc(var(--margin-x) + 6px);
+  bottom: calc(var(--margin-bottom) + (var(--capsule-h) - 22px) / 2);
+  height: 22px;
+  padding: 0 10px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pill-edge);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+body[data-pill="polished"] .undo-polish-btn { display: flex; }
+/* Keep the Undo button clear of the label. */
+body[data-pill="polished"] .pill { padding-right: 64px; justify-content: flex-start; }
+
+.undo-polish-btn:hover { border-color: var(--text-secondary); }
+
+.undo-polish-btn:focus-visible {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: 1px;
+}
+
 /* ── Settings gear — hover-revealed trailing action ───────────── */
 .settings-btn {
   position: absolute;

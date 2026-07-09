@@ -50,6 +50,7 @@ interface Settings {
   transcriptStackShortcut: string;
   insertAtCursor: boolean;
   fnPushToTalk: boolean;
+  polishEnabled: boolean;
 }
 
 interface ModelStatus {
@@ -102,6 +103,7 @@ const DEFAULTS: Settings = {
   transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
   insertAtCursor: isMacOS(),
   fnPushToTalk: false,
+  polishEnabled: false,
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
@@ -146,6 +148,9 @@ const cloudPanel = required<HTMLElement>("cloudPanel");
 const cloudAuthToken = required<HTMLInputElement>("cloudAuthToken");
 const cloudStatus = required<HTMLElement>("cloudStatus");
 const cloudTest = required<HTMLButtonElement>("cloudTest");
+const polishEnabled = required<HTMLInputElement>("polishEnabled");
+const polishHelp = required<HTMLElement>("polishHelp");
+const polishHelpDefault = polishHelp.textContent ?? "";
 
 const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
   "parakeet-tdt-0.6b-v3": "RAM ~2.5G",
@@ -286,6 +291,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
     cloudAuthToken: (settings.cloudAuthToken ?? "").trim(),
+    polishEnabled: settings.polishEnabled ?? DEFAULTS.polishEnabled,
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -322,8 +328,20 @@ function applyToForm(settings: Settings): void {
   fnPushToTalk.checked = settings.fnPushToTalk;
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
   useGpu.checked = settings.useGpu;
+  polishEnabled.checked = settings.polishEnabled;
   updateTranscriptionLocationUi(settings.transcriptionLocation);
   updateUseGpuUi();
+  updatePolishUi(settings);
+}
+
+// Polish needs the cloud token even in Local mode (transcript text goes to
+// the same Worker). Without one, the toggle is disabled and says why.
+function updatePolishUi(settings: Settings): void {
+  const hasToken = settings.cloudAuthToken.trim() !== "";
+  polishEnabled.disabled = !hasToken;
+  polishHelp.textContent = hasToken
+    ? polishHelpDefault
+    : "Requires a MultiVoice Cloud token (add one under Location → MultiVoice Cloud).";
 }
 
 function readFromForm(): Settings {
@@ -351,6 +369,7 @@ function readFromForm(): Settings {
     useGpu: useGpu.checked,
     insertAtCursor: insertAtCursor.checked,
     fnPushToTalk: fnPushToTalk.checked,
+    polishEnabled: polishEnabled.checked,
   });
 }
 
@@ -797,7 +816,12 @@ cloudTest.addEventListener("click", () => {
 });
 remoteUrl.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-cloudAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+cloudAuthToken.addEventListener("change", () => {
+  void persistSettings()
+    .then(() => updatePolishUi(currentSettings))
+    .catch(reportAsyncError);
+});
+polishEnabled.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {

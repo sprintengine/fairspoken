@@ -11,6 +11,8 @@ interface TranscriptHistoryItem {
   id: string;
   createdAt: number;
   text: string;
+  polished?: boolean;
+  rawText?: string | null;
 }
 
 interface TranscriptHistoryUpdatedEvent {
@@ -116,6 +118,27 @@ function buildTranscriptClip(item: TranscriptHistoryItem): HTMLElement {
   meta.dataset.createdAt = String(item.createdAt);
   meta.textContent = relativeTimeLabel(item.createdAt);
   foot.append(meta);
+
+  if (item.polished) {
+    const badge = document.createElement("span");
+    badge.className = "transcript-clip-badge";
+    badge.textContent = "AI polished";
+    badge.title = "This transcript was cleaned up by AI polish";
+    foot.append(badge);
+  }
+
+  if (item.polished && item.rawText) {
+    const copyOriginal = document.createElement("button");
+    copyOriginal.type = "button";
+    copyOriginal.className = "transcript-clip-expand";
+    copyOriginal.textContent = "Copy original";
+    copyOriginal.title = "Copy the transcript as dictated, before AI polish";
+    copyOriginal.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void invoke("copy_original_transcript", { id: item.id });
+    });
+    foot.append(copyOriginal);
+  }
 
   if (expandable) {
     const expandButton = document.createElement("button");

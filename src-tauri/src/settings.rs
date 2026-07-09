@@ -95,6 +95,12 @@ pub struct Settings {
     /// macOS only: hold the Fn/Globe key to record, release to transcribe.
     #[serde(default)]
     pub fn_push_to_talk: bool,
+    /// Opt-in AI polish: send the raw transcript (text, never audio) to
+    /// MultiVoice Cloud for filler/self-correction cleanup before the user's
+    /// deterministic rules run. Requires a cloud token; failures always fall
+    /// back to the raw transcript.
+    #[serde(default)]
+    pub polish_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -154,6 +160,7 @@ impl Default for Settings {
             transcript_stack_shortcut: default_transcript_stack_shortcut(),
             insert_at_cursor: default_insert_at_cursor(),
             fn_push_to_talk: false,
+            polish_enabled: false,
         }
     }
 }
@@ -465,6 +472,7 @@ mod tests {
             TranscriptionLocation::RemoteHost
         );
         assert_eq!(settings.cloud_auth_token, "");
+        assert!(!settings.polish_enabled);
     }
 
     #[test]
