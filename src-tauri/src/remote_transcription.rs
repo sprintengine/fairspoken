@@ -1,5 +1,5 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::settings::Settings;
+use crate::settings::{cloud_url, Settings, TranscriptionLocation};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
@@ -32,6 +32,101 @@ pub struct RemoteTranscriptionResponse {
     pub server_version: Option<String>,
 }
 
+/// The remote endpoint a session talks to, resolved from the transcription
+/// location: `RemoteHost` uses the user's own URL and token; `Cloud` uses the
+/// MultiVoice Cloud URL (compile-time constant, `MULTIVOICE_CLOUD_URL` env
+/// override for dev builds) and the multiauth token. The wire protocol is
+/// identical, so everything downstream of resolution is shared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteTarget {
+    base_url: Url,
+    auth_token: String,
+    is_cloud: bool,
+}
+
+impl RemoteTarget {
+    fn display_name(&self) -> &'static str {
+        if self.is_cloud {
+            "MultiVoice Cloud"
+        } else {
+            "Remote transcription host"
+        }
+    }
+}
+
+pub fn resolve_remote_target(settings: &Settings) -> Result<RemoteTarget, String> {
+    match settings.transcription_location {
+        TranscriptionLocation::RemoteHost => Ok(RemoteTarget {
+            base_url: validate_remote_base_url(&settings.remote_url)?,
+            auth_token: settings.remote_auth_token.trim().to_string(),
+            is_cloud: false,
+        }),
+        TranscriptionLocation::Cloud => Ok(RemoteTarget {
+            // Still validated so a bad MULTIVOICE_CLOUD_URL override fails
+            // loudly instead of dictating into the void.
+            base_url: validate_remote_base_url(&cloud_url())?,
+            auth_token: settings.cloud_auth_token.trim().to_string(),
+            is_cloud: true,
+        }),
+        TranscriptionLocation::Local => {
+            Err("Local transcription does not use a remote host".to_string())
+        }
+    }
+}
+
+/// Build the error message for a non-2xx response, surfacing the server's
+/// JSON `{"error": …}` body (both the standalone host and the cloud Worker
+/// return it) so the user sees real reasons — the cloud 402 carries the
+/// used/allowance minutes, for example — instead of a bare status code.
+fn remote_response_error(target: &RemoteTarget, response: reqwest::blocking::Response) -> String {
+    let status = response.status();
+    let server_message = response
+        .json::<serde_json::Value>()
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|message| message.as_str())
+                .map(str::to_string)
+        })
+        .filter(|message| !message.trim().is_empty());
+    format_remote_error(target, status.as_u16(), &status.to_string(), server_message)
+}
+
+fn format_remote_error(
+    target: &RemoteTarget,
+    status_code: u16,
+    status_display: &str,
+    server_message: Option<String>,
+) -> String {
+    if target.is_cloud {
+        match (status_code, &server_message) {
+            (401, _) => {
+                return "Cloud sign-in expired or invalid — update your token in Settings"
+                    .to_string()
+            }
+            (402, Some(message)) => {
+                return format!("{message} — switch to Local in Settings to keep dictating")
+            }
+            (402, None) => {
+                return "Cloud transcription allowance used up this month — switch to Local in Settings to keep dictating".to_string()
+            }
+            _ => {}
+        }
+    }
+
+    match server_message {
+        Some(message) => format!(
+            "{} returned an error ({status_display}): {message}",
+            target.display_name()
+        ),
+        None => format!(
+            "{} returned an error: {status_display}",
+            target.display_name()
+        ),
+    }
+}
+
 pub struct RemoteStreamingSession {
     audio_tx: SyncSender<AudioFrame>,
     result_rx: Receiver<Result<RemoteTranscriptionResponse, String>>,
@@ -43,7 +138,7 @@ pub struct RemoteStreamingSession {
 }
 
 pub fn test_remote_transcription_host(settings: &Settings) -> Result<RemoteHealth, String> {
-    let base_url = validate_remote_base_url(&settings.remote_url)?;
+    let target = resolve_remote_target(settings)?;
     let timeout_seconds = u64::from(
         settings
             .remote_timeout_seconds
@@ -53,16 +148,18 @@ pub fn test_remote_transcription_host(settings: &Settings) -> Result<RemoteHealt
         .timeout(Duration::from_secs(timeout_seconds))
         .build()
         .map_err(|err| format!("Failed to create remote transcription client: {err}"))?;
-    let url = base_url
+    let url = target
+        .base_url
         .join("v1/health")
         .map_err(|err| format!("Invalid remote health URL: {err}"))?;
     let response = client
         .get(url)
-        .headers(auth_headers(settings)?)
+        .headers(auth_headers(&target)?)
         .send()
-        .map_err(|err| format!("Remote transcription host is unreachable: {err}"))?
-        .error_for_status()
-        .map_err(|err| format!("Remote transcription host returned an error: {err}"))?;
+        .map_err(|err| format!("{} is unreachable: {err}", target.display_name()))?;
+    if !response.status().is_success() {
+        return Err(remote_response_error(&target, response));
+    }
 
     response
         .json::<RemoteHealth>()
@@ -130,7 +227,7 @@ fn transcribe_remote_stream(
     audio_rx: Receiver<AudioFrame>,
     settings: &Settings,
 ) -> Result<RemoteTranscriptionResponse, String> {
-    let base_url = validate_remote_base_url(&settings.remote_url)?;
+    let target = resolve_remote_target(settings)?;
     let client = Client::builder()
         // No total timeout: the streaming body lasts as long as the recording.
         // The hung-host protection lives in RemoteStreamingSession::finish(),
@@ -139,10 +236,11 @@ fn transcribe_remote_stream(
         .connect_timeout(remote_connect_timeout(settings))
         .build()
         .map_err(|err| format!("Failed to create remote transcription client: {err}"))?;
-    let url = base_url
+    let url = target
+        .base_url
         .join("v1/transcriptions/stream")
         .map_err(|err| format!("Invalid remote streaming transcription URL: {err}"))?;
-    let mut headers = transcription_headers(settings)?;
+    let mut headers = transcription_headers(settings, &target)?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(STREAM_CONTENT_TYPE));
 
     let response = client
@@ -152,9 +250,10 @@ fn transcribe_remote_stream(
             audio_rx,
         )))
         .send()
-        .map_err(|err| format!("Remote streaming transcription request failed: {err}"))?
-        .error_for_status()
-        .map_err(|err| format!("Remote streaming transcription host returned an error: {err}"))?;
+        .map_err(|err| format!("Remote streaming transcription request failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(remote_response_error(&target, response));
+    }
     let result = response
         .json::<RemoteTranscriptionResponse>()
         .map_err(|err| format!("Remote streaming transcription response was invalid: {err}"))?;
@@ -175,7 +274,7 @@ pub fn transcribe_remote(
     recording: &Recording,
     settings: &Settings,
 ) -> Result<RemoteTranscriptionResponse, String> {
-    let base_url = validate_remote_base_url(&settings.remote_url)?;
+    let target = resolve_remote_target(settings)?;
     let wav = encode_wav(recording)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(u64::from(
@@ -183,10 +282,11 @@ pub fn transcribe_remote(
         )))
         .build()
         .map_err(|err| format!("Failed to create remote transcription client: {err}"))?;
-    let url = base_url
+    let url = target
+        .base_url
         .join("v1/transcriptions")
         .map_err(|err| format!("Invalid remote transcription URL: {err}"))?;
-    let mut headers = transcription_headers(settings)?;
+    let mut headers = transcription_headers(settings, &target)?;
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
 
     let response = client
@@ -194,9 +294,10 @@ pub fn transcribe_remote(
         .headers(headers)
         .body(wav)
         .send()
-        .map_err(|err| format!("Remote transcription request failed: {err}"))?
-        .error_for_status()
-        .map_err(|err| format!("Remote transcription host returned an error: {err}"))?;
+        .map_err(|err| format!("Remote transcription request failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(remote_response_error(&target, response));
+    }
     let result = response
         .json::<RemoteTranscriptionResponse>()
         .map_err(|err| format!("Remote transcription response was invalid: {err}"))?;
@@ -362,9 +463,9 @@ pub fn selected_model_id(settings: &Settings) -> &'static str {
     settings.model.model_id()
 }
 
-fn auth_headers(settings: &Settings) -> Result<HeaderMap, String> {
+fn auth_headers(target: &RemoteTarget) -> Result<HeaderMap, String> {
     let mut headers = HeaderMap::new();
-    let token = settings.remote_auth_token.trim();
+    let token = target.auth_token.trim();
     if !token.is_empty() {
         headers.insert(
             AUTHORIZATION,
@@ -375,8 +476,10 @@ fn auth_headers(settings: &Settings) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
-fn transcription_headers(settings: &Settings) -> Result<HeaderMap, String> {
-    let mut headers = auth_headers(settings)?;
+// Every x-multivoice-* header is sent to both targets: the cloud Worker
+// ignores the self-host-only ones (backend/model/chunk-seconds) by contract.
+fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<HeaderMap, String> {
+    let mut headers = auth_headers(target)?;
     headers.insert(
         "x-multivoice-client",
         HeaderValue::from_static("multivoice-tauri"),
@@ -462,11 +565,11 @@ fn host_allows_plain_http(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_wav, encode_wav, read_stream_frame, remote_connect_timeout,
-        validate_remote_base_url, write_stream_frame,
+        decode_wav, encode_wav, format_remote_error, read_stream_frame, remote_connect_timeout,
+        resolve_remote_target, validate_remote_base_url, write_stream_frame,
     };
     use crate::audio::{AudioFrame, Recording};
-    use crate::settings::Settings;
+    use crate::settings::{Settings, TranscriptionLocation};
     use std::time::Duration;
 
     #[test]
@@ -530,6 +633,89 @@ mod tests {
         assert!(validate_remote_base_url("http://10.0.0.2:48173").is_ok());
         assert!(validate_remote_base_url("http://172.16.0.2:48173").is_ok());
         assert!(validate_remote_base_url("http://localhost:48173").is_ok());
+    }
+
+    #[test]
+    fn resolve_remote_target_maps_each_location() {
+        let remote_host = Settings {
+            transcription_location: TranscriptionLocation::RemoteHost,
+            remote_url: "https://host.example.com".to_string(),
+            remote_auth_token: "  host-token  ".to_string(),
+            ..Settings::default()
+        };
+        let target = resolve_remote_target(&remote_host).expect("remote host target");
+        assert!(!target.is_cloud);
+        assert_eq!(target.auth_token, "host-token");
+        assert_eq!(target.base_url.host_str(), Some("host.example.com"));
+        assert_eq!(target.display_name(), "Remote transcription host");
+
+        let cloud = Settings {
+            transcription_location: TranscriptionLocation::Cloud,
+            cloud_auth_token: "cloud-jwt".to_string(),
+            // Cloud ignores the user's remote-host fields entirely.
+            remote_url: "https://host.example.com".to_string(),
+            remote_auth_token: "host-token".to_string(),
+            ..Settings::default()
+        };
+        let target = resolve_remote_target(&cloud).expect("cloud target");
+        assert!(target.is_cloud);
+        assert_eq!(target.auth_token, "cloud-jwt");
+        assert_ne!(target.base_url.host_str(), Some("host.example.com"));
+        assert_eq!(target.display_name(), "MultiVoice Cloud");
+
+        let local = Settings::default();
+        assert!(resolve_remote_target(&local).is_err());
+    }
+
+    #[test]
+    fn cloud_errors_get_actionable_copy() {
+        let cloud = Settings {
+            transcription_location: TranscriptionLocation::Cloud,
+            ..Settings::default()
+        };
+        let target = resolve_remote_target(&cloud).expect("cloud target");
+
+        let unauthorized = format_remote_error(&target, 401, "401 Unauthorized", None);
+        assert!(unauthorized.contains("update your token in Settings"));
+
+        let exhausted = format_remote_error(
+            &target,
+            402,
+            "402 Payment Required",
+            Some("Cloud transcription allowance used: 300 of 300 minutes this month".to_string()),
+        );
+        assert!(exhausted.contains("300 of 300 minutes"));
+        assert!(exhausted.contains("switch to Local"));
+
+        let backend_down = format_remote_error(&target, 502, "502 Bad Gateway", None);
+        assert!(backend_down.contains("MultiVoice Cloud"));
+    }
+
+    #[test]
+    fn remote_host_errors_surface_the_server_message() {
+        let settings = Settings {
+            transcription_location: TranscriptionLocation::RemoteHost,
+            remote_url: "https://host.example.com".to_string(),
+            ..Settings::default()
+        };
+        let target = resolve_remote_target(&settings).expect("remote host target");
+
+        let with_body = format_remote_error(
+            &target,
+            429,
+            "429 Too Many Requests",
+            Some("queue full".to_string()),
+        );
+        assert_eq!(
+            with_body,
+            "Remote transcription host returned an error (429 Too Many Requests): queue full"
+        );
+
+        let without_body = format_remote_error(&target, 500, "500 Internal Server Error", None);
+        assert_eq!(
+            without_body,
+            "Remote transcription host returned an error: 500 Internal Server Error"
+        );
     }
 
     #[test]

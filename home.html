@@ -244,7 +244,8 @@
                   <div class="row-control">
                     <div class="seg" id="locationSeg" role="group" aria-labelledby="locationLabel">
                       <button type="button" data-value="local" aria-pressed="true">Local</button>
-                      <button type="button" data-value="remote-host" aria-pressed="false">Remote host</button>
+                      <button type="button" data-value="remote-host" aria-pressed="false">My host</button>
+                      <button type="button" data-value="cloud" aria-pressed="false">MultiVoice Cloud</button>
                     </div>
                   </div>
                 </div>
@@ -301,6 +302,31 @@
                     </div>
                     <div class="row-control">
                       <button class="btn" id="remoteTest" type="button">Test connection</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="cloudPanel" aria-live="polite" hidden>
+                  <div class="row">
+                    <div class="row-text">
+                      <label class="row-label" for="cloudAuthToken">Token</label>
+                      <div class="row-help">Paste your MultiVoice Cloud token. Sign-in comes later; tokens expire, so refresh it when dictation reports it invalid.</div>
+                    </div>
+                    <div class="row-control">
+                      <input id="cloudAuthToken" class="setting-input w-lg" type="password" autocomplete="off" />
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="row-help">Audio is sent to MultiVoice Cloud (Cloudflare) for transcription. Nothing is stored.</div>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="status-text" id="cloudStatus">Allowance: shown after first dictation</div>
+                    </div>
+                    <div class="row-control">
+                      <button class="btn" id="cloudTest" type="button">Test connection</button>
                     </div>
                   </div>
                 </div>

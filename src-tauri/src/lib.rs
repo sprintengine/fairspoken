@@ -693,11 +693,15 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
                 Some(start.cancel_handle);
             start.audio_tx
         }
-        TranscriptionLocation::RemoteHost => {
+        TranscriptionLocation::RemoteHost | TranscriptionLocation::Cloud => {
             emit_backend_event(
                 &app,
                 "info",
-                "Starting remote streaming transcription session",
+                if settings.transcription_location == TranscriptionLocation::Cloud {
+                    "Starting MultiVoice Cloud streaming transcription session"
+                } else {
+                    "Starting remote streaming transcription session"
+                },
             );
             let (session, stream_sink) = start_remote_streaming_session(&settings)?;
             let mut remote = services
@@ -895,7 +899,8 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             settings.transcription_location, settings.model
         ),
     );
-    let raw_transcript = finish_transcription_raw(app, services, &recording, &settings)?;
+    let raw_transcription = finish_transcription_raw(app, services, &recording, &settings)?;
+    let raw_transcript = raw_transcription.text;
 
     let processed = apply_transcript_post_processing(&raw_transcript, &settings);
     if processed.corrections_applied > 0 {
@@ -921,7 +926,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .map_err(|_| "Transcript history service lock failed".to_string())?
         .add(NewTranscriptHistoryItem {
             text: transcript.clone(),
-            backend: remote_transcription::BACKEND_ID.to_string(),
+            backend: raw_transcription.backend,
             location: location_id(settings.transcription_location).to_string(),
             duration_seconds: stats.duration_seconds,
         })?;
@@ -1108,6 +1113,14 @@ fn stop_and_validate_recording(
     Ok(recording)
 }
 
+/// A finished raw transcription plus the engine that actually produced it —
+/// the backend id is what history stores, so it must be truthful per
+/// location (local Parakeet vs whatever the remote/cloud host reports).
+struct RawTranscription {
+    text: String,
+    backend: String,
+}
+
 /// Finish the active transcription session and return the raw transcript (no
 /// post-processing). Shared by the dictation commit path and the speed test.
 fn finish_transcription_raw(
@@ -1115,8 +1128,8 @@ fn finish_transcription_raw(
     services: &AppServices,
     recording: &Recording,
     settings: &Settings,
-) -> Result<String, String> {
-    let raw_transcript = match settings.transcription_location {
+) -> Result<RawTranscription, String> {
+    let raw_transcription = match settings.transcription_location {
         TranscriptionLocation::Local => {
             let result = services
                 .transcription
@@ -1125,7 +1138,10 @@ fn finish_transcription_raw(
                 .finish_session(recording, settings, &services.models);
             clear_local_transcription_cancel(services)?;
             match result {
-                Ok(transcript) => transcript,
+                Ok(transcript) => RawTranscription {
+                    text: transcript,
+                    backend: remote_transcription::BACKEND_ID.to_string(),
+                },
                 Err(_)
                     if services
                         .transcription_cancel_requested
@@ -1137,15 +1153,18 @@ fn finish_transcription_raw(
                 Err(err) => return Err(err),
             }
         }
-        TranscriptionLocation::RemoteHost => {
-            services
+        TranscriptionLocation::RemoteHost | TranscriptionLocation::Cloud => {
+            let response = services
                 .remote_transcription
                 .lock()
                 .map_err(|_| "Remote transcription service lock failed".to_string())?
                 .take()
                 .ok_or_else(|| "No remote transcription session is active".to_string())?
-                .finish()?
-                .text
+                .finish()?;
+            RawTranscription {
+                text: response.text,
+                backend: response.backend,
+            }
         }
     };
 
@@ -1157,7 +1176,7 @@ fn finish_transcription_raw(
         return Err("Transcription was cancelled".to_string());
     }
 
-    Ok(raw_transcript)
+    Ok(raw_transcription)
 }
 
 fn stop_side_effect_free_test_capture(
@@ -1178,7 +1197,7 @@ fn stop_side_effect_free_test_capture(
     let stats = recording.stats();
 
     let started = std::time::Instant::now();
-    let transcript = finish_transcription_raw(&app, &services, &recording, &settings)?;
+    let transcript = finish_transcription_raw(&app, &services, &recording, &settings)?.text;
     let transcribe_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
 
     Ok(build_capture_result(
@@ -1405,6 +1424,7 @@ fn location_id(location: TranscriptionLocation) -> &'static str {
     match location {
         TranscriptionLocation::Local => "local",
         TranscriptionLocation::RemoteHost => "remote-host",
+        TranscriptionLocation::Cloud => "cloud",
     }
 }
 
@@ -1414,7 +1434,9 @@ fn cancel_transcription_for_location(
 ) -> Result<(), String> {
     match location {
         TranscriptionLocation::Local => cancel_local_transcription_if_needed(services),
-        TranscriptionLocation::RemoteHost => cancel_remote_transcription_if_needed(services),
+        TranscriptionLocation::RemoteHost | TranscriptionLocation::Cloud => {
+            cancel_remote_transcription_if_needed(services)
+        }
     }
 }
 

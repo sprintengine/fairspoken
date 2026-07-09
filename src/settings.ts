@@ -13,7 +13,7 @@ type SttModel =
   | "large-v2"
   | "large-v3"
   | "large-v3-turbo";
-type TranscriptionLocation = "local" | "remote-host";
+type TranscriptionLocation = "local" | "remote-host" | "cloud";
 type RecordingShortcutMode = "toggle" | "push-to-talk";
 
 interface TranscriptCorrection {
@@ -30,6 +30,7 @@ interface Settings {
   remoteUrl: string;
   remoteAuthToken: string;
   remoteTimeoutSeconds: number;
+  cloudAuthToken: string;
   language: string;
   alwaysOnTop: boolean;
   interactionSounds: boolean;
@@ -81,6 +82,7 @@ const DEFAULTS: Settings = {
   remoteUrl: "",
   remoteAuthToken: "",
   remoteTimeoutSeconds: 60,
+  cloudAuthToken: "",
   language: "en",
   alwaysOnTop: true,
   interactionSounds: true,
@@ -140,6 +142,10 @@ const remoteAuthToken = required<HTMLInputElement>("remoteAuthToken");
 const remoteTimeoutSeconds = required<HTMLInputElement>("remoteTimeoutSeconds");
 const remoteStatus = required<HTMLElement>("remoteStatus");
 const remoteTest = required<HTMLButtonElement>("remoteTest");
+const cloudPanel = required<HTMLElement>("cloudPanel");
+const cloudAuthToken = required<HTMLInputElement>("cloudAuthToken");
+const cloudStatus = required<HTMLElement>("cloudStatus");
+const cloudTest = required<HTMLButtonElement>("cloudTest");
 
 const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
   "parakeet-tdt-0.6b-v3": "RAM ~2.5G",
@@ -279,6 +285,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     whisperChunkSeconds: Math.max(5, Math.min(60, Math.round(chunkSeconds || DEFAULTS.whisperChunkSeconds))),
     remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
+    cloudAuthToken: (settings.cloudAuthToken ?? "").trim(),
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -297,6 +304,7 @@ function applyToForm(settings: Settings): void {
   remoteUrl.value = settings.remoteUrl;
   remoteAuthToken.value = settings.remoteAuthToken;
   remoteTimeoutSeconds.value = String(settings.remoteTimeoutSeconds);
+  cloudAuthToken.value = settings.cloudAuthToken;
   langSelect.value = settings.language;
   audioDeviceSelect.value = settings.audioDevice ?? "";
   noiseSuppression.checked = settings.noiseSuppression ?? true;
@@ -325,6 +333,7 @@ function readFromForm(): Settings {
     remoteUrl: remoteUrl.value,
     remoteAuthToken: remoteAuthToken.value,
     remoteTimeoutSeconds: Number(remoteTimeoutSeconds.value),
+    cloudAuthToken: cloudAuthToken.value,
     language: langSelect.value,
     audioDevice: audioDeviceSelect.value,
     noiseSuppression: noiseSuppression.checked,
@@ -520,7 +529,7 @@ function formatModelStatus(status: ModelStatus): string {
 }
 
 async function requestModelStatus(): Promise<void> {
-  if (locationSeg.get() === "remote-host") {
+  if (locationSeg.get() !== "local") {
     updateModelSize(modelSelect.value as SttModel);
     return;
   }
@@ -539,7 +548,7 @@ async function requestModelStatus(): Promise<void> {
 }
 
 async function beginModelPreload(): Promise<void> {
-  if (locationSeg.get() === "remote-host") return;
+  if (locationSeg.get() !== "local") return;
   const model = modelSelect.value as SttModel;
   updateModelSize(model);
   setModelDownloadStatus("Preparing model...", 1);
@@ -608,32 +617,40 @@ function updateUseGpuUi(): void {
 }
 
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
-  const remote = location === "remote-host";
+  const local = location === "local";
   // The model choice and its download state are local-transcription concerns;
-  // a remote host serves the model its operator configured.
-  modelField.hidden = remote;
-  modelDownload.hidden = remote;
-  remoteHostPanel.hidden = !remote;
-  if (remote) {
+  // a remote host (or MultiVoice Cloud) serves whatever its operator runs.
+  modelField.hidden = !local;
+  modelDownload.hidden = !local;
+  remoteHostPanel.hidden = location !== "remote-host";
+  cloudPanel.hidden = location !== "cloud";
+  if (location === "remote-host") {
     remoteStatus.textContent = currentSettings.remoteUrl ? "Remote host not checked" : "Remote host not configured";
+  }
+  if (location === "cloud") {
+    cloudStatus.textContent = currentSettings.cloudAuthToken
+      ? "Allowance: shown after first dictation"
+      : "Paste a token to enable MultiVoice Cloud";
   }
 }
 
-async function testRemoteHost(): Promise<void> {
+// Both remote targets speak the same health protocol, so one test flow serves
+// both panels; the backend resolves URL + token from the saved location.
+async function testRemoteHost(statusEl: HTMLElement, buttonEl: HTMLButtonElement, label: string): Promise<void> {
   const saved = await persistSettings();
   if (!saved) return;
-  remoteTest.disabled = true;
-  remoteStatus.textContent = "Checking remote host...";
+  buttonEl.disabled = true;
+  statusEl.textContent = `Checking ${label}...`;
   try {
     const health = await invoke<RemoteHealth>("test_remote_transcription_host");
-    remoteStatus.textContent = health.ok ? `Reachable (${health.mode})` : "Unavailable";
-    addEvent(health.ok ? "info" : "warning", `Remote host ${health.ok ? "reachable" : "unavailable"}: ${health.backend}`);
+    statusEl.textContent = health.ok ? `Reachable (${health.mode})` : "Unavailable";
+    addEvent(health.ok ? "info" : "warning", `${label} ${health.ok ? "reachable" : "unavailable"}: ${health.backend}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    remoteStatus.textContent = "Remote host unavailable";
+    statusEl.textContent = `${label} unavailable`;
     addEvent("error", message);
   } finally {
-    remoteTest.disabled = false;
+    buttonEl.disabled = false;
   }
 }
 
@@ -753,7 +770,8 @@ locationSeg.onChange((value) => {
   void persistSettings()
     .then((saved) => {
       if (!saved) return;
-      addEvent("info", `Transcription location changed to ${value === "local" ? "local" : "remote host"}`);
+      const label = value === "local" ? "local" : value === "cloud" ? "MultiVoice Cloud" : "remote host";
+      addEvent("info", `Transcription location changed to ${label}`);
       return requestModelStatus();
     })
     .catch(reportAsyncError);
@@ -772,10 +790,14 @@ modelPrepare.addEventListener("click", () => {
   void beginModelPreload();
 });
 remoteTest.addEventListener("click", () => {
-  void testRemoteHost();
+  void testRemoteHost(remoteStatus, remoteTest, "Remote host");
+});
+cloudTest.addEventListener("click", () => {
+  void testRemoteHost(cloudStatus, cloudTest, "MultiVoice Cloud");
 });
 remoteUrl.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+cloudAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {

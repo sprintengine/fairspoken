@@ -274,6 +274,8 @@ function shortErrorMessage(message: string): string {
   if (lower.includes("microphone permission")) return "Mic access denied";
   if (lower.includes("no default input device") || lower.includes("input device")) return "No microphone found";
   if (lower.includes("model files are missing")) return "Model not downloaded";
+  if (lower.includes("allowance used")) return "Cloud allowance used — see Settings";
+  if (lower.includes("cloud sign-in expired")) return "Cloud sign-in expired — see Settings";
   if (!normalized) return "Error";
   return normalized.length <= 40 ? normalized : `${normalized.slice(0, 39)}…`;
 }

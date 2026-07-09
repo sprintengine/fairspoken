@@ -10,6 +10,24 @@ pub enum TranscriptionLocation {
     #[default]
     Local,
     RemoteHost,
+    /// The hosted MultiVoice Cloud service (Cloudflare Worker). Unlike
+    /// `RemoteHost`, the URL is ours (not user-editable) and the token is a
+    /// multiauth-issued JWT.
+    Cloud,
+}
+
+/// Production MultiVoice Cloud endpoint. Not user-editable: users configure
+/// only their token. Dev builds can point elsewhere via `MULTIVOICE_CLOUD_URL`.
+/// Update this constant when the Worker gets its real production hostname
+/// (see cloud/worker/README.md).
+const DEFAULT_CLOUD_URL: &str = "https://multivoice-cloud.multicodelabs.workers.dev";
+
+pub fn cloud_url() -> String {
+    env::var("MULTIVOICE_CLOUD_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| DEFAULT_CLOUD_URL.to_string())
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +51,11 @@ pub struct Settings {
     pub remote_auth_token: String,
     #[serde(default = "default_remote_timeout_seconds")]
     pub remote_timeout_seconds: u16,
+    /// multiauth-issued JWT for MultiVoice Cloud. Phase 1 stores it in
+    /// settings JSON exactly like `remote_auth_token` (same acknowledged
+    /// keychain debt; phase-1 tokens are short-lived which bounds exposure).
+    #[serde(default)]
+    pub cloud_auth_token: String,
     pub language: String,
     pub audio_device: String,
     pub noise_suppression: bool,
@@ -110,6 +133,7 @@ impl Default for Settings {
             remote_url: String::new(),
             remote_auth_token: String::new(),
             remote_timeout_seconds: default_remote_timeout_seconds(),
+            cloud_auth_token: String::new(),
             language: "en".to_string(),
             audio_device: String::new(),
             noise_suppression: true,
@@ -209,6 +233,7 @@ fn normalize(settings: Settings) -> Settings {
         whisper_chunk_seconds: settings.whisper_chunk_seconds.clamp(5, 60),
         remote_url: normalize_remote_url(&settings.remote_url),
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
+        cloud_auth_token: settings.cloud_auth_token.trim().to_string(),
         vocabulary_hints: normalize_vocabulary_hints(settings.vocabulary_hints),
         transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
         snippets: normalize_snippets(settings.snippets),
@@ -396,6 +421,64 @@ mod tests {
 
         assert!(settings.requires_transcription_unload(&cpu_settings));
         assert!(!settings.requires_transcription_unload(&settings.clone()));
+    }
+
+    #[test]
+    fn transcription_location_serde_uses_kebab_case_values() {
+        assert_eq!(
+            serde_json::to_string(&TranscriptionLocation::Local).unwrap(),
+            "\"local\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TranscriptionLocation::RemoteHost).unwrap(),
+            "\"remote-host\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TranscriptionLocation::Cloud).unwrap(),
+            "\"cloud\""
+        );
+        assert_eq!(
+            serde_json::from_str::<TranscriptionLocation>("\"cloud\"").unwrap(),
+            TranscriptionLocation::Cloud
+        );
+    }
+
+    #[test]
+    fn settings_without_cloud_fields_load_with_defaults() {
+        // A settings JSON written before cloud mode existed.
+        let legacy = serde_json::json!({
+            "transcriptionLocation": "remote-host",
+            "language": "en",
+            "audioDevice": "",
+            "noiseSuppression": true,
+            "echoCancellation": true,
+            "inputGain": 2,
+            "postProcess": true,
+            "alwaysOnTop": true,
+            "maxRecordingSeconds": 120
+        });
+
+        let settings: Settings = serde_json::from_value(legacy).expect("legacy settings load");
+
+        assert_eq!(
+            settings.transcription_location,
+            TranscriptionLocation::RemoteHost
+        );
+        assert_eq!(settings.cloud_auth_token, "");
+    }
+
+    #[test]
+    fn default_location_stays_local_and_cloud_token_normalizes() {
+        assert_eq!(
+            Settings::default().transcription_location,
+            TranscriptionLocation::Local
+        );
+
+        let normalized = normalize(Settings {
+            cloud_auth_token: "  token-with-spaces  ".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(normalized.cloud_auth_token, "token-with-spaces");
     }
 
     #[test]
