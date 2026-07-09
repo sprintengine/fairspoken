@@ -16,6 +16,24 @@ const WEEK_DAYS: u64 = 7;
 // comparison against it would be invented math.
 const CLOUD_TRANSCRIPTION_USD_PER_MINUTE: f64 = 0.006;
 
+// ── Zero-edit metric (backlog/zero-edit-metric.md) ──────────────────────
+// A dictation counts as "edited" when a correction signal lands within
+// EDIT_WINDOW of its completion: pill Undo / history Copy-original, history
+// delete, a new correction/dictionary entry, or a quick re-dictation. The
+// definition must stay exact so numbers remain comparable over time.
+const EDIT_WINDOW_SECS: u64 = 5 * 60;
+/// A new recording starting this soon after a short dictation is treated as
+/// the user scrapping it and trying again.
+const REDICTATION_WINDOW_SECS: u64 = 20;
+const REDICTATION_MAX_CHARS: u32 = 100;
+/// Below this many completed dictations in the window the rate is noise —
+/// report `None` and the UI hides the line.
+const MIN_DICTATIONS_FOR_RATE: u64 = 20;
+/// Ring cap for per-dictation records (day buckets carry the aggregate, the
+/// ring only needs to cover the edit window generously).
+const RECENT_DICTATIONS_CAP: usize = 500;
+const RECENT_DICTATIONS_MAX_AGE_SECS: u64 = 30 * SECONDS_PER_DAY;
+
 /// One UTC day's dictation totals. Buckets are keyed by day index
 /// (days since the Unix epoch) so streaks and the weekly chart need no
 /// calendar library.
@@ -25,6 +43,30 @@ struct DayBucket {
     words: u64,
     recording_seconds: f64,
     dictations: u64,
+    /// Zero-edit metric counters. `completed` can differ from `dictations`
+    /// (which predates the metric and skips zero-word dictations recorded
+    /// through a different call).
+    #[serde(default)]
+    completed: u64,
+    #[serde(default)]
+    edited: u64,
+    #[serde(default)]
+    polished_completed: u64,
+    #[serde(default)]
+    polished_edited: u64,
+}
+
+/// One completed dictation in the recent ring — the state needed to attribute
+/// a later edit signal to the right dictation and day. No transcript content,
+/// only its length.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationRecord {
+    history_id: String,
+    completed_at: u64,
+    polished: bool,
+    edited: bool,
+    text_chars: u32,
 }
 
 /// The persisted aggregate. This is deliberately separate from the 50-item
@@ -43,6 +85,8 @@ struct UsageStatsData {
     /// the headline stat reflects this user rather than a category average.
     #[serde(default)]
     measured_typing_wpm: Option<f64>,
+    #[serde(default)]
+    recent_dictations: Vec<DictationRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -57,6 +101,14 @@ pub struct WeeklyBucket {
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatsSummary {
     pub has_data: bool,
+    /// Fraction of completed dictations with no correction signal within the
+    /// edit window, trailing 7/30 days. `None` under 20 completed dictations.
+    pub zero_edit_rate_7d: Option<f64>,
+    pub zero_edit_rate_30d: Option<f64>,
+    /// The polished/raw split of the 30-day rate; each `None` until its arm
+    /// has 20 completed dictations.
+    pub polished_zero_edit_rate_30d: Option<f64>,
+    pub raw_zero_edit_rate_30d: Option<f64>,
     pub total_words: u64,
     pub total_dictations: u64,
     pub total_recording_seconds: f64,
@@ -128,6 +180,115 @@ impl UsageStatsService {
         summarize(&self.data, now_epoch_secs)
     }
 
+    /// Zero-edit metric: register a completed dictation. Best-effort like the
+    /// rest of the stats — callers ignore the Result.
+    pub fn record_dictation_completed(
+        &mut self,
+        history_id: &str,
+        polished: bool,
+        text_chars: u32,
+        at_epoch_secs: u64,
+    ) -> Result<(), String> {
+        self.data.recent_dictations.push(DictationRecord {
+            history_id: history_id.to_string(),
+            completed_at: at_epoch_secs,
+            polished,
+            edited: false,
+            text_chars,
+        });
+        prune_recent(&mut self.data.recent_dictations, at_epoch_secs);
+
+        let bucket = self
+            .data
+            .days
+            .entry(at_epoch_secs / SECONDS_PER_DAY)
+            .or_default();
+        bucket.completed += 1;
+        if polished {
+            bucket.polished_completed += 1;
+        }
+        self.save()
+    }
+
+    /// Zero-edit metric: an explicit edit signal (pill Undo / Copy original /
+    /// history delete) for a specific dictation. Counts only within the edit
+    /// window; later signals are ignored by definition.
+    pub fn mark_edited(&mut self, history_id: &str, at_epoch_secs: u64) -> Result<(), String> {
+        let Some(record) = self
+            .data
+            .recent_dictations
+            .iter_mut()
+            .find(|record| record.history_id == history_id)
+        else {
+            return Ok(());
+        };
+        if record.edited || at_epoch_secs.saturating_sub(record.completed_at) > EDIT_WINDOW_SECS {
+            return Ok(());
+        }
+        record.edited = true;
+        let (completed_at, polished) = (record.completed_at, record.polished);
+        self.bump_edited(completed_at, polished);
+        self.save()
+    }
+
+    /// Zero-edit metric: the user just taught the app a fix (new correction
+    /// or dictionary entry) — attribute it to the most recent dictation when
+    /// it falls inside the edit window.
+    pub fn mark_recent_edited(&mut self, at_epoch_secs: u64) -> Result<(), String> {
+        let Some(record) = self
+            .data
+            .recent_dictations
+            .iter_mut()
+            .max_by_key(|record| record.completed_at)
+        else {
+            return Ok(());
+        };
+        if record.edited || at_epoch_secs.saturating_sub(record.completed_at) > EDIT_WINDOW_SECS {
+            return Ok(());
+        }
+        record.edited = true;
+        let (completed_at, polished) = (record.completed_at, record.polished);
+        self.bump_edited(completed_at, polished);
+        self.save()
+    }
+
+    /// Zero-edit metric: re-dictation proxy. A recording starting right after
+    /// a short dictation reads as the user scrapping it and trying again.
+    pub fn note_recording_started(&mut self, at_epoch_secs: u64) -> Result<(), String> {
+        let Some(record) = self
+            .data
+            .recent_dictations
+            .iter_mut()
+            .max_by_key(|record| record.completed_at)
+        else {
+            return Ok(());
+        };
+        if record.edited
+            || record.text_chars >= REDICTATION_MAX_CHARS
+            || at_epoch_secs.saturating_sub(record.completed_at) > REDICTATION_WINDOW_SECS
+        {
+            return Ok(());
+        }
+        record.edited = true;
+        let (completed_at, polished) = (record.completed_at, record.polished);
+        self.bump_edited(completed_at, polished);
+        self.save()
+    }
+
+    /// Increment the edited counters on the day the dictation completed (not
+    /// the day of the signal), so window sums stay consistent.
+    fn bump_edited(&mut self, completed_at: u64, polished: bool) {
+        let bucket = self
+            .data
+            .days
+            .entry(completed_at / SECONDS_PER_DAY)
+            .or_default();
+        bucket.edited += 1;
+        if polished {
+            bucket.polished_edited += 1;
+        }
+    }
+
     /// Persist the user's measured typing speed (from the speed test). Clamped
     /// to a sane range so a bad measurement cannot distort the time-saved stat.
     pub fn set_measured_typing_wpm(&mut self, wpm: f64) -> Result<(), String> {
@@ -147,6 +308,37 @@ impl UsageStatsService {
             .map_err(|err| format!("Failed to serialize usage stats: {err}"))?;
         fs::write(&self.path, payload).map_err(|err| format!("Failed to write usage stats: {err}"))
     }
+}
+
+fn prune_recent(records: &mut Vec<DictationRecord>, now_epoch_secs: u64) {
+    records.retain(|record| {
+        now_epoch_secs.saturating_sub(record.completed_at) <= RECENT_DICTATIONS_MAX_AGE_SECS
+    });
+    if records.len() > RECENT_DICTATIONS_CAP {
+        let excess = records.len() - RECENT_DICTATIONS_CAP;
+        records.drain(0..excess);
+    }
+}
+
+/// `1 - edited/completed` over the trailing `window_days`, or `None` below
+/// the minimum sample size.
+fn zero_edit_rate(
+    data: &UsageStatsData,
+    today: u64,
+    window_days: u64,
+    counts: impl Fn(&DayBucket) -> (u64, u64),
+) -> Option<f64> {
+    let (completed, edited) = (0..window_days)
+        .map(|offset| today.saturating_sub(offset))
+        .filter_map(|day| data.days.get(&day))
+        .fold((0_u64, 0_u64), |(completed, edited), bucket| {
+            let (c, e) = counts(bucket);
+            (completed + c, edited + e)
+        });
+    if completed < MIN_DICTATIONS_FOR_RATE {
+        return None;
+    }
+    Some(1.0 - edited.min(completed) as f64 / completed as f64)
 }
 
 fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
@@ -190,6 +382,17 @@ fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
 
     UsageStatsSummary {
         has_data: data.total_dictations > 0,
+        zero_edit_rate_7d: zero_edit_rate(data, today, 7, |b| (b.completed, b.edited)),
+        zero_edit_rate_30d: zero_edit_rate(data, today, 30, |b| (b.completed, b.edited)),
+        polished_zero_edit_rate_30d: zero_edit_rate(data, today, 30, |b| {
+            (b.polished_completed, b.polished_edited)
+        }),
+        raw_zero_edit_rate_30d: zero_edit_rate(data, today, 30, |b| {
+            (
+                b.completed - b.polished_completed.min(b.completed),
+                b.edited - b.polished_edited.min(b.edited),
+            )
+        }),
         total_words: data.total_words,
         total_dictations: data.total_dictations,
         total_recording_seconds: data.total_recording_seconds,
@@ -288,6 +491,7 @@ mod tests {
                     words,
                     recording_seconds: 0.0,
                     dictations: 1,
+                    ..Default::default()
                 },
             );
         }
@@ -451,6 +655,7 @@ mod tests {
                 words: 15,
                 recording_seconds: 30.0,
                 dictations: 2,
+                ..Default::default()
             },
         );
         data.days.insert(
@@ -459,6 +664,7 @@ mod tests {
                 words: 20,
                 recording_seconds: 15.0,
                 dictations: 1,
+                ..Default::default()
             },
         );
 
@@ -470,6 +676,157 @@ mod tests {
         assert_eq!(parsed.days.len(), 2);
         assert_eq!(parsed.days.get(&100).unwrap().words, 15);
         assert_eq!(parsed.days.get(&101).unwrap().dictations, 1);
+    }
+
+    fn test_service(name: &str) -> UsageStatsService {
+        UsageStatsService {
+            data: UsageStatsData::default(),
+            path: std::env::temp_dir().join(format!("multivoice-usage-stats-{name}.json")),
+        }
+    }
+
+    #[test]
+    fn zero_edit_rate_needs_twenty_completed_dictations() {
+        let mut service = test_service("zero-edit-min");
+        let now = 200 * SECONDS_PER_DAY;
+        for i in 0..19 {
+            let _ = service.record_dictation_completed(&format!("t-{i}"), false, 50, now);
+        }
+        assert_eq!(service.summary(now).zero_edit_rate_30d, None);
+
+        let _ = service.record_dictation_completed("t-19", false, 50, now);
+        assert_eq!(service.summary(now).zero_edit_rate_30d, Some(1.0));
+        let _ = std::fs::remove_file(&service.path);
+    }
+
+    #[test]
+    fn edit_window_boundary_is_five_minutes() {
+        let mut service = test_service("zero-edit-window");
+        let now = 200 * SECONDS_PER_DAY;
+        for i in 0..20 {
+            let _ = service.record_dictation_completed(&format!("t-{i}"), false, 50, now);
+        }
+
+        // 4:59 after completion → counts as edited.
+        let _ = service.mark_edited("t-0", now + EDIT_WINDOW_SECS - 1);
+        // 5:01 after completion → outside the window, ignored.
+        let _ = service.mark_edited("t-1", now + EDIT_WINDOW_SECS + 1);
+        // Double-marking the same dictation counts once.
+        let _ = service.mark_edited("t-0", now + 10);
+
+        let summary = service.summary(now + EDIT_WINDOW_SECS + 2);
+        assert_eq!(summary.zero_edit_rate_30d, Some(1.0 - 1.0 / 20.0));
+        let _ = std::fs::remove_file(&service.path);
+    }
+
+    #[test]
+    fn redictation_proxy_marks_only_quick_short_retries() {
+        let mut service = test_service("zero-edit-redictate");
+        let now = 200 * SECONDS_PER_DAY;
+        for i in 0..19 {
+            let _ = service.record_dictation_completed(&format!("t-{i}"), false, 500, now - 3600);
+        }
+
+        // Short dictation, new recording 10s later → edited.
+        let _ = service.record_dictation_completed("t-short", false, 50, now);
+        let _ = service.note_recording_started(now + 10);
+        let summary = service.summary(now + 20);
+        assert_eq!(summary.zero_edit_rate_30d, Some(1.0 - 1.0 / 20.0));
+
+        // Long dictation followed by a quick restart → NOT edited.
+        let _ = service.record_dictation_completed("t-long", false, 500, now + 100);
+        let _ = service.note_recording_started(now + 110);
+        // Short dictation but restart after 30s → NOT edited.
+        let _ = service.record_dictation_completed("t-slow", false, 50, now + 200);
+        let _ = service.note_recording_started(now + 200 + REDICTATION_WINDOW_SECS + 1);
+
+        let summary = service.summary(now + 300);
+        assert_eq!(summary.zero_edit_rate_30d, Some(1.0 - 1.0 / 22.0));
+        let _ = std::fs::remove_file(&service.path);
+    }
+
+    #[test]
+    fn polished_and_raw_splits_are_computed_separately() {
+        let mut service = test_service("zero-edit-split");
+        let now = 200 * SECONDS_PER_DAY;
+        for i in 0..20 {
+            let _ = service.record_dictation_completed(&format!("p-{i}"), true, 50, now);
+        }
+        for i in 0..20 {
+            let _ = service.record_dictation_completed(&format!("r-{i}"), false, 50, now);
+        }
+        let _ = service.mark_edited("p-0", now + 10);
+        let _ = service.mark_edited("p-1", now + 10);
+        let _ = service.mark_edited("r-0", now + 10);
+
+        let summary = service.summary(now + 20);
+        assert_eq!(summary.zero_edit_rate_30d, Some(1.0 - 3.0 / 40.0));
+        assert_eq!(summary.polished_zero_edit_rate_30d, Some(1.0 - 2.0 / 20.0));
+        assert_eq!(summary.raw_zero_edit_rate_30d, Some(1.0 - 1.0 / 20.0));
+        let _ = std::fs::remove_file(&service.path);
+    }
+
+    #[test]
+    fn seven_day_window_excludes_older_dictations() {
+        let mut service = test_service("zero-edit-7d");
+        let now = 200 * SECONDS_PER_DAY;
+        // 20 dictations 10 days ago (inside 30d, outside 7d).
+        for i in 0..20 {
+            let _ = service.record_dictation_completed(
+                &format!("old-{i}"),
+                false,
+                50,
+                now - 10 * SECONDS_PER_DAY,
+            );
+        }
+        let summary = service.summary(now);
+        assert_eq!(summary.zero_edit_rate_7d, None);
+        assert_eq!(summary.zero_edit_rate_30d, Some(1.0));
+        let _ = std::fs::remove_file(&service.path);
+    }
+
+    #[test]
+    fn legacy_stats_json_without_metric_fields_loads() {
+        let legacy = r#"{
+            "totalWords": 100,
+            "totalRecordingSeconds": 60.0,
+            "totalDictations": 5,
+            "days": { "100": { "words": 100, "recordingSeconds": 60.0, "dictations": 5 } }
+        }"#;
+
+        let data: UsageStatsData = serde_json::from_str(legacy).expect("legacy stats load");
+        assert_eq!(data.total_words, 100);
+        assert!(data.recent_dictations.is_empty());
+        assert_eq!(data.days.get(&100).unwrap().completed, 0);
+
+        let summary = summarize(&data, 100 * SECONDS_PER_DAY);
+        assert_eq!(summary.zero_edit_rate_30d, None);
+    }
+
+    #[test]
+    fn recent_ring_prunes_by_age_and_cap() {
+        let now = 200 * SECONDS_PER_DAY;
+        let mut records: Vec<DictationRecord> = (0..(RECENT_DICTATIONS_CAP + 40))
+            .map(|i| DictationRecord {
+                history_id: format!("t-{i}"),
+                completed_at: now,
+                polished: false,
+                edited: false,
+                text_chars: 10,
+            })
+            .collect();
+        records.push(DictationRecord {
+            history_id: "ancient".to_string(),
+            completed_at: now - RECENT_DICTATIONS_MAX_AGE_SECS - 1,
+            polished: false,
+            edited: false,
+            text_chars: 10,
+        });
+
+        prune_recent(&mut records, now);
+
+        assert_eq!(records.len(), RECENT_DICTATIONS_CAP);
+        assert!(records.iter().all(|record| record.history_id != "ancient"));
     }
 
     #[test]

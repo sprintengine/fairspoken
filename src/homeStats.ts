@@ -13,6 +13,10 @@ interface WeeklyBucket {
 
 interface UsageStatsSummary {
   hasData: boolean;
+  zeroEditRate7d?: number | null;
+  zeroEditRate30d?: number | null;
+  polishedZeroEditRate30d?: number | null;
+  rawZeroEditRate30d?: number | null;
   totalWords: number;
   totalDictations: number;
   totalRecordingSeconds: number;
@@ -51,6 +55,9 @@ const statBestStreak = byId("statBestStreak");
 const statWpm = byId("statWpm");
 const statMoneySaved = byId("statMoneySaved");
 const statMoneySavedMeta = byId("statMoneySavedMeta");
+const statZeroEditTile = byId("statZeroEditTile");
+const statZeroEdit = byId("statZeroEdit");
+const statZeroEditMeta = byId("statZeroEditMeta");
 const statChart = byId("statChart");
 const statRecent = byId("statRecent");
 const statViewAll = document.getElementById("statViewAll");
@@ -131,7 +138,27 @@ function renderStats(summary: UsageStatsSummary): void {
   statMoneySavedMeta.textContent =
     `vs cloud transcription ($${summary.cloudRateUsdPerMinute.toFixed(3)}/min)`;
 
+  renderZeroEdit(summary);
   renderChart(summary.week);
+}
+
+// The epic's north-star metric: dictations that needed no follow-up within
+// 5 minutes. Hidden until 20 completed dictations exist in the window; the
+// polished/raw split appears once each arm has enough data.
+function renderZeroEdit(summary: UsageStatsSummary): void {
+  const rate = summary.zeroEditRate30d;
+  if (rate === null || rate === undefined) {
+    statZeroEditTile.hidden = true;
+    return;
+  }
+  statZeroEditTile.hidden = false;
+  statZeroEdit.textContent = `${Math.round(rate * 100)}%`;
+  const polished = summary.polishedZeroEditRate30d;
+  const raw = summary.rawZeroEditRate30d;
+  statZeroEditMeta.textContent =
+    polished !== null && polished !== undefined && raw !== null && raw !== undefined
+      ? `polished ${Math.round(polished * 100)}% · raw ${Math.round(raw * 100)}% (30 days)`
+      : "last 30 days";
 }
 
 function relativeTime(createdAtMs: number): string {

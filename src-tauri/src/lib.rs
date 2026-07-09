@@ -209,6 +209,10 @@ fn save_dictionary(
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
+    // Zero-edit metric signal: adding a correction or dictionary term right
+    // after a dictation means the user just taught the app a fix for it.
+    let taught_a_fix = update.vocabulary_hints.len() > settings.vocabulary_hints.len()
+        || update.transcript_corrections.len() > settings.transcript_corrections.len();
     settings.vocabulary_hints = update.vocabulary_hints;
     settings.transcript_corrections = update.transcript_corrections;
     settings.snippets = update.snippets;
@@ -216,7 +220,13 @@ fn save_dictionary(
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
-        .save(settings)
+        .save(settings)?;
+    if taught_a_fix {
+        if let Ok(mut usage_stats) = services.usage_stats.lock() {
+            let _ = usage_stats.mark_recent_edited(current_epoch_seconds());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -668,12 +678,20 @@ fn copy_original_transcript(
     services
         .clipboard
         .write_text(&transcript_clipboard_text(&raw_text))?;
+    mark_dictation_edited(&services, &item.id);
     emit_backend_event(
         &app,
         "info",
         "Original transcript copied — paste to replace",
     );
     Ok(item)
+}
+
+/// Zero-edit metric signal — best-effort, never fails the calling action.
+fn mark_dictation_edited(services: &AppServices, history_id: &str) {
+    if let Ok(mut usage_stats) = services.usage_stats.lock() {
+        let _ = usage_stats.mark_edited(history_id, current_epoch_seconds());
+    }
 }
 
 #[tauri::command]
@@ -685,7 +703,9 @@ fn delete_transcript_history_item(
         .transcript_history
         .lock()
         .map_err(|_| "Transcript history service lock failed".to_string())?
-        .delete(&id)
+        .delete(&id)?;
+    mark_dictation_edited(&services, &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -701,6 +721,12 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         .is_recording();
     if recording_active {
         return Err("Recording already in progress".to_string());
+    }
+
+    // Zero-edit metric signal: a recording starting right after a short
+    // dictation is treated as the user scrapping it and re-dictating.
+    if let Ok(mut usage_stats) = services.usage_stats.lock() {
+        let _ = usage_stats.note_recording_started(current_epoch_seconds());
     }
 
     let settings = services
@@ -1042,6 +1068,16 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             app,
             "warning",
             format!("Could not update usage stats: {err}"),
+        );
+    }
+    // Zero-edit metric: register the completion so later edit signals (undo,
+    // delete, new correction, quick re-dictation) can attribute to it.
+    if let Ok(mut usage_stats) = services.usage_stats.lock() {
+        let _ = usage_stats.record_dictation_completed(
+            &stored_item.id,
+            polished,
+            transcript.chars().count() as u32,
+            current_epoch_seconds(),
         );
     }
 
