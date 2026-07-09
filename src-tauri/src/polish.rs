@@ -4,6 +4,7 @@
 //! error, timeout, or suspicious response falls back to the raw transcript
 //! and the pipeline continues exactly as if polish were off.
 
+use crate::app_categories::{categorize, AppCategory};
 use crate::settings::{cloud_url, Settings};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
@@ -18,20 +19,14 @@ pub const POLISH_MAX_CHARS: usize = 4000;
 /// dictation already succeeded; polish may only add a bounded wait.
 const POLISH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Rewriting shell commands is actively harmful — never polish into a
-/// terminal. Generalized into app categories by `backlog/app-aware-styles.md`.
-pub const TERMINAL_BUNDLE_IDS: &[&str] = &[
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "dev.warp.Warp-Stable",
-    "com.github.wez.wezterm",
-    "net.kovidgoyal.kitty",
-    "com.mitchellh.ghostty",
-    "co.zeit.hyper",
-];
-
-pub fn is_terminal_app(bundle_id: &str) -> bool {
-    TERMINAL_BUNDLE_IDS.contains(&bundle_id)
+/// Resolve the polish tone for a category from the user's `polish_tones`
+/// setting; missing key = "default".
+fn tone_for_category(settings: &Settings, category: AppCategory) -> String {
+    settings
+        .polish_tones
+        .get(category.id())
+        .cloned()
+        .unwrap_or_else(|| "default".to_string())
 }
 
 /// The app the transcript will be pasted into (platform-neutral mirror of
@@ -116,13 +111,18 @@ pub fn maybe_polish(
     if raw_transcript.chars().count() > POLISH_MAX_CHARS {
         return PolishDecision::Skipped("transcript too long");
     }
-    if let Some(app) = target_app {
-        if is_terminal_app(&app.bundle_id) {
-            return PolishDecision::Skipped("terminal app frontmost");
-        }
+    let category = target_app
+        .map(|app| categorize(&app.bundle_id))
+        .unwrap_or(AppCategory::Other);
+    if category == AppCategory::Terminal {
+        return PolishDecision::Skipped("terminal app frontmost");
+    }
+    let tone = tone_for_category(settings, category);
+    if tone == "off" {
+        return PolishDecision::Skipped("polish is off for this app type");
     }
 
-    match polish_transcript(raw_transcript, settings, target_app) {
+    match polish_transcript(raw_transcript, settings, target_app, category, tone) {
         Ok(response) => {
             let text = response.text.trim();
             if !response.changed || text.is_empty() || text == raw_transcript.trim() {
@@ -145,6 +145,8 @@ fn polish_transcript(
     raw_transcript: &str,
     settings: &Settings,
     target_app: Option<&PolishTargetApp>,
+    category: AppCategory,
+    tone: String,
 ) -> Result<PolishResponse, String> {
     let base_url = reqwest::Url::parse(&cloud_url())
         .map_err(|err| format!("invalid cloud URL: {err}"))?;
@@ -169,9 +171,8 @@ fn polish_transcript(
         app_context: target_app.map(|app| PolishAppContext {
             bundle_id: app.bundle_id.clone(),
             app_name: app.name.clone(),
-            // Real category/tone mapping arrives with backlog/app-aware-styles.md.
-            category: "other".to_string(),
-            tone: "default".to_string(),
+            category: category.id().to_string(),
+            tone,
         }),
         surrounding_text: None,
         vocabulary: settings.vocabulary_hints.clone(),
@@ -309,11 +310,59 @@ mod tests {
     }
 
     #[test]
-    fn terminal_denylist_covers_every_listed_terminal() {
-        for bundle_id in TERMINAL_BUNDLE_IDS {
-            assert!(is_terminal_app(bundle_id), "{bundle_id} should be a terminal");
+    fn every_terminal_stays_skipped_after_the_category_refactor() {
+        for bundle_id in [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "com.github.wez.wezterm",
+            "net.kovidgoyal.kitty",
+            "com.mitchellh.ghostty",
+            "co.zeit.hyper",
+        ] {
+            assert!(
+                matches!(
+                    maybe_polish("um hello", &polish_settings(), Some(&app(bundle_id))),
+                    PolishDecision::Skipped("terminal app frontmost")
+                ),
+                "{bundle_id} should skip polish"
+            );
         }
-        assert!(!is_terminal_app("com.apple.Notes"));
-        assert!(!is_terminal_app("com.tinyspeck.slackmacgap"));
+    }
+
+    #[test]
+    fn tone_off_short_circuits_before_any_network_call() {
+        let mut settings = polish_settings();
+        settings
+            .polish_tones
+            .insert("docs".to_string(), "off".to_string());
+
+        assert!(matches!(
+            maybe_polish("um hello", &settings, Some(&app("com.apple.Notes"))),
+            PolishDecision::Skipped("polish is off for this app type")
+        ));
+
+        // `off` for `other` also covers dictations with no frontmost app info.
+        settings
+            .polish_tones
+            .insert("other".to_string(), "off".to_string());
+        assert!(matches!(
+            maybe_polish("um hello", &settings, None),
+            PolishDecision::Skipped("polish is off for this app type")
+        ));
+    }
+
+    #[test]
+    fn tone_resolution_reads_the_setting_with_default_fallback() {
+        let mut settings = polish_settings();
+        settings
+            .polish_tones
+            .insert("messaging".to_string(), "casual".to_string());
+
+        assert_eq!(
+            tone_for_category(&settings, AppCategory::Messaging),
+            "casual"
+        );
+        assert_eq!(tone_for_category(&settings, AppCategory::Email), "default");
     }
 }

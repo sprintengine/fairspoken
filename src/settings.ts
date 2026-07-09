@@ -51,6 +51,7 @@ interface Settings {
   insertAtCursor: boolean;
   fnPushToTalk: boolean;
   polishEnabled: boolean;
+  polishTones: Record<string, string>;
 }
 
 interface ModelStatus {
@@ -104,6 +105,7 @@ const DEFAULTS: Settings = {
   insertAtCursor: isMacOS(),
   fnPushToTalk: false,
   polishEnabled: false,
+  polishTones: {},
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
@@ -151,6 +153,16 @@ const cloudTest = required<HTMLButtonElement>("cloudTest");
 const polishEnabled = required<HTMLInputElement>("polishEnabled");
 const polishHelp = required<HTMLElement>("polishHelp");
 const polishHelpDefault = polishHelp.textContent ?? "";
+const polishTonesPanel = required<HTMLElement>("polishTonesPanel");
+// Category ids match the polish endpoint contract and the Rust setting keys.
+const POLISH_TONE_CATEGORIES = ["messaging", "email", "docs", "code", "other"] as const;
+const polishToneSegs: Record<string, SegControl> = {
+  messaging: segControl("polishToneMessaging"),
+  email: segControl("polishToneEmail"),
+  docs: segControl("polishToneDocs"),
+  code: segControl("polishToneCode"),
+  other: segControl("polishToneOther"),
+};
 
 const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
   "parakeet-tdt-0.6b-v3": "RAM ~2.5G",
@@ -292,6 +304,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
     cloudAuthToken: (settings.cloudAuthToken ?? "").trim(),
     polishEnabled: settings.polishEnabled ?? DEFAULTS.polishEnabled,
+    polishTones: normalizePolishTones(settings.polishTones ?? DEFAULTS.polishTones),
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -329,19 +342,37 @@ function applyToForm(settings: Settings): void {
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
   useGpu.checked = settings.useGpu;
   polishEnabled.checked = settings.polishEnabled;
+  for (const category of POLISH_TONE_CATEGORIES) {
+    polishToneSegs[category].set(settings.polishTones[category] ?? "default");
+  }
   updateTranscriptionLocationUi(settings.transcriptionLocation);
   updateUseGpuUi();
   updatePolishUi(settings);
 }
 
 // Polish needs the cloud token even in Local mode (transcript text goes to
-// the same Worker). Without one, the toggle is disabled and says why.
+// the same Worker). Without one, the toggle is disabled and says why. The
+// per-category tone rows only matter while polish is on.
 function updatePolishUi(settings: Settings): void {
   const hasToken = settings.cloudAuthToken.trim() !== "";
   polishEnabled.disabled = !hasToken;
   polishHelp.textContent = hasToken
     ? polishHelpDefault
     : "Requires a MultiVoice Cloud token (add one under Location → MultiVoice Cloud).";
+  polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
+}
+
+// Mirror of the Rust normalization: only known categories and tones survive,
+// and redundant "default" entries are dropped.
+function normalizePolishTones(tones: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const category of POLISH_TONE_CATEGORIES) {
+    const tone = tones[category];
+    if (tone === "casual" || tone === "formal" || tone === "off") {
+      normalized[category] = tone;
+    }
+  }
+  return normalized;
 }
 
 function readFromForm(): Settings {
@@ -370,6 +401,9 @@ function readFromForm(): Settings {
     insertAtCursor: insertAtCursor.checked,
     fnPushToTalk: fnPushToTalk.checked,
     polishEnabled: polishEnabled.checked,
+    polishTones: Object.fromEntries(
+      POLISH_TONE_CATEGORIES.map((category) => [category, polishToneSegs[category].get()]),
+    ),
   });
 }
 
@@ -821,7 +855,14 @@ cloudAuthToken.addEventListener("change", () => {
     .then(() => updatePolishUi(currentSettings))
     .catch(reportAsyncError);
 });
-polishEnabled.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+polishEnabled.addEventListener("change", () => {
+  void persistSettings()
+    .then(() => updatePolishUi(currentSettings))
+    .catch(reportAsyncError);
+});
+for (const category of POLISH_TONE_CATEGORIES) {
+  polishToneSegs[category].onChange(() => void persistSettings().catch(reportAsyncError));
+}
 remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {

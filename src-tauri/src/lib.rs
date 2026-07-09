@@ -1,3 +1,4 @@
+mod app_categories;
 mod audio;
 mod clipboard;
 mod host;

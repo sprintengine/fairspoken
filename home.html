@@ -334,10 +334,83 @@
                 <div class="row">
                   <div class="row-text">
                     <label class="row-label" for="polishEnabled">AI polish</label>
-                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text (not audio) to MultiVoice Cloud. Nothing is stored.</div>
+                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text and the destination app's name (not audio, not screen content) to MultiVoice Cloud. Nothing is stored.</div>
                   </div>
                   <div class="row-control">
                     <input id="polishEnabled" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+
+                <div id="polishTonesPanel" hidden>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="row-label" id="polishToneMessagingLabel">Messaging tone</div>
+                      <div class="row-help">Slack, iMessage, WhatsApp, Discord…</div>
+                    </div>
+                    <div class="row-control">
+                      <div class="seg" id="polishToneMessaging" role="group" aria-labelledby="polishToneMessagingLabel">
+                        <button type="button" data-value="default" aria-pressed="true">Default</button>
+                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+                        <button type="button" data-value="off" aria-pressed="false">Off</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="row-label" id="polishToneEmailLabel">Email tone</div>
+                      <div class="row-help">Mail, Outlook, Superhuman…</div>
+                    </div>
+                    <div class="row-control">
+                      <div class="seg" id="polishToneEmail" role="group" aria-labelledby="polishToneEmailLabel">
+                        <button type="button" data-value="default" aria-pressed="true">Default</button>
+                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+                        <button type="button" data-value="off" aria-pressed="false">Off</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="row-label" id="polishToneDocsLabel">Documents tone</div>
+                      <div class="row-help">Pages, Word, Notes, Obsidian, Notion…</div>
+                    </div>
+                    <div class="row-control">
+                      <div class="seg" id="polishToneDocs" role="group" aria-labelledby="polishToneDocsLabel">
+                        <button type="button" data-value="default" aria-pressed="true">Default</button>
+                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+                        <button type="button" data-value="off" aria-pressed="false">Off</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="row-label" id="polishToneCodeLabel">Code editors tone</div>
+                      <div class="row-help">VS Code, Cursor, JetBrains, Zed, Xcode… Terminals never get polish.</div>
+                    </div>
+                    <div class="row-control">
+                      <div class="seg" id="polishToneCode" role="group" aria-labelledby="polishToneCodeLabel">
+                        <button type="button" data-value="default" aria-pressed="true">Default</button>
+                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+                        <button type="button" data-value="off" aria-pressed="false">Off</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
+                      <div class="row-label" id="polishToneOtherLabel">Everything else</div>
+                      <div class="row-help">Browsers and unrecognized apps.</div>
+                    </div>
+                    <div class="row-control">
+                      <div class="seg" id="polishToneOther" role="group" aria-labelledby="polishToneOtherLabel">
+                        <button type="button" data-value="default" aria-pressed="true">Default</button>
+                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+                        <button type="button" data-value="off" aria-pressed="false">Off</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

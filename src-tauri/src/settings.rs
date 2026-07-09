@@ -1,5 +1,6 @@
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -101,6 +102,13 @@ pub struct Settings {
     /// back to the raw transcript.
     #[serde(default)]
     pub polish_enabled: bool,
+    /// Per-app-category tone for AI polish. Keys are category ids
+    /// (`messaging | email | docs | code | other`), values are
+    /// `default | casual | formal | off` (`off` disables polish for that
+    /// category). Missing key = `default`. Terminals are implicitly always
+    /// off and have no entry.
+    #[serde(default)]
+    pub polish_tones: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -161,8 +169,23 @@ impl Default for Settings {
             insert_at_cursor: default_insert_at_cursor(),
             fn_push_to_talk: false,
             polish_enabled: false,
+            polish_tones: HashMap::new(),
         }
     }
+}
+
+const POLISH_TONE_CATEGORIES: &[&str] = &["messaging", "email", "docs", "code", "other"];
+const POLISH_TONE_VALUES: &[&str] = &["default", "casual", "formal", "off"];
+
+fn normalize_polish_tones(tones: HashMap<String, String>) -> HashMap<String, String> {
+    tones
+        .into_iter()
+        .filter(|(category, tone)| {
+            POLISH_TONE_CATEGORIES.contains(&category.as_str())
+                && POLISH_TONE_VALUES.contains(&tone.as_str())
+                && tone != "default"
+        })
+        .collect()
 }
 
 fn default_insert_at_cursor() -> bool {
@@ -241,6 +264,7 @@ fn normalize(settings: Settings) -> Settings {
         remote_url: normalize_remote_url(&settings.remote_url),
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
         cloud_auth_token: settings.cloud_auth_token.trim().to_string(),
+        polish_tones: normalize_polish_tones(settings.polish_tones),
         vocabulary_hints: normalize_vocabulary_hints(settings.vocabulary_hints),
         transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
         snippets: normalize_snippets(settings.snippets),
@@ -473,6 +497,28 @@ mod tests {
         );
         assert_eq!(settings.cloud_auth_token, "");
         assert!(!settings.polish_enabled);
+        assert!(settings.polish_tones.is_empty());
+    }
+
+    #[test]
+    fn polish_tones_normalize_drops_invalid_and_default_entries() {
+        let mut tones = HashMap::new();
+        tones.insert("messaging".to_string(), "casual".to_string());
+        tones.insert("docs".to_string(), "off".to_string());
+        tones.insert("email".to_string(), "default".to_string()); // redundant
+        tones.insert("terminal".to_string(), "formal".to_string()); // not a settable category
+        tones.insert("messaging2".to_string(), "casual".to_string()); // unknown key
+        tones.insert("code".to_string(), "sarcastic".to_string()); // unknown tone
+
+        let normalized = normalize(Settings {
+            polish_tones: tones,
+            ..Settings::default()
+        })
+        .polish_tones;
+
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized.get("messaging").map(String::as_str), Some("casual"));
+        assert_eq!(normalized.get("docs").map(String::as_str), Some("off"));
     }
 
     #[test]
