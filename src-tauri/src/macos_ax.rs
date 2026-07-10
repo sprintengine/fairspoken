@@ -31,6 +31,16 @@ extern "C" {
         value: *mut RawCFTypeRef,
     ) -> i32;
     fn AXValueGetValue(value: RawCFTypeRef, value_type: u32, out: *mut c_void) -> bool;
+    fn AXUIElementIsAttributeSettable(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        settable: *mut bool,
+    ) -> i32;
+    fn AXUIElementSetAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: RawCFTypeRef,
+    ) -> i32;
 }
 
 const K_AX_VALUE_TYPE_CFRANGE: u32 = 4;
@@ -242,6 +252,53 @@ fn read_cf_range(value: &CFType) -> Option<CFRange> {
         )
     };
     (ok && range.location >= 0 && range.length >= 0).then_some(range)
+}
+
+/// Pre-validation facts for the three-tier insertion's tier choice: role,
+/// whether `AXSelectedText` is settable, and whether the field is secure.
+pub fn focused_element_info() -> Option<crate::insertion::FocusedElementInfo> {
+    let focused = focused_element()?;
+    let role = focused.role()?;
+    let secure = role == SECURE_FIELD_ROLE;
+    let mut settable = false;
+    let attribute = CFString::new("AXSelectedText");
+    let err = unsafe {
+        AXUIElementIsAttributeSettable(
+            focused.element_ref(),
+            attribute.as_concrete_TypeRef(),
+            &mut settable,
+        )
+    };
+    Some(crate::insertion::FocusedElementInfo {
+        role,
+        selected_text_settable: err == 0 && settable,
+        secure,
+    })
+}
+
+/// Tier 1 insertion: set `AXSelectedText` on the focused element, inserting
+/// at the caret (replacing any selection — same semantics as paste) without
+/// touching keystrokes or the clipboard. A returned error code means nothing
+/// was inserted, so the caller may safely fall through to ⌘V.
+pub fn ax_insert_text(text: &str) -> Result<(), i32> {
+    let focused = focused_element().ok_or(-1)?;
+    if focused.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+        return Err(-2);
+    }
+    let attribute = CFString::new("AXSelectedText");
+    let value = CFString::new(text);
+    let err = unsafe {
+        AXUIElementSetAttributeValue(
+            focused.element_ref(),
+            attribute.as_concrete_TypeRef(),
+            value.as_CFTypeRef(),
+        )
+    };
+    if err == 0 {
+        Ok(())
+    } else {
+        Err(err)
+    }
 }
 
 /// Phase A/C: read the focused element's text around the caret. Returns

@@ -1,8 +1,13 @@
 mod app_categories;
 mod audio;
+// Consumed by the macOS-only AX integration; compiled everywhere so the pure
+// logic and its tests stay platform-neutral.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod ax_context;
 mod clipboard;
 mod host;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod insertion;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
@@ -1131,7 +1136,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 
     #[cfg(target_os = "macos")]
     if will_insert_at_cursor {
-        deliver_transcript_at_cursor(app);
+        deliver_transcript_at_cursor(app, &clipboard_text);
     } else {
         emit_backend_event(app, "info", "Transcript copied to clipboard");
     }
@@ -1171,16 +1176,20 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     Ok(transcript)
 }
 
-/// Pastes the freshly copied transcript into whichever app the user is
-/// dictating into. Skipped when one of our own windows is focused (the paste
-/// would land in Multivoice itself); every other failure is surfaced as a
-/// backend event because the user is otherwise left wondering why no text
-/// appeared.
+/// Delivers the freshly copied transcript into whichever app the user is
+/// dictating into, via the three-tier pattern (AX insert → ⌘V →
+/// AppleScript; see `insertion.rs` for why tiers are chosen by
+/// pre-condition and never verified-and-retried). Skipped when one of our
+/// own windows is focused (the paste would land in Multivoice itself);
+/// every other failure is surfaced as a backend event because the user is
+/// otherwise left wondering why no text appeared.
 ///
 /// The transcript always stays on the clipboard afterwards — paste or no
 /// paste — so the user can paste the same dictation into multiple targets.
 #[cfg(target_os = "macos")]
-fn deliver_transcript_at_cursor(app: &AppHandle) {
+fn deliver_transcript_at_cursor(app: &AppHandle, text: &str) {
+    use insertion::InsertionTier;
+
     let our_window_focused = app
         .webview_windows()
         .values()
@@ -1194,17 +1203,98 @@ fn deliver_transcript_at_cursor(app: &AppHandle) {
         return;
     }
 
+    let bundle_id = macos_input::frontmost_app().map(|frontmost| frontmost.bundle_id);
+    let element = with_ax_timeout(macos_ax::focused_element_info).flatten();
+    let tier = insertion::choose_insertion_tier(bundle_id.as_deref(), element.as_ref());
+
+    if tier == InsertionTier::AxInsert {
+        let text_for_ax = text.to_string();
+        match with_ax_timeout(move || macos_ax::ax_insert_text(&text_for_ax)) {
+            Some(Ok(())) => {
+                // Success is trusted: no fallback, no verification read-back.
+                emit_backend_event(
+                    app,
+                    "info",
+                    format!(
+                        "Transcript inserted via {} and kept on the clipboard",
+                        InsertionTier::AxInsert.label()
+                    ),
+                );
+                return;
+            }
+            Some(Err(code)) => {
+                // A returned AX error means nothing was inserted — falling
+                // through to ⌘V cannot double-insert.
+                emit_backend_event(
+                    app,
+                    "info",
+                    format!("AX insertion declined (AXError {code}); using ⌘V"),
+                );
+            }
+            None => {
+                // Timeout = unknown state. Falling back could double-insert,
+                // so we stop here; the transcript is on the clipboard.
+                emit_backend_event(
+                    app,
+                    "warning",
+                    "AX insertion timed out; not retrying to avoid a double paste — transcript is on the clipboard",
+                );
+                return;
+            }
+        }
+    }
+
+    if tier == InsertionTier::AppleScript {
+        match applescript_paste_keystroke() {
+            Ok(()) => emit_backend_event(
+                app,
+                "info",
+                format!(
+                    "Transcript inserted via {} and kept on the clipboard",
+                    InsertionTier::AppleScript.label()
+                ),
+            ),
+            Err(err) => emit_backend_event(
+                app,
+                "warning",
+                format!("AppleScript insertion failed ({err}); transcript is on the clipboard"),
+            ),
+        }
+        return;
+    }
+
     match macos_input::paste_clipboard_at_cursor() {
         Ok(()) => emit_backend_event(
             app,
             "info",
-            "Transcript inserted at cursor and kept on the clipboard",
+            format!(
+                "Transcript inserted via {} and kept on the clipboard",
+                InsertionTier::CmdV.label()
+            ),
         ),
         Err(err) => emit_backend_event(
             app,
             "warning",
             format!("Insert at cursor failed ({err}); transcript is on the clipboard"),
         ),
+    }
+}
+
+/// Tier 3: a System Events keystroke for apps that ignore HID-posted
+/// CGEvents. First use per machine triggers the macOS Automation permission
+/// prompt — acceptable because this tier only fires for bundles in
+/// `insertion::PREFER_APPLESCRIPT`, which starts empty.
+#[cfg(target_os = "macos")]
+fn applescript_paste_keystroke() -> Result<(), String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
+        .output()
+        .map_err(|err| format!("could not run osascript: {err}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 
