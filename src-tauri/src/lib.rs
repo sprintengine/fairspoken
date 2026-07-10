@@ -1,7 +1,10 @@
 mod app_categories;
 mod audio;
+mod ax_context;
 mod clipboard;
 mod host;
+#[cfg(target_os = "macos")]
+mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_input;
 mod models;
@@ -74,6 +77,10 @@ struct AppServices {
     speed_test: Mutex<SpeedTestService>,
     transcription: Mutex<TranscriptionService>,
     remote_transcription: Mutex<Option<RemoteStreamingSession>>,
+    /// Screen-harvested vocabulary for the CURRENT recording session only
+    /// (context awareness Phase B). Set at recording start, read at finish,
+    /// never persisted.
+    session_vocabulary: Mutex<Vec<String>>,
     transcript_shelf_positioned: AtomicBool,
     #[cfg(target_os = "macos")]
     fn_push_to_talk_enabled: Arc<AtomicBool>,
@@ -735,6 +742,39 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
 
+    // Context awareness Phase B: harvest on-screen terms into this session's
+    // vocabulary hints (session-only; nothing is persisted). Budgeted and
+    // thread-timed so a wedged app cannot delay recording start beyond the
+    // AX timeout. The terms are kept in service state so the finish flow
+    // (which re-reads settings) sees the same hints.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut harvested_terms: Vec<String> = Vec::new();
+    #[cfg(target_os = "macos")]
+    if settings.context_awareness {
+        match with_ax_timeout(macos_ax::harvest_screen_vocabulary) {
+            Some(Some(terms)) if !terms.is_empty() => {
+                emit_backend_event(
+                    &app,
+                    "info",
+                    format!("Context harvest: {} on-screen terms added as hints", terms.len()),
+                );
+                harvested_terms = terms;
+            }
+            Some(None) => {
+                emit_backend_event(
+                    &app,
+                    "info",
+                    "Context harvest skipped (password manager or no frontmost app)",
+                );
+            }
+            _ => {}
+        }
+    }
+    if let Ok(mut session_vocabulary) = services.session_vocabulary.lock() {
+        *session_vocabulary = harvested_terms.clone();
+    }
+    let settings = settings.with_session_vocabulary(harvested_terms);
+
     // If a previous start failed after opening the transcription worker but before
     // audio capture became active, clear that stale worker before the next attempt.
     cancel_transcription_for_location(&services, settings.transcription_location)?;
@@ -949,6 +989,15 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
+    // Re-apply this session's screen-harvested vocabulary (set at recording
+    // start) so the finish path sees the same hints the session started with.
+    let settings = settings.with_session_vocabulary(
+        services
+            .session_vocabulary
+            .lock()
+            .map(|terms| terms.clone())
+            .unwrap_or_default(),
+    );
     let recording = stop_and_validate_recording(app, services, &settings)?;
     let stats = recording.stats();
 
@@ -976,8 +1025,25 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(not(target_os = "macos"))]
     let frontmost_app: Option<polish::PolishTargetApp> = None;
 
-    let (transcript_for_rules, polished) =
-        match polish::maybe_polish(&raw_transcript, &settings, frontmost_app.as_ref()) {
+    // Context awareness Phases A/C: one budgeted read of the focused
+    // element's caret situation, used for the polish surrounding text and
+    // the paste-time casing/spacing adjustment. Any failure means "no
+    // context" and today's exact behavior.
+    #[cfg(target_os = "macos")]
+    let caret_context = if settings.context_awareness {
+        with_ax_timeout(macos_ax::focused_caret_context).flatten()
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "macos"))]
+    let caret_context: Option<ax_context::CaretContext> = None;
+
+    let (transcript_for_rules, polished) = match polish::maybe_polish(
+        &raw_transcript,
+        &settings,
+        frontmost_app.as_ref(),
+        caret_context.as_ref().map(|context| context.before.as_str()),
+    ) {
             polish::PolishDecision::Polished(outcome) => {
                 emit_backend_event(
                     app,
@@ -1039,9 +1105,21 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             raw_text: polished.then(|| raw_transcript.clone()),
         })?;
 
-    let clipboard_text = transcript_clipboard_text(&transcript);
     #[cfg(target_os = "macos")]
     let will_insert_at_cursor = settings.insert_at_cursor && !transcript.is_empty();
+
+    // Context awareness Phase A: when we are about to paste and the caret
+    // situation is known, adapt leading capitalization and spacing to it.
+    // Otherwise the clipboard text is byte-identical to today's behavior.
+    #[cfg(target_os = "macos")]
+    let clipboard_text = match caret_context.as_ref() {
+        Some(context) if will_insert_at_cursor => {
+            ax_context::adjust_for_caret(&transcript, context, &settings.vocabulary_hints)
+        }
+        _ => transcript_clipboard_text(&transcript),
+    };
+    #[cfg(not(target_os = "macos"))]
+    let clipboard_text = transcript_clipboard_text(&transcript);
 
     services.clipboard.write_text(&clipboard_text)?;
     let _ = app.emit(
@@ -1459,6 +1537,64 @@ fn preview_interaction_sound(sound: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Dev-only spike command (context-awareness-ax Phase 0): dump what the AX
+/// tree exposes for the currently focused app into the backend event log, so
+/// per-app coverage (native vs Electron vs web areas vs terminals) can be
+/// recorded without a debugger. Reads are budgeted like the real feature.
+#[tauri::command]
+fn debug_dump_ax_context(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        match with_ax_timeout(macos_ax::focused_element_debug).flatten() {
+            Some(debug) => {
+                emit_backend_event(
+                    &app,
+                    "info",
+                    format!(
+                        "AX spike [{}]: role={:?}, value={} chars, selectedRange={:?}",
+                        debug.bundle_id,
+                        debug.role.as_deref().unwrap_or("(none)"),
+                        debug
+                            .value_chars
+                            .map(|chars| chars.to_string())
+                            .unwrap_or_else(|| "(none)".to_string()),
+                        debug.selected_range,
+                    ),
+                );
+            }
+            None => emit_backend_event(&app, "warning", "AX spike: no focused element readable"),
+        }
+
+        match with_ax_timeout(macos_ax::focused_caret_context).flatten() {
+            Some(context) => emit_backend_event(
+                &app,
+                "info",
+                format!(
+                    "AX spike caret: {} chars before caret, after={:?}",
+                    context.before.chars().count(),
+                    context.after_char,
+                ),
+            ),
+            None => emit_backend_event(&app, "info", "AX spike caret: no caret context"),
+        }
+
+        let terms = with_ax_timeout(macos_ax::harvest_screen_vocabulary)
+            .flatten()
+            .unwrap_or_default();
+        emit_backend_event(
+            &app,
+            "info",
+            format!("AX spike harvest ({} terms): {}", terms.len(), terms.join(", ")),
+        );
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("Context awareness is macOS-only".to_string())
+    }
+}
+
 #[tauri::command]
 fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Result<(), String> {
     services
@@ -1475,6 +1611,24 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
     }
     emit_backend_event(&app, "info", "Transcription cancellation requested");
     Ok(())
+}
+
+/// Run an Accessibility read on an abandoned thread with a hard timeout: AX
+/// calls are cross-process IPC and can hang; recording start and paste must
+/// never wait on a wedged app. A timed-out thread is left to finish (or hang)
+/// on its own and its result is dropped.
+#[cfg(target_os = "macos")]
+fn with_ax_timeout<T: Send + 'static>(
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("ax-context-read".to_string())
+        .spawn(move || {
+            let _ = tx.send(read());
+        })
+        .ok()?;
+    rx.recv_timeout(Duration::from_millis(200)).ok()
 }
 
 pub(crate) fn emit_backend_event(app: &AppHandle, level: &'static str, message: impl Into<String>) {
@@ -1618,6 +1772,7 @@ pub fn run() {
             speed_test: Mutex::new(SpeedTestService::default()),
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
+            session_vocabulary: Mutex::new(Vec::new()),
             transcript_shelf_positioned: AtomicBool::new(false),
             #[cfg(target_os = "macos")]
             fn_push_to_talk_enabled: Arc::new(AtomicBool::new(false)),
@@ -1671,6 +1826,7 @@ pub fn run() {
             start_recording,
             stop_and_transcribe,
             cancel_transcription,
+            debug_dump_ax_context,
             preview_interaction_sound,
             stop_speed_test_capture,
             stop_voice_test_capture,

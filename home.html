@@ -335,7 +335,7 @@
                 <div class="row">
                   <div class="row-text">
                     <label class="row-label" for="polishEnabled">AI polish</label>
-                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text and the destination app's name (not audio, not screen content) to MultiVoice Cloud. Nothing is stored.</div>
+                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text, the destination app's name and, when context awareness is on, up to 500 characters of text around your cursor (never audio) to MultiVoice Cloud. Nothing is stored.</div>
                   </div>
                   <div class="row-control">
                     <input id="polishEnabled" class="switch" type="checkbox" role="switch" />
@@ -412,6 +412,16 @@
                         <button type="button" data-value="off" aria-pressed="false">Off</button>
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                <div class="row" id="contextAwarenessRow">
+                  <div class="row-text">
+                    <label class="row-label" for="contextAwareness">Context awareness</label>
+                    <div class="row-help">Reads text near your cursor and on the active window (via Accessibility) to improve name/term accuracy. Read locally; sent to MultiVoice Cloud only as part of AI polish. Never reads password fields.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="contextAwareness" class="switch" type="checkbox" role="switch" />
                   </div>
                 </div>
 

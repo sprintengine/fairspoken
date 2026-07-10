@@ -52,6 +52,7 @@ interface Settings {
   fnPushToTalk: boolean;
   polishEnabled: boolean;
   polishTones: Record<string, string>;
+  contextAwareness: boolean;
 }
 
 interface ModelStatus {
@@ -106,6 +107,7 @@ const DEFAULTS: Settings = {
   fnPushToTalk: false,
   polishEnabled: false,
   polishTones: {},
+  contextAwareness: false,
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
@@ -154,6 +156,8 @@ const polishEnabled = required<HTMLInputElement>("polishEnabled");
 const polishHelp = required<HTMLElement>("polishHelp");
 const polishHelpDefault = polishHelp.textContent ?? "";
 const polishTonesPanel = required<HTMLElement>("polishTonesPanel");
+const contextAwareness = required<HTMLInputElement>("contextAwareness");
+const contextAwarenessRow = required<HTMLElement>("contextAwarenessRow");
 // Category ids match the polish endpoint contract and the Rust setting keys.
 const POLISH_TONE_CATEGORIES = ["messaging", "email", "docs", "code", "other"] as const;
 const polishToneSegs: Record<string, SegControl> = {
@@ -305,6 +309,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     cloudAuthToken: (settings.cloudAuthToken ?? "").trim(),
     polishEnabled: settings.polishEnabled ?? DEFAULTS.polishEnabled,
     polishTones: normalizePolishTones(settings.polishTones ?? DEFAULTS.polishTones),
+    contextAwareness: settings.contextAwareness ?? DEFAULTS.contextAwareness,
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -342,6 +347,7 @@ function applyToForm(settings: Settings): void {
   whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
   useGpu.checked = settings.useGpu;
   polishEnabled.checked = settings.polishEnabled;
+  contextAwareness.checked = settings.contextAwareness;
   for (const category of POLISH_TONE_CATEGORIES) {
     polishToneSegs[category].set(settings.polishTones[category] ?? "default");
   }
@@ -401,6 +407,7 @@ function readFromForm(): Settings {
     insertAtCursor: insertAtCursor.checked,
     fnPushToTalk: fnPushToTalk.checked,
     polishEnabled: polishEnabled.checked,
+    contextAwareness: contextAwareness.checked,
     polishTones: Object.fromEntries(
       POLISH_TONE_CATEGORIES.map((category) => [category, polishToneSegs[category].get()]),
     ),
@@ -863,6 +870,7 @@ polishEnabled.addEventListener("change", () => {
 for (const category of POLISH_TONE_CATEGORIES) {
   polishToneSegs[category].onChange(() => void persistSettings().catch(reportAsyncError));
 }
+contextAwareness.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {
@@ -929,6 +937,9 @@ function isMacOS(): boolean {
 if (!isMacOS()) {
   insertAtCursorRow.hidden = true;
   fnPushToTalkRow.hidden = true;
+  // Context awareness reads the macOS Accessibility tree; there is no
+  // Windows/Linux implementation yet.
+  contextAwarenessRow.hidden = true;
 }
 
 // Settings auto-persist on change; the form must never submit/navigate, which

@@ -98,6 +98,7 @@ pub fn maybe_polish(
     raw_transcript: &str,
     settings: &Settings,
     target_app: Option<&PolishTargetApp>,
+    surrounding_text: Option<&str>,
 ) -> PolishDecision {
     if !settings.polish_enabled {
         return PolishDecision::Disabled;
@@ -122,7 +123,15 @@ pub fn maybe_polish(
         return PolishDecision::Skipped("polish is off for this app type");
     }
 
-    match polish_transcript(raw_transcript, settings, target_app, category, tone) {
+    // Surrounding text goes off-device only when the user opted into BOTH
+    // polish and context awareness (Phase C of context-awareness-ax).
+    let surrounding = if settings.context_awareness {
+        surrounding_text.filter(|text| !text.trim().is_empty())
+    } else {
+        None
+    };
+
+    match polish_transcript(raw_transcript, settings, target_app, category, tone, surrounding) {
         Ok(response) => {
             let text = response.text.trim();
             if !response.changed || text.is_empty() || text == raw_transcript.trim() {
@@ -147,6 +156,7 @@ fn polish_transcript(
     target_app: Option<&PolishTargetApp>,
     category: AppCategory,
     tone: String,
+    surrounding_text: Option<&str>,
 ) -> Result<PolishResponse, String> {
     let base_url = reqwest::Url::parse(&cloud_url())
         .map_err(|err| format!("invalid cloud URL: {err}"))?;
@@ -174,7 +184,7 @@ fn polish_transcript(
             category: category.id().to_string(),
             tone,
         }),
-        surrounding_text: None,
+        surrounding_text,
         vocabulary: settings.vocabulary_hints.clone(),
     };
 
@@ -279,7 +289,7 @@ mod tests {
         let raw = "um hello world";
 
         assert!(matches!(
-            maybe_polish(raw, &Settings::default(), None),
+            maybe_polish(raw, &Settings::default(), None, None),
             PolishDecision::Disabled
         ));
 
@@ -288,23 +298,23 @@ mod tests {
             ..Settings::default()
         };
         assert!(matches!(
-            maybe_polish(raw, &no_token, None),
+            maybe_polish(raw, &no_token, None, None),
             PolishDecision::Skipped("no MultiVoice Cloud token")
         ));
 
         assert!(matches!(
-            maybe_polish("   ", &polish_settings(), None),
+            maybe_polish("   ", &polish_settings(), None, None),
             PolishDecision::Skipped("empty transcript")
         ));
 
         let long = "a".repeat(POLISH_MAX_CHARS + 1);
         assert!(matches!(
-            maybe_polish(&long, &polish_settings(), None),
+            maybe_polish(&long, &polish_settings(), None, None),
             PolishDecision::Skipped("transcript too long")
         ));
 
         assert!(matches!(
-            maybe_polish(raw, &polish_settings(), Some(&app("com.googlecode.iterm2"))),
+            maybe_polish(raw, &polish_settings(), Some(&app("com.googlecode.iterm2")), None),
             PolishDecision::Skipped("terminal app frontmost")
         ));
     }
@@ -322,7 +332,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    maybe_polish("um hello", &polish_settings(), Some(&app(bundle_id))),
+                    maybe_polish("um hello", &polish_settings(), Some(&app(bundle_id)), None),
                     PolishDecision::Skipped("terminal app frontmost")
                 ),
                 "{bundle_id} should skip polish"
@@ -338,7 +348,7 @@ mod tests {
             .insert("docs".to_string(), "off".to_string());
 
         assert!(matches!(
-            maybe_polish("um hello", &settings, Some(&app("com.apple.Notes"))),
+            maybe_polish("um hello", &settings, Some(&app("com.apple.Notes")), None),
             PolishDecision::Skipped("polish is off for this app type")
         ));
 
@@ -347,7 +357,7 @@ mod tests {
             .polish_tones
             .insert("other".to_string(), "off".to_string());
         assert!(matches!(
-            maybe_polish("um hello", &settings, None),
+            maybe_polish("um hello", &settings, None, None),
             PolishDecision::Skipped("polish is off for this app type")
         ));
     }

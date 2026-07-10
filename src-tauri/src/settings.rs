@@ -109,6 +109,12 @@ pub struct Settings {
     /// off and have no entry.
     #[serde(default)]
     pub polish_tones: HashMap<String, String>,
+    /// Context awareness: read text near the cursor and on the active window
+    /// via Accessibility to improve name/term accuracy (never password
+    /// fields, never password managers, never persisted). Off-device only as
+    /// part of AI polish, and only when that is also enabled.
+    #[serde(default)]
+    pub context_awareness: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -170,6 +176,7 @@ impl Default for Settings {
             fn_push_to_talk: false,
             polish_enabled: false,
             polish_tones: HashMap::new(),
+            context_awareness: false,
         }
     }
 }
@@ -234,6 +241,22 @@ impl Settings {
         self.transcription_location != next.transcription_location
             || self.model != next.model
             || self.use_gpu != next.use_gpu
+    }
+
+    /// A session-scoped copy of these settings with screen-harvested terms
+    /// merged into the vocabulary hints. The harvest is never persisted —
+    /// this clone lives only as long as the recording session; user-authored
+    /// hints keep priority under the normalization cap.
+    pub fn with_session_vocabulary(&self, harvested: Vec<String>) -> Settings {
+        if harvested.is_empty() {
+            return self.clone();
+        }
+        let mut merged = self.vocabulary_hints.clone();
+        merged.extend(harvested);
+        Settings {
+            vocabulary_hints: normalize_vocabulary_hints(merged),
+            ..self.clone()
+        }
     }
 
     pub fn whisper_initial_prompt(&self) -> Option<String> {
