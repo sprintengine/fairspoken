@@ -361,9 +361,15 @@ function waitForPaint(): Promise<void> {
 }
 
 function showCopiedStatus(): void {
-  // The polished state carries the undo affordance; the plain Copied flash
-  // must not replace it (both fire for the same dictation).
-  if (polishUndoOffer !== null) return;
+  // The polished state carries the undo affordance instead of the Copied
+  // flash — but this function is the success path's ONLY transition out of
+  // "transcribing", and the history event that sets the offer arrives
+  // BEFORE the stop invoke resolves. So the offer must still complete the
+  // idle transition here, or the pill wedges in "Transcribing" forever.
+  if (polishUndoOffer !== null) {
+    setState("idle", "AI polished");
+    return;
+  }
   if (copiedStatusTimer !== null) {
     clearTimeout(copiedStatusTimer);
   }

@@ -735,12 +735,6 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         return Err("Recording already in progress".to_string());
     }
 
-    // Zero-edit metric signal: a recording starting right after a short
-    // dictation is treated as the user scrapping it and re-dictating.
-    if let Ok(mut usage_stats) = services.usage_stats.lock() {
-        let _ = usage_stats.note_recording_started(current_epoch_seconds());
-    }
-
     let settings = services
         .settings
         .lock()
@@ -863,6 +857,14 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
     // click never lies about recording being live.
     if settings.interaction_sounds {
         play_interaction_sound(InteractionSound::RecordingStart);
+    }
+
+    // Zero-edit metric signal: a recording starting right after a short
+    // dictation is treated as the user scrapping it and re-dictating. Fired
+    // only now that capture is confirmed live — a failed start (mic missing,
+    // host down) is not a re-dictation.
+    if let Ok(mut usage_stats) = services.usage_stats.lock() {
+        let _ = usage_stats.note_recording_started(current_epoch_seconds());
     }
 
     let generation = services.recording_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1107,7 +1109,12 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             location: location_id(settings.transcription_location).to_string(),
             duration_seconds: stats.duration_seconds,
             polished,
-            raw_text: polished.then(|| raw_transcript.clone()),
+            // "Undo AI edit" must yield what the user would have gotten with
+            // polish OFF — the raw transcript WITH their deterministic rules
+            // applied — not the bare ASR output (which would silently undo
+            // corrections the AI never made).
+            raw_text: polished
+                .then(|| apply_transcript_post_processing(&raw_transcript, &settings).text),
         })?;
 
     #[cfg(target_os = "macos")]
