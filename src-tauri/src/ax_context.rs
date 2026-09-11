@@ -1,4 +1,4 @@
-//! Platform-neutral half of context awareness (`backlog/context-awareness-ax.md`):
+//! Platform-neutral half of context awareness:
 //! caret-aware casing/spacing, on-screen vocabulary extraction, and the
 //! budgeted tree walk. All pure logic — the macOS Accessibility reads live in
 //! `macos_ax.rs` and feed these functions, which keeps every rule unit-testable

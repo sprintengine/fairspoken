@@ -16,7 +16,7 @@ const WEEK_DAYS: u64 = 7;
 // comparison against it would be invented math.
 const CLOUD_TRANSCRIPTION_USD_PER_MINUTE: f64 = 0.006;
 
-// ── Zero-edit metric (backlog/zero-edit-metric.md) ──────────────────────
+// ── Zero-edit metric ──────────────────────────────────────────────
 // A dictation counts as "edited" when a correction signal lands within
 // EDIT_WINDOW of its completion: pill Undo / history Copy-original, history
 // delete, a new correction/dictionary entry, or a quick re-dictation. The

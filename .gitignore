@@ -24,8 +24,21 @@ pnpm-debug.log*
 # Local MCP/browser automation artifacts
 .playwright-mcp/
 
-# Switchboard runtime state
-.multi-code/switchboard/
+# Coding-agent and dev-tool state (per-user, often machine-specific paths)
+.agents/
+.claude/
+.codex/
+.cursor/
+.gemini/
+.grok/
+.opencode/
+.windsurf/
+.aider*
+CLAUDE.local.md
+
+# SprintEngine Studio / Multicode workspace state (backlog, sprint runs, hooks)
+.multi-code/
+.multicode/
 
 # OS and editor files
 .DS_Store

@@ -49,3 +49,51 @@ jobs:
 
       - name: Compile-check Whisper feature
         run: cargo build --manifest-path src-tauri/Cargo.toml --features whisper
+
+  macos:
+    name: Build & test (macOS)
+    # macOS is the primary platform, and the Accessibility / insertion code
+    # (macos_ax.rs, objc2) only compiles here — the Linux job never sees it.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - name: Build backend (default — Parakeet)
+        run: cargo build --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Test backend (default — Parakeet)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  licenses:
+    name: Dependency licenses
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Rust dependency licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check licenses

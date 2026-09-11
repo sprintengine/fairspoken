@@ -2,7 +2,8 @@
   "name": "multivoice-tauri",
   "private": true,
   "version": "0.1.0",
-  "description": "Lightweight Tauri/Rust rebuild of Multivoice desktop dictation",
+  "description": "Fast, private, local-first desktop dictation",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

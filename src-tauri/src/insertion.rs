@@ -1,4 +1,4 @@
-//! Insertion tier selection (backlog/insertion-three-tier.md — the VoiceInk
+//! Insertion tier selection (the VoiceInk
 //! pattern): AX direct insertion → synthetic ⌘V → AppleScript keystroke.
 //!
 //! The dangerous failure mode is DOUBLE insertion (tier 1 "fails", we fall

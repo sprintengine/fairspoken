@@ -1,72 +1,86 @@
-# Multivoice Tauri
+# MultiVoice
 
-Standalone Tauri/Rust rebuild of Multivoice desktop dictation.
+Fast, private, local-first desktop dictation. Press a shortcut, speak, and the
+text lands in whatever app you're typing in.
 
-This app is intentionally separate from the Electron app. The goal is a lighter cross-platform package with a Tauri WebView UI and native Rust services for audio capture, model management, local speech-to-text transcription, settings, and clipboard writes.
+MultiVoice transcribes **on your machine** by default with NVIDIA's Parakeet
+TDT model: no account, no network, and no audio ever leaves your computer. On
+Apple Silicon a typical dictation is transcribed in a few hundred milliseconds.
 
-The default (and only, in a default build) engine is NVIDIA **Parakeet TDT 0.6B v3**, run in-process via `parakeet-rs` (ONNX Runtime). The previous whisper.cpp engine is now opt-in behind the `whisper` Cargo feature.
+If you'd rather not spend local CPU/RAM, or want the extra features below,
+there is an optional hosted service, **MultiVoice Cloud**, that you can sign in
+to and pay for with credits. It is off by default and the app is fully usable
+without it.
 
-## Current State
+## Features
 
-- Tauri v2 vanilla TypeScript scaffold is created.
-- The starter demo has been replaced with a compact Multivoice recorder shell.
-- Native CPAL capture is wired for the default microphone.
-- Recording has too-short and silence guards before transcription.
-- Parakeet TDT is the default local engine, loaded from its ONNX model directory via `parakeet-rs`.
-- whisper.cpp inference remains available as an opt-in engine: build with `--features whisper` (and `cuda`/`vulkan` for non-Mac GPU backends; macOS uses Metal + flash attention automatically).
-- Model preparation downloads the Parakeet ONNX files (or, for whisper builds, ggml models from the whisper.cpp Hugging Face repository) into the model cache.
-- Settings persist to the OS app data directory.
-- Clipboard writes are verified after transcription.
-- Remote transcription can stream microphone audio to a standalone Rust host.
-- Windows release build succeeds and produces MSI and NSIS installers.
+- **Local transcription** with Parakeet TDT 0.6B v3 (ONNX Runtime, in-process).
+  Whisper (whisper.cpp) is available as an opt-in build feature.
+- **Insert anywhere**: text goes straight into the focused app (Accessibility
+  insert → ⌘V → AppleScript fallback), with your clipboard as a backup.
+- **Dictionary and snippets**: custom corrections and trigger phrases
+  ("my email" → your address), applied after transcription.
+- **History and notes**: recent transcripts, copy-again, and a notes view.
+- **Remote host**: run the bundled `transcription-host` on another machine
+  (e.g. a Mac mini) and stream audio to it over your own network.
+- **MultiVoice Cloud (optional, paid)**: hosted transcription, AI polish
+  (filler-word and self-correction cleanup with one-click "Undo AI edit"), and
+  app-aware tone. Polish and context awareness are off unless you turn them on.
 
-## Development
+## Install
 
-Install Rust and the Tauri prerequisites for your OS before running desktop commands.
-A `--features whisper` build additionally needs `libclang` and `cmake` available (whisper.cpp is compiled from source); the default Parakeet build does not.
+Pre-built releases are published on the
+[Releases page](https://github.com/sprintengine/multivoice-tauri/releases).
+macOS is the primary platform; Windows and Linux builds are produced by CI and
+are less tested.
+
+On macOS, MultiVoice needs **Microphone** access, and **Accessibility** access
+to insert text into other apps.
+
+## Build from source
+
+Prerequisites: Node 22+, a stable Rust toolchain, and the
+[Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 
 ```bash
 npm install
-npm run build
-npm run tauri dev
+npm run tauri dev      # run in development
+npm run tauri build    # produce an installer in src-tauri/target/release/bundle
 ```
 
-The model cache defaults to:
+The first launch downloads the Parakeet model (~2.5 GB) into the model cache.
 
-- Windows: `%LOCALAPPDATA%/Multivoice Tauri/models`
-- Linux/macOS-style shells: `$HOME/.local/share/multivoice-tauri/models`
-
-For isolated tests or development sessions, override paths with:
-
-- `MULTIVOICE_TAURI_MODEL_DIR`
-- `MULTIVOICE_TAURI_SETTINGS_PATH`
-
-Useful verification commands:
+Optional Whisper engine (needs `cmake` and `libclang`):
 
 ```bash
-npm run build
-cargo test
-cargo test --features whisper downloads_tiny_model -- --ignored
-npm run tauri build
+npm run tauri build -- --features whisper
 ```
 
-## Remote Transcription Host
+Useful environment variables:
 
-Start the standalone host from `src-tauri`:
+| Variable | Purpose |
+| --- | --- |
+| `MULTIVOICE_TAURI_MODEL_DIR` | Override the model cache directory |
+| `MULTIVOICE_TAURI_SETTINGS_PATH` | Override the settings file location |
+| `MULTIVOICE_CLOUD_URL` | Point cloud mode at a different endpoint (compile time or runtime) |
+
+## Remote transcription host
+
+Run the standalone host on the machine that should do the transcribing:
 
 ```bash
-cargo run --bin transcription-host
+cargo run --manifest-path src-tauri/Cargo.toml --release --bin transcription-host
 ```
 
-By default it listens on `127.0.0.1:48173`. Override the bind address or require a bearer token with:
+It listens on `127.0.0.1:48173` by default. To accept connections from other
+machines, bind to all interfaces and require a token:
 
 ```bash
-MULTIVOICE_HOST_ADDR=0.0.0.0:48173 MULTIVOICE_HOST_TOKEN=secret cargo run --bin transcription-host
+MULTIVOICE_HOST_ADDR=0.0.0.0:48173 MULTIVOICE_HOST_TOKEN=<choose-a-token> \
+  cargo run --manifest-path src-tauri/Cargo.toml --release --bin transcription-host
 ```
 
-The host accepts multiple active client streams and queues completed recordings
-for one or more transcription workers. Defaults are conservative for a
-single-purpose local server:
+Capacity settings (defaults shown):
 
 ```bash
 MULTIVOICE_HOST_WORKERS=1
@@ -75,16 +89,28 @@ MULTIVOICE_HOST_MAX_ACTIVE_STREAMS=4
 MULTIVOICE_HOST_MAX_RECORDING_SECONDS=120
 ```
 
-Streaming clients keep the transcription request open until the queued job
-finishes and the host returns one final JSON transcript. Connection setup still
-uses the configured remote timeout, but queued streams are not cut off by a
-fixed read timeout while waiting for a worker.
+In the app's settings, set **Transcription location** to **Remote host** and
+enter the host URL and token. The client streams mono PCM while you record and
+the host returns the final transcript.
 
-In the desktop settings, set `Transcription` location to `Remote host` and enter the host URL. The client streams mono PCM frames while recording; the host transcribes with its operator-configured model and returns the final transcript for clipboard copy.
+## Privacy
 
-For a dedicated Mac mini setup and benchmark checklist, see
-`docs/mac-mini-transcription-host.md`.
+- **Local mode** (the default): audio and text stay on your computer.
+- **Remote host**: audio goes only to the host you configure.
+- **MultiVoice Cloud**: audio (for cloud transcription) and transcript text
+  (for AI polish) are sent to the MultiVoice Cloud service for processing and
+  are not stored.
+- **Context awareness** (off by default) reads text near your cursor through
+  the macOS Accessibility API, locally, to improve casing and vocabulary.
+  Password fields are never read.
 
-## Plan
+## Contributing
 
-See `docs/implementation-plan.md`.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues
+privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+MultiVoice is released under the [MIT License](LICENSE). The speech models it
+downloads are licensed separately. Parakeet TDT is © NVIDIA and licensed
+CC BY 4.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

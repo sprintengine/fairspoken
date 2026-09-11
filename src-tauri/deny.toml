@@ -1,0 +1,27 @@
+# cargo-deny configuration. CI runs `cargo deny check licenses`; every Rust
+# dependency (direct or transitive) must carry a license on this allow list.
+# Adding a license here is a deliberate decision: it has to be compatible with
+# distributing MultiVoice under MIT.
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CDLA-Permissive-2.0",
+    # File-level copyleft only (e.g. cssparser/selectors via Tauri): unmodified
+    # MPL files may ship inside an MIT-licensed application.
+    "MPL-2.0",
+]

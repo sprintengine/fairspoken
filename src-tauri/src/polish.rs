@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn response_deserializes_from_the_worker_shape() {
-        // Copied from the Worker contract (cloud/worker/README.md).
+        // Copied from the MultiVoice Cloud Worker's /v1/polish contract.
         let body = r#"{
             "text": "cleaned transcript",
             "changed": true,

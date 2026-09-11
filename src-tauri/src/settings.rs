@@ -17,11 +17,14 @@ pub enum TranscriptionLocation {
     Cloud,
 }
 
-/// Production MultiVoice Cloud endpoint. Not user-editable: users configure
-/// only their token. Dev builds can point elsewhere via `MULTIVOICE_CLOUD_URL`.
-/// Update this constant when the Worker gets its real production hostname
-/// (see cloud/worker/README.md).
-const DEFAULT_CLOUD_URL: &str = "https://multivoice-cloud.multicodelabs.workers.dev";
+/// MultiVoice Cloud endpoint. Not user-editable: users configure only their
+/// token. Forks and self-hosters bake in their own endpoint by setting
+/// `MULTIVOICE_CLOUD_URL` at compile time; the same variable at runtime
+/// overrides it again (dev builds).
+const DEFAULT_CLOUD_URL: &str = match option_env!("MULTIVOICE_CLOUD_URL") {
+    Some(url) => url,
+    None => "https://multivoice-cloud.multicodelabs.workers.dev",
+};
 
 pub fn cloud_url() -> String {
     env::var("MULTIVOICE_CLOUD_URL")

@@ -669,7 +669,7 @@ fn copy_transcript_history_item(
 /// Copies the pre-polish transcript of a polished dictation to the clipboard
 /// (the pill's "Undo AI edit" and history's "Copy original"). Undo is a copy,
 /// not an in-place replacement: synthetic ⌘Z+⌘V and AX replacement were both
-/// rejected as fragile (see backlog/client-polish-undo.md).
+/// rejected as fragile.
 #[tauri::command]
 fn copy_original_transcript(
     app: AppHandle,

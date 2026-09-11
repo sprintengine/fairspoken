@@ -3,7 +3,7 @@
 //! No OCR, no screenshots — the AX tree only, under the same Accessibility
 //! permission the paste path already holds.
 //!
-//! Privacy invariants (backlog/context-awareness-ax.md):
+//! Privacy invariants:
 //! - reads are local and session-only; nothing is persisted;
 //! - secure fields (`AXSecureTextField`) are never read or descended into;
 //! - password managers are skipped entirely by bundle id;

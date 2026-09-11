@@ -1,8 +1,10 @@
 [package]
 name = "multivoice-tauri"
 version = "0.1.0"
-description = "Lightweight Tauri/Rust rebuild of Multivoice desktop dictation"
+description = "Fast, private, local-first desktop dictation"
 authors = ["Multicode Labs"]
+license = "MIT"
+repository = "https://github.com/sprintengine/multivoice-tauri"
 edition = "2021"
 default-run = "multivoice-tauri"
 
