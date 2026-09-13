@@ -15,7 +15,7 @@ without it.
 ## Features
 
 - **Local transcription** with Parakeet TDT 0.6B v3 (ONNX Runtime, in-process).
-  Whisper (whisper.cpp) is available as an opt-in build feature.
+  Whisper (whisper.cpp) is also included; choose its variant in Models.
 - **Insert anywhere**: text goes straight into the focused app (Accessibility
   insert → ⌘V → AppleScript fallback), with your clipboard as a backup.
 - **Dictionary and snippets**: custom corrections and trigger phrases
@@ -39,7 +39,7 @@ to insert text into other apps.
 
 ## Build from source
 
-Prerequisites: Node 22+, a stable Rust toolchain, and the
+Prerequisites: Node 22+, a stable Rust toolchain, `cmake`, `libclang`, and the
 [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 
 ```bash
@@ -50,10 +50,10 @@ npm run tauri build    # produce an installer in src-tauri/target/release/bundle
 
 The first launch downloads the Parakeet model (~2.5 GB) into the model cache.
 
-Optional Whisper engine (needs `cmake` and `libclang`):
+Smaller Parakeet-only build (excludes the Whisper engine):
 
 ```bash
-npm run tauri build -- --features whisper
+npm run tauri build -- --no-default-features
 ```
 
 Useful environment variables:

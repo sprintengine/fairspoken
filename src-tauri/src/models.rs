@@ -27,8 +27,7 @@ const PARAKEET_FILES: [&str; 4] = [
 ];
 
 /// The set of speech-to-text models the app can run. Parakeet is the default
-/// and the only engine compiled into a default build; the Whisper family is
-/// only available when the `whisper` Cargo feature is enabled.
+/// model. Default builds include Whisper too; `--no-default-features` excludes it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SttModel {
     Parakeet,
@@ -92,8 +91,8 @@ impl<'de> Deserialize<'de> for SttModel {
 
 /// The Whisper model family. Kept compiled even without the `whisper` feature
 /// (it is pure metadata with no dependencies); it is only *reachable* through
-/// `SttModel::Whisper`, which is feature-gated, so a default build can never
-/// select it.
+/// `SttModel::Whisper`, which is feature-gated, so a Parakeet-only build can never
+/// select it without that feature.
 #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

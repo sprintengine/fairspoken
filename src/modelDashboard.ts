@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import "./modelDashboard.css";
 import { createPublisherIcon } from "./publisherIcons";
@@ -16,6 +17,9 @@ let speech: SpeechModel[] = [];
 let download: Download | null = null;
 let speechDownload: string | null = null;
 let loading = false;
+let reloadRequested = false;
+const variants = new Map<string, string>();
+const speechProgress = new Map<string, { percentage: number; message: string; done: boolean }>();
 const rows = new Map<string, { status: HTMLElement; progress: HTMLProgressElement }>();
 function say(message: string, error = false): void { feedback.textContent = message; feedback.dataset.error = String(error); }
 function button(label: string, action: () => Promise<unknown>, disabled = false): HTMLButtonElement {
@@ -32,7 +36,7 @@ async function choose(patch: Partial<Settings>): Promise<void> {
 }
 const size = (bytes: number): string => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
 function row(id: string, title: string, publisher: string, detail: string, status: string): { element: HTMLElement; actions: HTMLElement } {
-  const element = document.createElement("div"); element.className = "ds-list-row model-row";
+  const element = document.createElement("div"); element.className = "ds-list-row model-row"; element.id = `model-${id}`;
   const icon = createPublisherIcon(publisher);
   const content = document.createElement("div"); content.className = "ds-list-row-content";
   const name = document.createElement("div"); name.className = "ds-list-row-title"; name.textContent = title;
@@ -54,19 +58,38 @@ function progressUpdate(value: Download): void {
   }
 }
 function render(): void {
+  const focusedId = root.contains(document.activeElement) ? (document.activeElement as HTMLElement).id : "";
   rows.clear();
   root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "Available speech models for this device." : `Currently using ${settings.transcriptionLocation === "cloud" ? "MultiVoice Cloud" : "your remote host"}. Choose Use to switch to local dictation.`;
   const speechList = root.querySelector("#dictationModels")!; speechList.replaceChildren();
-  for (const m of speech) {
-    const parakeet = m.model.startsWith("parakeet");
+  for (const family of ["parakeet", "whisper"]) {
+    const options = speech.filter(m => m.model.startsWith("parakeet") === (family === "parakeet"));
+    if (!options.length) continue;
+    const preferred = variants.get(family) ?? options.find(m => m.model === settings.model)?.model ?? options[0].model;
+    const m = options.find(m => m.model === preferred) ?? options[0];
+    variants.set(family, m.model);
+    const parakeet = family === "parakeet";
     const selected = settings.transcriptionLocation === "local" && settings.model === m.model;
-    const r = row(m.model, parakeet ? "Parakeet TDT 0.6B v3" : `Whisper ${m.model}`, parakeet ? "NVIDIA" : "OpenAI", parakeet ? "NVIDIA · Multilingual speech recognition · ONNX" : "OpenAI · Speech recognition · whisper.cpp", selected ? "Selected" : m.cached ? "Downloaded" : "Available to download");
-    r.actions.append(button(m.cached ? (selected ? "Selected" : "Use") : "Download", async () => {
+    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? "NVIDIA" : "OpenAI", parakeet ? "NVIDIA · Recommended · 25 languages" : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
+    r.element.classList.add("model-family"); r.element.id = `family-${family}`;
+    const label = document.createElement("label"); label.className = "model-variant"; label.textContent = "Variant";
+    const select = document.createElement("select"); select.id = `variant-${family}`; select.setAttribute("aria-label", `${parakeet ? "Parakeet" : "Whisper"} variant`);
+    for (const option of options) {
+      const node = document.createElement("option"); node.value = option.model;
+      node.textContent = `${parakeet ? (option.model.endsWith("-v2") ? "0.6B v2 · English" : "0.6B v3 · Recommended") : option.model}${option.cached ? " · Downloaded" : ""}${settings.model === option.model && settings.transcriptionLocation === "local" ? " · Selected" : ""}`;
+      select.append(node);
+    }
+    select.value = m.model;
+    select.addEventListener("change", () => { variants.set(family, select.value); render(); root.querySelector<HTMLSelectElement>(`#variant-${family}`)?.focus(); });
+    label.append(select); r.element.querySelector(".ds-list-row-content")!.append(label);
+    r.actions.append(button(m.cached ? (selected ? "Selected" : "Use") : speechDownload === m.model ? "Downloading…" : "Download", async () => {
       if (m.cached) return choose({ model: m.model, transcriptionLocation: "local" });
       speechDownload = m.model; render();
       try { await invoke("begin_prepare_transcription_model", { request: { model: m.model } }); }
       catch (e) { speechDownload = null; render(); throw e; }
-    }, selected || speechDownload !== null));
+    }, (selected && m.cached) || speechDownload !== null));
+    const progress = speechProgress.get(m.model); const current = rows.get(m.model)!;
+    if (progress && !progress.done) { current.status.textContent = progress.message; current.progress.hidden = false; current.progress.value = progress.percentage; }
     speechList.append(r.element);
   }
   root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Polish is off. Dictionary corrections still apply." : settings.polishProvider === "local" ? "Local cleanup stays on this device." : "Cloud cleanup sends text to your configured service.";
@@ -89,9 +112,10 @@ function render(): void {
     polishList.append(r.element);
   }
   if (download) progressUpdate(download);
+  if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
 }
 async function load(refresh = false): Promise<void> {
-  if (loading) return;
+  if (loading) { reloadRequested = true; return; }
   loading = true;
   try {
     const values = await Promise.all([invoke<Settings>("get_settings"), invoke<Catalog>("get_local_model_catalog", { refresh }), invoke<SpeechModel[]>("get_dictation_models")]);
@@ -102,7 +126,10 @@ async function load(refresh = false): Promise<void> {
     }
     download = catalog.download; render();
     if (refresh) say(catalog.metadataError ?? "Compatible model information refreshed from Hugging Face.", !!catalog.metadataError);
-  } finally { loading = false; }
+  } finally {
+    loading = false;
+    if (reloadRequested) { reloadRequested = false; void load().catch(e => say(String(e), true)); }
+  }
 }
 root.querySelector<HTMLButtonElement>("#refreshModels")!.addEventListener("click", event => {
   const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
@@ -114,7 +141,7 @@ void listen<Download>("local-model-download", event => {
   if (["error", "cancelled"].includes(event.payload.stage)) say(event.payload.message, event.payload.stage === "error");
 }).catch(e => say(String(e), true));
 void listen<{ model: string; percentage: number; message: string; done: boolean; error?: string }>("model-prepare-progress", event => {
-  const e = event.payload; const row = rows.get(e.model);
+  const e = event.payload; speechProgress.set(e.model, e); if (!e.done) speechDownload = e.model; const row = rows.get(e.model);
   if (row) { row.status.textContent = e.message; row.progress.hidden = e.done; row.progress.value = e.percentage; }
   if (e.done) { speechDownload = null; if (e.error) say(e.error, true); void load().catch(e => say(String(e), true)); }
 }).catch(e => say(String(e), true));
@@ -125,3 +152,48 @@ window.setInterval(() => {
   void load().catch(() => {});
 }, 5000);
 void load().catch(e => say(String(e), true));
+
+// Hub discovery is separate from our deliberately small, tested runtime catalog.
+type HubModel = { id: string; downloads: number; likes: number; pipelineTag: string | null; libraryName: string | null; languages: string[]; license: string | null; gated: boolean; source: string };
+const searchInput = root.querySelector<HTMLInputElement>("#modelSearch")!;
+const searchStatus = root.querySelector<HTMLElement>("#modelSearchStatus")!;
+const searchResults = root.querySelector<HTMLElement>("#modelSearchResults")!;
+let searchRevision = 0;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+function supportedFamily(id: string): string | null {
+  if (id === "istupakov/parakeet-tdt-0.6b-v3-onnx") return "parakeet";
+  if (id === "ggerganov/whisper.cpp" && speech.some(m => !m.model.startsWith("parakeet"))) return "whisper";
+  return null;
+}
+async function searchHub(query: string, revision: number): Promise<void> {
+  searchStatus.textContent = "Searching Hugging Face…"; searchResults.replaceChildren(); searchResults.setAttribute("aria-busy", "true");
+  try {
+    const result = await invoke<{ models: HubModel[]; cached: boolean }>("search_hugging_face_models", { query });
+    if (revision !== searchRevision) return;
+    searchStatus.textContent = result.models.length ? `${result.models.length} results${result.cached ? " · Cached" : ""}. Only verified runtime formats can be downloaded in MultiVoice.` : "No models found. Try a different name or publisher.";
+    for (const model of result.models) {
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(model.id)) continue;
+      const item = document.createElement("div"); item.className = "model-search-result";
+      const content = document.createElement("div");
+      const title = document.createElement("strong"); title.textContent = model.id;
+      const detail = document.createElement("p"); detail.className = "model-status";
+      detail.textContent = [model.pipelineTag, model.libraryName, `${(model.downloads ?? 0).toLocaleString()} downloads`, model.license, model.gated ? "Access approval required" : null].filter(Boolean).join(" · ");
+      const compatibility = document.createElement("p"); compatibility.className = "model-status";
+      const family = supportedFamily(model.id);
+      const polish = catalog?.polish.find(m => m.supported && m.source === `https://huggingface.co/${model.id}`);
+      compatibility.textContent = family || polish ? "Compatible variants available above" : "Not supported yet";
+      content.append(title, detail, compatibility);
+      const actions = document.createElement("div"); actions.className = "models-actions";
+      if (family || polish) actions.append(button(family ? "Choose variant" : "Show model", async () => { const target = family ? document.getElementById(`variant-${family}`) : document.getElementById(`model-${polish!.id}`)?.querySelector("button"); target?.scrollIntoView({ block: "center", behavior: "smooth" }); target?.focus({ preventScroll: true }); }));
+      actions.append(button("Model page ↗", () => openUrl(`https://huggingface.co/${model.id}`)));
+      item.append(content, actions); searchResults.append(item);
+    }
+  } catch (error) { if (revision === searchRevision) searchStatus.textContent = `Search unavailable: ${String(error)}. Edit your search to try again.`; }
+  finally { if (revision === searchRevision) searchResults.setAttribute("aria-busy", "false"); }
+}
+searchInput.addEventListener("input", () => {
+  const revision = ++searchRevision; clearTimeout(searchTimer); const query = searchInput.value.trim();
+  searchResults.replaceChildren(); searchResults.setAttribute("aria-busy", "false");
+  searchStatus.textContent = query ? "Waiting to search…" : "Search model names or publishers on Hugging Face.";
+  if (query) searchTimer = setTimeout(() => { void searchHub(query, revision); }, 350);
+});

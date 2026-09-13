@@ -26,13 +26,13 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal = "0.17.3"
-# Parakeet is the default (and only) engine compiled by default. It runs NVIDIA
+# Parakeet remains the default model. Both speech engines ship by default.
+# It runs NVIDIA
 # Parakeet TDT in-process via ONNX Runtime (pulled in transitively as the `ort`
 # crate), mirroring how `whisper-rs` wraps whisper.cpp.
 parakeet-rs = "0.3.6"
-# Whisper is opt-in: build with `--features whisper` to compile the whisper.cpp
-# engine back in. Kept optional so the default build carries no whisper.cpp /
-# GGML toolchain dependency.
+# Whisper ships by default. `--no-default-features` produces a smaller
+# Parakeet-only build without the whisper.cpp/GGML toolchain.
 whisper-rs = { version = "0.16.0", optional = true }
 arboard = "3.6.1"
 sha1 = "0.11.0"
@@ -66,9 +66,9 @@ features = ["metal"]
 optional = true
 
 [features]
-# Default build = Parakeet only. No Whisper, no whisper.cpp toolchain.
-default = []
-# Opt back into the whisper.cpp engine and the Whisper model family.
+# Ship both selectable speech families; the selected default stays Parakeet.
+default = ["whisper"]
+# Compile the whisper.cpp engine and Whisper model family.
 whisper = ["dep:whisper-rs"]
 # GPU backends for the (optional) Whisper engine on a non-Mac transcription
 # host. Build-time choices: `cuda` needs the NVIDIA CUDA Toolkit on the build

@@ -145,6 +145,15 @@
               <p class="models-description">With local dictation, polish cleans up live previews, then makes a final pass before copying. Remote dictation receives the final pass when its transcript arrives. Cleanup models load as you dictate and unload after five minutes idle. Memory figures are estimates. Very long dictations keep the complete original text when they exceed the cleanup limit.</p>
             </div>
           </section>
+          <section class="ds-section" aria-labelledby="modelSearchTitle">
+            <div class="ds-section-header"><h2 class="ds-section-title" id="modelSearchTitle">Explore Hugging Face</h2></div>
+            <div class="ds-section-body">
+              <label class="model-search-label" for="modelSearch">Find models</label>
+              <input id="modelSearch" class="model-search-input" type="search" placeholder="Search Parakeet, Whisper, Qwen…" autocomplete="off" maxlength="160" aria-describedby="modelSearchStatus" />
+              <p id="modelSearchStatus" class="models-description" role="status" aria-live="polite">Search model names or publishers on Hugging Face.</p>
+              <div id="modelSearchResults" aria-busy="false"></div>
+            </div>
+          </section>
         </section>
 
         <!-- ════ SETTINGS (driven by settings.ts) ════ -->
