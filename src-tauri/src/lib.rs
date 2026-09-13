@@ -1568,7 +1568,12 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     cursor_guard.keep_visible = true;
     let cursor_app = app.clone();
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(1200));
+        // Give the final edits time to settle, and let the reader inspect older
+        // text without the window disappearing underneath the pointer.
+        thread::sleep(Duration::from_secs(5));
+        while cursor_preview::is_interacting(cursor_session) {
+            thread::sleep(Duration::from_millis(200));
+        }
         hide_cursor_session(&cursor_app, cursor_session);
     });
     Ok(transcript)
@@ -2148,6 +2153,22 @@ pub(crate) fn emit_backend_event(app: &AppHandle, level: &'static str, message: 
 }
 
 #[tauri::command]
+fn set_cursor_preview_interacting(
+    session_id: u64,
+    active: bool,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    let snapshot = services
+        .cursor_snapshot
+        .lock()
+        .map_err(|_| "Cursor preview lock failed".to_string())?;
+    if snapshot.session_id == session_id && snapshot.phase != live_preview::Phase::Idle {
+        cursor_preview::set_interacting(session_id, active);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_cursor_preview_state(
     services: State<'_, AppServices>,
 ) -> Result<live_preview::Snapshot, String> {
@@ -2476,6 +2497,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_cursor_preview_state,
+            set_cursor_preview_interacting,
             get_note_debug_status,
             set_note_debug_capture,
             get_note_metadata,
