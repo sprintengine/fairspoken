@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { mountMonthlyUsage, type MonthlyBucket } from "./monthlyUsage";
 
 // Renders the Home screen from the persistent usage_stats aggregate. Numbers
 // here are real: time saved compares typing the dictated words at 40 wpm
@@ -30,6 +31,8 @@ interface UsageStatsSummary {
   thisWeekWords: number;
   lastWeekWords: number;
   week: WeeklyBucket[];
+  months: MonthlyBucket[];
+  unallocatedWords: number;
 }
 
 interface TranscriptHistoryItem {
@@ -61,6 +64,7 @@ const statZeroEditMeta = byId("statZeroEditMeta");
 const statChart = byId("statChart");
 const statRecent = byId("statRecent");
 const statViewAll = document.getElementById("statViewAll");
+const renderMonthlyUsage = mountMonthlyUsage(byId("monthlyUsage"));
 
 function byId(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -112,6 +116,7 @@ function renderChart(week: WeeklyBucket[]): void {
 }
 
 function renderStats(summary: UsageStatsSummary): void {
+  renderMonthlyUsage(summary);
   if (!summary.hasData) {
     homeEmpty.hidden = false;
     homeStats.hidden = true;
@@ -220,6 +225,7 @@ async function refresh(): Promise<void> {
     // No stats available yet (or running outside the app): show the welcome
     // state rather than inventing numbers.
     renderStats(emptyStats());
+    renderMonthlyUsage(null);
     return;
   }
 
@@ -252,6 +258,8 @@ function emptyStats(): UsageStatsSummary {
     thisWeekWords: 0,
     lastWeekWords: 0,
     week: [],
+    months: [],
+    unallocatedWords: 0,
   };
 }
 
@@ -274,3 +282,6 @@ void listen("usage-stats-updated", () => {
 });
 
 void refresh();
+
+// Refresh the current calendar month when returning to Home after a long session.
+document.querySelector('.nav-item[data-screen="home"]')?.addEventListener("click", () => { void refresh(); });

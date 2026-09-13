@@ -97,6 +97,15 @@ pub struct WeeklyBucket {
     pub is_today: bool,
 }
 
+/// UTC calendar month. Derived from durable daily aggregates, never notes/history.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlyBucket {
+    pub month: String,
+    pub words: u64,
+    pub is_current_month: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatsSummary {
@@ -128,6 +137,10 @@ pub struct UsageStatsSummary {
     pub this_week_words: u64,
     pub last_week_words: u64,
     pub week: Vec<WeeklyBucket>,
+    pub months: Vec<MonthlyBucket>,
+    /// Lifetime words without usable dates (legacy totals or future timestamps).
+    /// Keep them in the lifetime total rather than inventing a month for them.
+    pub unallocated_words: u64,
 }
 
 pub struct UsageStatsService {
@@ -306,7 +319,18 @@ impl UsageStatsService {
         }
         let payload = serde_json::to_string_pretty(&self.data)
             .map_err(|err| format!("Failed to serialize usage stats: {err}"))?;
-        fs::write(&self.path, payload).map_err(|err| format!("Failed to write usage stats: {err}"))
+        // Replace only a complete, flushed snapshot so interruption cannot leave
+        // the lifetime counters as truncated JSON. All writes use the service mutex.
+        let temporary = self.path.with_extension("json.tmp");
+        use std::io::Write;
+        let mut file = fs::File::create(&temporary)
+            .map_err(|err| format!("Failed to create usage stats snapshot: {err}"))?;
+        file.write_all(payload.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|err| format!("Failed to write usage stats snapshot: {err}"))?;
+        drop(file);
+        fs::rename(&temporary, &self.path)
+            .map_err(|err| format!("Failed to replace usage stats: {err}"))
     }
 }
 
@@ -380,7 +404,11 @@ fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
         .map(|offset| day_words(today.saturating_sub(offset)))
         .sum();
 
+    let months = monthly_buckets(data, today);
+    let dated_words: u64 = months.iter().map(|bucket| bucket.words).sum();
     UsageStatsSummary {
+        months,
+        unallocated_words: data.total_words.saturating_sub(dated_words),
         has_data: data.total_dictations > 0,
         zero_edit_rate_7d: zero_edit_rate(data, today, 7, |b| (b.completed, b.edited)),
         zero_edit_rate_30d: zero_edit_rate(data, today, 30, |b| (b.completed, b.edited)),
@@ -407,6 +435,49 @@ fn summarize(data: &UsageStatsData, now_epoch_secs: u64) -> UsageStatsSummary {
         last_week_words,
         week,
     }
+}
+
+/// Gregorian civil calendar conversion (400-year eras), not 30-day windows.
+/// Accept dates through 9999 only, bounding allocations if persisted data is bad.
+fn calendar_month(day: u64) -> Option<u32> {
+    if day > 2_932_896 {
+        return None;
+    } // 9999-12-31
+    let z = day + 719_468;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = year + u64::from(month <= 2);
+    Some((year * 12 + month - 1) as u32)
+}
+
+fn monthly_buckets(data: &UsageStatsData, today: u64) -> Vec<MonthlyBucket> {
+    let Some(current) = calendar_month(today) else {
+        return Vec::new();
+    };
+    let mut totals = BTreeMap::<u32, u64>::new();
+    for (&day, bucket) in &data.days {
+        // Existing buckets are the sole source: repeated loads do not migrate
+        // or count the capped/de-duplicated transcript history a second time.
+        if bucket.words == 0 || day > today {
+            continue;
+        }
+        if let Some(month) = calendar_month(day) {
+            *totals.entry(month).or_default() += bucket.words;
+        }
+    }
+    let first = totals.keys().next().copied().unwrap_or(current);
+    (first..=current)
+        .map(|month| MonthlyBucket {
+            month: format!("{:04}-{:02}", month / 12, month % 12 + 1),
+            words: totals.get(&month).copied().unwrap_or_default(),
+            is_current_month: month == current,
+        })
+        .collect()
 }
 
 /// Consecutive active days ending today — or yesterday, so a streak does not
@@ -834,5 +905,89 @@ mod tests {
         // 2021-01-01 was a Friday; that is day 18628 since the epoch.
         assert_eq!(weekday_label(18_628), "Fri");
         assert_eq!(weekday_label(0), "Thu");
+    }
+    #[test]
+    fn calendar_months_cover_leap_days_and_century_boundaries() {
+        assert_eq!(calendar_month(0), Some(1970 * 12));
+        assert_eq!(calendar_month(11016), Some(2000 * 12 + 1)); // leap Feb 29
+        assert_eq!(calendar_month(11017), Some(2000 * 12 + 2));
+        assert_eq!(calendar_month(19782), Some(2024 * 12 + 1)); // leap Feb 29
+        assert_eq!(calendar_month(19783), Some(2024 * 12 + 2));
+        assert_eq!(calendar_month(47540), Some(2100 * 12 + 1)); // non-leap Feb 28
+        assert_eq!(calendar_month(47541), Some(2100 * 12 + 2));
+        assert_eq!(calendar_month(u64::MAX), None);
+    }
+
+    #[test]
+    fn monthly_totals_fill_missing_months_and_keep_calendar_years_separate() {
+        // 2023-12-31, 2024-02-29, 2024-03-01
+        let data = data_with_days(&[(19722, 10), (19782, 20), (19783, 30)]);
+        let summary = summarize(&data, 19783 * SECONDS_PER_DAY);
+        assert_eq!(
+            summary
+                .months
+                .iter()
+                .map(|m| (m.month.as_str(), m.words))
+                .collect::<Vec<_>>(),
+            vec![
+                ("2023-12", 10),
+                ("2024-01", 0),
+                ("2024-02", 20),
+                ("2024-03", 30)
+            ]
+        );
+        assert!(summary.months.last().unwrap().is_current_month);
+        assert_eq!(summary.unallocated_words, 0);
+    }
+
+    #[test]
+    fn legacy_aggregate_loads_without_backfill_or_double_counting() {
+        let raw = r#"{"totalWords":75,"totalRecordingSeconds":12,"totalDictations":3,
+            "days":{"19782":{"words":25,"recordingSeconds":12,"dictations":1}}}"#;
+        let data: UsageStatsData = serde_json::from_str(raw).unwrap();
+        let first = summarize(&data, 19783 * SECONDS_PER_DAY);
+        let reloaded: UsageStatsData =
+            serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
+        assert_eq!(first, summarize(&reloaded, 19783 * SECONDS_PER_DAY));
+        assert_eq!(first.total_words, 75);
+        assert_eq!(first.unallocated_words, 50);
+        assert_eq!(first.months[0].words, 25);
+    }
+
+    #[test]
+    fn monthly_counts_survive_reload_and_recent_record_expiry() {
+        let path =
+            std::env::temp_dir().join(format!("monthly-stats-{}.json", uuid::Uuid::new_v4()));
+        let mut service = UsageStatsService {
+            data: UsageStatsData::default(),
+            path: path.clone(),
+        };
+        service.record(42, 12.0, 19782 * SECONDS_PER_DAY).unwrap();
+        service
+            .record_dictation_completed("old", false, 100, 19782 * SECONDS_PER_DAY)
+            .unwrap();
+        service
+            .record_dictation_completed("new", false, 100, 19900 * SECONDS_PER_DAY)
+            .unwrap();
+        assert_eq!(service.data.recent_dictations.len(), 1);
+        let reloaded: UsageStatsData =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let summary = summarize(&reloaded, 19900 * SECONDS_PER_DAY);
+        assert_eq!(summary.months[0].month, "2024-02");
+        assert_eq!(summary.months[0].words, 42);
+        assert_eq!(summary.total_words, 42);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn empty_and_future_only_data_never_fabricate_past_activity() {
+        let empty = summarize(&UsageStatsData::default(), 19783 * SECONDS_PER_DAY);
+        assert_eq!(empty.months.len(), 1);
+        assert_eq!(empty.months[0].words, 0);
+        let data = data_with_days(&[(19784, 12), (2_932_897, 7)]);
+        let future = summarize(&data, 19783 * SECONDS_PER_DAY);
+        assert_eq!(future.months.len(), 1);
+        assert_eq!(future.months[0].words, 0);
+        assert_eq!(future.unallocated_words, 19);
     }
 }

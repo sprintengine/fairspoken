@@ -1,0 +1,28 @@
+@import "./design-system/button.css";
+
+.monthly-usage {
+  margin-top: var(--sem-space-2xl);
+  padding: var(--sem-space-xl);
+  font-family: var(--sem-font-family-ui);
+  color: var(--sem-color-text-default);
+  border-top: 1px solid var(--sem-color-border-subtle);
+}
+.monthly-usage-header, .monthly-usage-ranges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sem-space-xs);
+}
+.monthly-usage-header { justify-content: space-between; gap: var(--sem-space-lg); }
+.monthly-usage h2 { margin: 0; font-size: var(--sem-font-size-body); font-weight: var(--sem-font-weight-emphasis); color: var(--sem-color-text-primary); }
+.monthly-usage-ranges button[aria-pressed="true"] { background: var(--sem-color-bg-selected); color: var(--sem-color-text-primary); }
+.monthly-usage-total { margin: var(--sem-space-sm) 0 var(--sem-space-xl); font-size: var(--sem-font-size-body); font-variant-numeric: tabular-nums; }
+.monthly-usage-scroll { overflow-x: auto; }
+.monthly-usage-scroll:focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
+.monthly-usage-bars { display: flex; list-style: none; padding: 0; margin: 0; gap: var(--sem-space-lg); }
+.monthly-usage-bars li { flex: 1 0 9ch; display: flex; flex-direction: column; gap: var(--sem-space-sm); text-align: center; font-size: var(--sem-font-size-meta); }
+.monthly-usage-count { font-variant-numeric: tabular-nums; color: var(--sem-color-text-primary); }
+/* The data area is a content measure, separate from control height tokens. */
+.monthly-usage-track { height: 10em; display: flex; align-items: end; border-bottom: 1px solid var(--sem-color-border-default); }
+.monthly-usage-bar { width: 100%; background: var(--sem-color-text-muted); }
+.monthly-usage-note { margin: var(--sem-space-lg) 0 0; font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); color: var(--sem-color-text-muted); }

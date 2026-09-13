@@ -1482,6 +1482,10 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         );
     }
 
+    // History notification precedes insertion and the stats write. Refresh
+    // dashboards only after this dictation is included in the durable totals.
+    let _ = app.emit("usage-stats-updated", ());
+
     // Save to the durable notes library (also best-effort), then notify the
     // home window so the Notes screen refreshes live.
     match save_note(services, transcript.clone(), stats.duration_seconds) {
