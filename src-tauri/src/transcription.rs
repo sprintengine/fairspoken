@@ -317,7 +317,7 @@ impl LazyTranscriber {
     fn get(&self) -> Result<&Arc<dyn ChunkTranscriber>, String> {
         self.loaded
             .get_or_init(|| match self.model {
-                SttModel::Parakeet => ParakeetTranscriber::load(&self.path)
+                SttModel::Parakeet | SttModel::ParakeetV2 => ParakeetTranscriber::load(&self.path)
                     .map(|m| Arc::new(m) as Arc<dyn ChunkTranscriber>),
                 #[cfg(feature = "whisper")]
                 SttModel::Whisper(_) => WhisperTranscriber::load(&self.path, self.use_gpu)

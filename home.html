@@ -132,12 +132,24 @@
         <section class="screen" id="screen-models" aria-label="Models">
           <div class="models-toolbar">
             <p>Choose what listens and what cleans up your words.</p>
-            <button class="ds-button ds-button--outline" id="refreshModels" type="button">Refresh from Hugging Face</button>
+            <button class="ds-button ds-button--outline" id="refreshModels" type="button">Refresh status</button>
           </div>
           <p id="modelFeedback" class="model-feedback" role="status" aria-live="polite"></p>
           <section class="ds-section" aria-labelledby="dictationModelsTitle">
             <div class="ds-section-header"><h2 class="ds-section-title" id="dictationModelsTitle">Dictation</h2></div>
             <div class="ds-section-body"><p class="models-description" id="dictationProvider"></p><div id="dictationModels"></div></div>
+          </section>
+          <section class="ds-section" aria-labelledby="modelSearchTitle">
+            <div class="ds-section-header"><h2 class="ds-section-title" id="modelSearchTitle">Explore Hugging Face</h2></div>
+            <div class="ds-section-body">
+              <label class="model-search-label" for="modelSearch">Find models</label>
+              <div class="model-search-controls">
+                <input id="modelSearch" class="model-search-input" type="search" placeholder="Search speech models or publishers…" autocomplete="off" maxlength="120" aria-describedby="modelSearchStatus" />
+                <button id="searchModelsButton" class="ds-button ds-button--outline" type="button">Search</button>
+              </div>
+              <p id="modelSearchStatus" class="models-description" role="status" aria-live="polite">Search model names or publishers on Hugging Face.</p>
+              <div id="modelSearchResults" aria-busy="false"></div>
+            </div>
           </section>
           <section class="ds-section" aria-labelledby="polishModelsTitle">
             <div class="ds-section-header"><h2 class="ds-section-title" id="polishModelsTitle">Text polish</h2><div id="polishProviderActions" class="models-actions"></div></div>
@@ -145,15 +157,7 @@
               <p class="models-description">With local dictation, polish cleans up live previews, then makes a final pass before copying. Remote dictation receives the final pass when its transcript arrives. Cleanup models load as you dictate and unload after five minutes idle. Memory figures are estimates. Very long dictations keep the complete original text when they exceed the cleanup limit.</p>
             </div>
           </section>
-          <section class="ds-section" aria-labelledby="modelSearchTitle">
-            <div class="ds-section-header"><h2 class="ds-section-title" id="modelSearchTitle">Explore Hugging Face</h2></div>
-            <div class="ds-section-body">
-              <label class="model-search-label" for="modelSearch">Find models</label>
-              <input id="modelSearch" class="model-search-input" type="search" placeholder="Search Parakeet, Whisper, Qwen…" autocomplete="off" maxlength="160" aria-describedby="modelSearchStatus" />
-              <p id="modelSearchStatus" class="models-description" role="status" aria-live="polite">Search model names or publishers on Hugging Face.</p>
-              <div id="modelSearchResults" aria-busy="false"></div>
-            </div>
-          </section>
+
         </section>
 
         <!-- ════ SETTINGS (driven by settings.ts) ════ -->
@@ -299,6 +303,7 @@
                     <span class="meta num" id="modelSize">RAM ~2.5G</span>
                     <select id="modelSelect" class="setting-select w-md">
                       <option value="parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
+                      <option value="parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 · English</option>
                     </select>
                   </div>
                 </div><div class="model-state" id="modelDownload" data-state="idle" aria-live="polite">

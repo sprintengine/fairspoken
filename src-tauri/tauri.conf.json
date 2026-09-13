@@ -75,7 +75,7 @@
         "label": "cursor-preview",
         "url": "cursor-preview.html",
         "width": 400,
-        "height": 204,
+        "height": 79,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,

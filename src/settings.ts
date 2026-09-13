@@ -6,6 +6,7 @@ import { addEvent } from "./events";
 // the backend was built with the `whisper` Cargo feature.
 type SttModel =
   | "parakeet-tdt-0.6b-v3"
+  | "parakeet-tdt-0.6b-v2"
   | "tiny"
   | "base"
   | "small"
@@ -176,6 +177,7 @@ const polishToneSegs: Record<string, SegControl> = {
 
 const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
   "parakeet-tdt-0.6b-v3": "RAM ~2.5G",
+  "parakeet-tdt-0.6b-v2": "RAM ~2.5G · English",
   tiny: "RAM ~0.7G",
   base: "RAM ~1.2G",
   small: "RAM ~2.5G",
@@ -327,8 +329,17 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
   };
 }
 
+function speechModelName(model: string): string {
+  return model.startsWith("parakeet") ? `Parakeet TDT 0.6B ${model.endsWith("-v2") ? "v2 · English" : "v3"}` : `Whisper ${model}`;
+}
+
 function applyToForm(settings: Settings): void {
   locationSeg.set(settings.transcriptionLocation);
+  // A selection from the model library must remain representable even if its
+  // settings event arrives before the supported-model catalog has loaded.
+  if (![...modelSelect.options].some(option => option.value === settings.model)) {
+    modelSelect.add(new Option(speechModelName(settings.model), settings.model));
+  }
   modelSelect.value = settings.model;
   const speechName = document.getElementById("selectedSpeechModel");
   if (speechName) speechName.textContent = `${settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
@@ -885,7 +896,14 @@ function refreshMeter(): void {
 }
 
 async function loadSettings(): Promise<void> {
-  currentSettings = normalizeSettings(await invoke<Settings>("get_settings"));
+  const [saved, models] = await Promise.all([
+    invoke<Settings>("get_settings"),
+    invoke<{ model: SttModel }[]>("get_dictation_models").catch(() => []),
+  ]);
+  if (Array.isArray(models) && models.length) {
+    modelSelect.replaceChildren(...models.map(model => new Option(speechModelName(model.model), model.model)));
+  }
+  currentSettings = normalizeSettings(saved);
   applyToForm(currentSettings);
   await loadAudioDevices();
   if (currentSettings.transcriptionLocation === "local") {

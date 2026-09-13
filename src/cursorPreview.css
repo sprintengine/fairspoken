@@ -6,20 +6,21 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
   position: relative;
   box-sizing: border-box;
   width: 100%;
-  height: 100%;
+  height: auto;
   max-height: none;
   padding: var(--sem-space-lg);
   overflow: visible;
   border-radius: var(--sem-radius-shell-lg);
   border: 1px solid var(--sem-color-border-strong);
-  background: color-mix(in srgb, var(--sem-color-bg-surface-raised) calc(var(--sem-glass-opacity) * 100%), transparent);
+  background: color-mix(in srgb, var(--sem-color-bg-surface-raised) calc(var(--sem-glass-opacity) * 50%), transparent);
   -webkit-backdrop-filter: blur(var(--sem-glass-blur)) saturate(var(--sem-glass-saturation));
   backdrop-filter: blur(var(--sem-glass-blur)) saturate(var(--sem-glass-saturation));
   box-shadow: var(--sem-shadow-modal), var(--sem-shadow-control-raised);
   animation: none;
 }
 .cursor-preview-text {
-  height: 100%;
+  min-height: calc(var(--sem-font-size-heading) * var(--sem-font-line-relaxed));
+  max-height: calc(var(--sem-font-size-heading) * var(--sem-font-line-relaxed) * 7);
   font-size: var(--sem-font-size-heading);
   line-height: var(--sem-font-line-relaxed);
   color: var(--sem-color-text-primary);

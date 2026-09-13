@@ -19,6 +19,8 @@ const PARAKEET_BASE_URL: &str =
     "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
 const PARAKEET_DIR: &str = "parakeet-tdt-0.6b-v3";
 const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
+const PARAKEET_V2_MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
+const PARAKEET_V2_BASE_URL: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85";
 const PARAKEET_FILES: [&str; 4] = [
     "encoder-model.onnx",
     "encoder-model.onnx.data",
@@ -31,6 +33,7 @@ const PARAKEET_FILES: [&str; 4] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SttModel {
     Parakeet,
+    ParakeetV2,
     #[cfg(feature = "whisper")]
     Whisper(WhisperModel),
 }
@@ -45,6 +48,7 @@ impl SttModel {
     pub fn from_model_id(model_id: &str) -> Option<Self> {
         match model_id {
             PARAKEET_MODEL_ID | "parakeet" => Some(Self::Parakeet),
+            PARAKEET_V2_MODEL_ID => Some(Self::ParakeetV2),
             #[cfg(feature = "whisper")]
             other => WhisperModel::from_model_id(other).map(Self::Whisper),
             #[cfg(not(feature = "whisper"))]
@@ -55,6 +59,7 @@ impl SttModel {
     pub fn model_id(self) -> &'static str {
         match self {
             Self::Parakeet => PARAKEET_MODEL_ID,
+            Self::ParakeetV2 => PARAKEET_V2_MODEL_ID,
             #[cfg(feature = "whisper")]
             Self::Whisper(model) => model.model_id(),
         }
@@ -64,7 +69,7 @@ impl SttModel {
     /// the language and vocabulary-prompt settings).
     pub fn is_whisper(self) -> bool {
         match self {
-            Self::Parakeet => false,
+            Self::Parakeet | Self::ParakeetV2 => false,
             #[cfg(feature = "whisper")]
             Self::Whisper(_) => true,
         }
@@ -270,6 +275,7 @@ impl ModelService {
     pub fn path_for(&self, model: SttModel) -> PathBuf {
         match model {
             SttModel::Parakeet => self.base_dir.join(PARAKEET_DIR),
+            SttModel::ParakeetV2 => self.base_dir.join(PARAKEET_V2_MODEL_ID),
             #[cfg(feature = "whisper")]
             SttModel::Whisper(whisper) => self.base_dir.join(whisper.file_name()),
         }
@@ -301,6 +307,27 @@ impl ModelService {
     /// The on-disk directory holding a model's files, plus the file manifest.
     fn storage(&self, model: SttModel) -> (PathBuf, Vec<ModelFile>) {
         match model {
+            SttModel::ParakeetV2 => {
+                // Same TDT graph interface as v3: 128 mel features, 2×640
+                // decoder states, vocabulary-derived blank and five durations.
+                // V2 is English-only; v3 remains the multilingual default.
+                let hashes = [
+                    "3987bcd28175d829d12888a996a84e8f62a0e374d9ffd640662c1515adc679d3",
+                    "4dab7362d4874d85965045b1e41b2d61dd2cc0fb25671a7f6b3dc47bf120cc41",
+                    "cbb52a07bd70ab5b67f8439d4b3cd8704b18467b4430bcacb5adabe154b8d191",
+                    "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d",
+                ];
+                let files = PARAKEET_FILES
+                    .iter()
+                    .zip(hashes)
+                    .map(|(name, hash)| ModelFile {
+                        name,
+                        url: format!("{PARAKEET_V2_BASE_URL}/{name}"),
+                        hash: Some(ModelHash::Sha256(hash)),
+                    })
+                    .collect();
+                (self.base_dir.join(PARAKEET_V2_MODEL_ID), files)
+            }
             SttModel::Parakeet => {
                 let files = PARAKEET_FILES
                     .iter()
@@ -547,6 +574,28 @@ mod tests {
             Some(SttModel::Parakeet)
         );
         assert!(!SttModel::Parakeet.is_whisper());
+    }
+
+    #[test]
+    fn english_v2_has_its_own_pinned_verified_manifest() {
+        let model: SttModel = serde_json::from_str("\"parakeet-tdt-0.6b-v2\"").unwrap();
+        assert_eq!(model, SttModel::ParakeetV2);
+        assert!(!model.is_whisper());
+        assert_eq!(
+            serde_json::to_string(&model).unwrap(),
+            "\"parakeet-tdt-0.6b-v2\""
+        );
+        let service = ModelService::default();
+        let (path, files) = service.storage(model);
+        assert_ne!(path, service.path_for(SttModel::default()));
+        assert_eq!(files.len(), 4);
+        assert_eq!(
+            files.iter().map(|f| f.name).collect::<Vec<_>>(),
+            super::PARAKEET_FILES
+        );
+        assert!(files.iter().all(
+            |f| f.url.contains("0bbb45a3365852604aef28b538a8f066f4ccaa85") && f.hash.is_some()
+        ));
     }
 
     #[test]

@@ -39,3 +39,6 @@
 .model-search-result { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sem-space-md); padding: var(--sem-space-md) 0; border-top: 1px solid var(--sem-color-border-default); }
 .model-search-result > div:first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .model-search-result p { margin: var(--sem-space-xs) 0 0; }
+
+.model-search-controls { display: flex; align-items: center; gap: var(--sem-space-sm); margin-bottom: var(--sem-space-sm); }
+.model-search-controls .model-search-input { flex: 1; min-width: 0; margin-bottom: 0; }

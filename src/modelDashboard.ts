@@ -70,7 +70,7 @@ function render(): void {
     variants.set(family, m.model);
     const parakeet = family === "parakeet";
     const selected = settings.transcriptionLocation === "local" && settings.model === m.model;
-    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? "NVIDIA" : "OpenAI", parakeet ? "NVIDIA · Recommended · 25 languages" : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
+    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? "NVIDIA" : "OpenAI", parakeet ? (m.model.endsWith("-v2") ? "NVIDIA · English · 2.51 GB download" : "NVIDIA · Recommended · 25 languages") : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
     r.element.classList.add("model-family"); r.element.id = `family-${family}`;
     const label = document.createElement("label"); label.className = "model-variant"; label.textContent = "Variant";
     const select = document.createElement("select"); select.id = `variant-${family}`; select.setAttribute("aria-label", `${parakeet ? "Parakeet" : "Whisper"} variant`);
@@ -160,9 +160,15 @@ const searchStatus = root.querySelector<HTMLElement>("#modelSearchStatus")!;
 const searchResults = root.querySelector<HTMLElement>("#modelSearchResults")!;
 let searchRevision = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
-function supportedFamily(id: string): string | null {
-  if (id === "istupakov/parakeet-tdt-0.6b-v3-onnx") return "parakeet";
-  if (id === "ggerganov/whisper.cpp" && speech.some(m => !m.model.startsWith("parakeet"))) return "whisper";
+function supportedVariant(id: string): { family: string; model?: string } | null {
+  const parakeet = /^(?:nvidia\/parakeet-tdt-0\.6b-(v[23])|istupakov\/parakeet-tdt-0\.6b-(v[23])-onnx)$/.exec(id);
+  if (parakeet) {
+    const model = `parakeet-tdt-0.6b-${parakeet[1] ?? parakeet[2]}`;
+    if (speech.some(m => m.model === model)) return { family: "parakeet", model };
+  }
+  const whisper = /^openai\/whisper-(tiny|base|small|medium|large-v2|large-v3|large-v3-turbo)$/.exec(id);
+  if (whisper && speech.some(m => m.model === whisper[1])) return { family: "whisper", model: whisper[1] };
+  if (id === "ggerganov/whisper.cpp" && speech.some(m => !m.model.startsWith("parakeet"))) return { family: "whisper" };
   return null;
 }
 async function searchHub(query: string, revision: number): Promise<void> {
@@ -170,21 +176,26 @@ async function searchHub(query: string, revision: number): Promise<void> {
   try {
     const result = await invoke<{ models: HubModel[]; cached: boolean }>("search_hugging_face_models", { query });
     if (revision !== searchRevision) return;
-    searchStatus.textContent = result.models.length ? `${result.models.length} results${result.cached ? " · Cached" : ""}. Only verified runtime formats can be downloaded in MultiVoice.` : "No models found. Try a different name or publisher.";
+    searchStatus.textContent = result.models.length ? `${result.models.length} speech model${result.models.length === 1 ? "" : "s"}${result.cached ? " · Cached" : ""}` : "No models found. Try a different name or publisher.";
     for (const model of result.models) {
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(model.id)) continue;
       const item = document.createElement("div"); item.className = "model-search-result";
       const content = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = model.id;
       const detail = document.createElement("p"); detail.className = "model-status";
-      detail.textContent = [model.pipelineTag, model.libraryName, `${(model.downloads ?? 0).toLocaleString()} downloads`, model.license, model.gated ? "Access approval required" : null].filter(Boolean).join(" · ");
+      detail.textContent = [model.libraryName, model.languages.slice(0, 3).join(", "), `${(model.downloads ?? 0).toLocaleString()} downloads`, model.license, model.gated ? "Access approval required" : null].filter(Boolean).join(" · ");
       const compatibility = document.createElement("p"); compatibility.className = "model-status";
-      const family = supportedFamily(model.id);
+      const match = supportedVariant(model.id);
+      const family = match?.family;
       const polish = catalog?.polish.find(m => m.supported && m.source === `https://huggingface.co/${model.id}`);
-      compatibility.textContent = family || polish ? "Compatible variants available above" : "Not supported yet";
+      compatibility.textContent = family ? `Available in ${family === "parakeet" ? "ONNX" : "whisper.cpp"} format` : polish ? "Compatible model available" : "Not supported by this app yet";
       content.append(title, detail, compatibility);
       const actions = document.createElement("div"); actions.className = "models-actions";
-      if (family || polish) actions.append(button(family ? "Choose variant" : "Show model", async () => { const target = family ? document.getElementById(`variant-${family}`) : document.getElementById(`model-${polish!.id}`)?.querySelector("button"); target?.scrollIntoView({ block: "center", behavior: "smooth" }); target?.focus({ preventScroll: true }); }));
+      if (family || polish) actions.append(button(family ? "Choose variant" : "Show model", async () => {
+        if (family && match?.model) { variants.set(family, match.model); render(); }
+        const target = family ? document.getElementById(`variant-${family}`) : document.getElementById(`model-${polish!.id}`)?.querySelector("button");
+        target?.scrollIntoView({ block: "center", behavior: "smooth" }); target?.focus({ preventScroll: true });
+      }));
       actions.append(button("Model page ↗", () => openUrl(`https://huggingface.co/${model.id}`)));
       item.append(content, actions); searchResults.append(item);
     }
@@ -195,5 +206,14 @@ searchInput.addEventListener("input", () => {
   const revision = ++searchRevision; clearTimeout(searchTimer); const query = searchInput.value.trim();
   searchResults.replaceChildren(); searchResults.setAttribute("aria-busy", "false");
   searchStatus.textContent = query ? "Waiting to search…" : "Search model names or publishers on Hugging Face.";
-  if (query) searchTimer = setTimeout(() => { void searchHub(query, revision); }, 350);
+  searchTimer = setTimeout(() => { void searchHub(query, revision); }, 350);
 });
+function searchNow(): void { clearTimeout(searchTimer); void searchHub(searchInput.value.trim(), ++searchRevision); }
+root.querySelector("#searchModelsButton")!.addEventListener("click", searchNow);
+searchInput.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); searchNow(); } });
+let discoveryStarted = false;
+function discoverWhenVisible(): void {
+  if (root.classList.contains("active") && !discoveryStarted) { discoveryStarted = true; searchNow(); }
+}
+new MutationObserver(discoverWhenVisible).observe(root, { attributes: true, attributeFilter: ["class"] });
+discoverWhenVisible();

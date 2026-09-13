@@ -17,7 +17,15 @@ model cache.
   [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx)
   (a format conversion of the NVIDIA weights; no changes to the model itself).
 
-### OpenAI Whisper via whisper.cpp (optional `whisper` build feature)
+### NVIDIA Parakeet TDT 0.6B v2 (English alternative)
+
+- Original model: [nvidia/parakeet-tdt-0.6b-v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2),
+  © NVIDIA Corporation, licensed CC BY 4.0.
+- The app downloads the unmodified ONNX conversion from
+  [istupakov/parakeet-tdt-0.6b-v2-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx)
+  at revision `0bbb45a3365852604aef28b538a8f066f4ccaa85`, with pinned file hashes.
+
+### OpenAI Whisper via whisper.cpp (included by default)
 
 - Models: OpenAI Whisper, converted to ggml format and published at
   [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp).

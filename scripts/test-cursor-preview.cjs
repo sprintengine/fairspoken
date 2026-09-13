@@ -5,13 +5,14 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, headless: true });
   try {
-    const page = await browser.newPage({ viewport: { width: 400, height: 204 } });
+    const page = await browser.newPage({ viewport: { width: 400, height: 205 } });
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(() => {
       let id = 0;
       const callbacks = new Map(), listeners = new Map();
       window.previewInteractions = [];
+      window.previewSizes = [];
       window.previewEmit = payload => (listeners.get('cursor-preview-state') || []).forEach(handler => callbacks.get(handler)?.({ payload }));
       window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
       window.__TAURI_INTERNALS__ = {
@@ -21,6 +22,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
           if (command === 'plugin:event|listen') { listeners.set(args.event, [...(listeners.get(args.event) || []), args.handler]); return ++id; }
           if (command === 'get_cursor_preview_state') return { sessionId: 0, revision: 0, phase: 'idle', text: '', polished: false, remote: false };
           if (command === 'set_cursor_preview_interacting') window.previewInteractions.push(args);
+          if (command === 'set_cursor_preview_size') window.previewSizes.push(args);
         },
       };
     });
@@ -30,6 +32,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
       const copy = element.cloneNode(true); copy.querySelectorAll('del').forEach(node => node.remove()); return copy.textContent;
     });
     const base = { sessionId: 1, revision: 1, phase: 'recording', text: 'um hello sam please send teh draft', polished: false, remote: false };
+    await emit({ ...base, text: 'Hello' });
+    await page.locator('#cursorPreview').waitFor();
+    assert.equal(await page.evaluate(() => window.previewSizes.at(-1).height), 79, 'one line starts with a compact native window');
+    await page.evaluate(() => { document.documentElement.dataset.mode = 'dark'; });
+    await page.waitForFunction(() => window.previewSizes.at(-1).dark === true);
     await emit(base);
     await page.locator('#cursorPreview').waitFor();
     assert.equal(await page.locator('#previewStatus, #previewHint, .cursor-preview-heading').count(), 0);
@@ -57,6 +64,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     await emit({ ...base, sessionId: 2, text: long });
     const scroller = page.locator('#previewText');
     const bottom = await scroller.evaluate(e => e.scrollTop);
+    assert.equal(await page.evaluate(() => window.previewSizes.at(-1).height), 205, 'long text grows to seven lines and stops');
     assert(bottom > 0, 'long transcript scrolls');
     await scroller.hover(); await page.mouse.wheel(0, -250); await page.waitForTimeout(120);
     const position = await scroller.evaluate(e => e.scrollTop);
@@ -67,6 +75,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     await page.mouse.move(0, 0);
     assert(await page.evaluate(() => window.previewInteractions.some(e => !e.active)), 'leaving releases dismissal hold');
     await emit({ ...base, sessionId: 3, text: 'um delete this' });
+    assert.equal(await page.evaluate(() => window.previewSizes.at(-1).height), 79, 'a new short recording shrinks the preview');
     await emit({ ...base, sessionId: 3, text: 'Delete this.', polished: true });
     await emit({ ...base, sessionId: 4, text: '<img src=x onerror=alert(1)> stays literal' });
     assert.equal(await scroller.locator('img').count(), 0);

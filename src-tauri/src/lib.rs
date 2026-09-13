@@ -7,6 +7,7 @@ mod ax_context;
 mod clipboard;
 mod cursor_preview;
 mod host;
+mod hugging_face;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod insertion;
 mod live_preview;
@@ -383,6 +384,7 @@ async fn remove_local_model(app: AppHandle, model: String) -> Result<(), String>
 fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
     let ids = [
         "parakeet-tdt-0.6b-v3",
+        "parakeet-tdt-0.6b-v2",
         "tiny",
         "base",
         "small",
@@ -400,6 +402,13 @@ fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
             message: String::new(),
         })
         .collect()
+}
+
+#[tauri::command]
+async fn search_hugging_face_models(query: String) -> Result<hugging_face::SearchResults, String> {
+    tauri::async_runtime::spawn_blocking(move || hugging_face::search(&query))
+        .await
+        .map_err(|_| "Model search stopped unexpectedly".to_string())?
 }
 
 /// Applies the hold-Fn setting: the event tap is installed at most once per
@@ -1167,7 +1176,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
     if let Ok(snapshot) = services.cursor_snapshot.lock() {
         if snapshot.session_id == cursor_session && snapshot.phase == live_preview::Phase::Recording
         {
-            cursor_preview::show(&app);
+            cursor_preview::show(&app, cursor_session);
         }
     }
     cursor_guard.keep_visible = true;
@@ -2153,6 +2162,27 @@ pub(crate) fn emit_backend_event(app: &AppHandle, level: &'static str, message: 
 }
 
 #[tauri::command]
+fn set_cursor_preview_size(
+    app: AppHandle,
+    session_id: u64,
+    height: f64,
+    dark: Option<bool>,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    if !height.is_finite() {
+        return Err("Invalid preview height".into());
+    }
+    let snapshot = services
+        .cursor_snapshot
+        .lock()
+        .map_err(|_| "Cursor preview lock failed".to_string())?;
+    if snapshot.session_id == session_id && snapshot.phase != live_preview::Phase::Idle {
+        cursor_preview::resize(&app, session_id, height, dark.unwrap_or(false));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn set_cursor_preview_interacting(
     session_id: u64,
     active: bool,
@@ -2503,6 +2533,8 @@ pub fn run() {
             get_note_metadata,
             get_local_model_catalog,
             get_dictation_models,
+            search_hugging_face_models,
+            set_cursor_preview_size,
             download_local_model,
             cancel_local_model_download,
             remove_local_model,

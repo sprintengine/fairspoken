@@ -26,6 +26,7 @@ let edits: Edit[] = [];
 let cleanup: ReturnType<typeof setTimeout> | undefined;
 let following = true;
 let hovering = false;
+let lastSize = "";
 const order = { recording: 0, finishing: 1, complete: 2, idle: 3 };
 const duration = (token: string): number => {
   const value = getComputedStyle(box).getPropertyValue(token).trim();
@@ -33,6 +34,22 @@ const duration = (token: string): number => {
 };
 const fadeMs = duration("--sem-motion-duration-deliberate");
 const holdMs = duration("--sem-motion-duration-pulse") * 5;
+
+function fitPreview(): void {
+  if (!current || box.hidden) return;
+  const body = getComputedStyle(document.body);
+  const height = Math.ceil(box.getBoundingClientRect().height + parseFloat(body.paddingTop) + parseFloat(body.paddingBottom));
+  const dark = document.documentElement.dataset.mode === "dark";
+  const key = `${current.sessionId}:${height}:${dark}`;
+  if (key === lastSize) return;
+  lastSize = key;
+  void invoke("set_cursor_preview_size", { sessionId: current.sessionId, height, dark }).catch(() => {
+    if (lastSize === key) lastSize = "";
+  });
+}
+new ResizeObserver(fitPreview).observe(box);
+new MutationObserver(fitPreview).observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
+void document.fonts.ready.then(fitPreview);
 
 function updateInteraction(active: boolean): void {
   if (!current || current.phase === "idle") return;
@@ -75,6 +92,7 @@ function paint(): void {
   }
   if (!cleanText && edits.length === 0) fragment.append(document.createTextNode("…"));
   text.replaceChildren(fragment);
+  fitPreview();
   text.scrollTop = tail ? text.scrollHeight : offset;
   following = tail;
   if (announcement.textContent !== cleanText) announcement.textContent = cleanText;
@@ -132,6 +150,7 @@ function render(snapshot: Snapshot): void {
     cleanText = "";
     lastRaw = "";
     following = true;
+    lastSize = "";
   }
   current = snapshot;
   box.hidden = snapshot.phase === "idle";

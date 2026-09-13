@@ -15,6 +15,9 @@ without it.
 ## Features
 
 - **Local transcription** with Parakeet TDT 0.6B v3 (ONNX Runtime, in-process).
+  The Models screen groups Parakeet and Whisper variants, with v3 recommended
+  by default and English-only Parakeet v2 also available. Search Hugging Face
+  for other speech models; results indicate which have a supported local format.
   Whisper (whisper.cpp) is also included; choose its variant in Models.
 - **Insert anywhere**: text goes straight into the focused app (Accessibility
   insert → ⌘V → AppleScript fallback), with your clipboard as a backup.
