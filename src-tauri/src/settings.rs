@@ -244,15 +244,20 @@ impl SettingsService {
     }
 
     pub fn save(&mut self, settings: Settings) -> Result<(), String> {
-        self.current = normalize(settings);
+        let next = normalize(settings);
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|err| format!("Failed to create settings directory: {err}"))?;
         }
 
-        let payload = serde_json::to_string_pretty(&self.current)
+        let payload = serde_json::to_string_pretty(&next)
             .map_err(|err| format!("Failed to serialize settings: {err}"))?;
-        fs::write(&self.path, payload).map_err(|err| format!("Failed to write settings: {err}"))?;
+        let temporary = self.path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        if let Err(error) = fs::write(&temporary, payload).and_then(|_| fs::rename(&temporary, &self.path)) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("Failed to write settings: {error}"));
+        }
+        self.current = next;
         Ok(())
     }
 }
@@ -470,6 +475,20 @@ fn default_settings_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_save_keeps_current_settings_and_previous_path() {
+        let path = std::env::temp_dir().join(format!("settings-failure-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        let current = Settings::default();
+        let mut service = SettingsService { current: current.clone(), path: path.clone() };
+        let mut changed = current.clone();
+        changed.recording_shortcut = "Control+K".into();
+        assert!(service.save(changed).is_err());
+        assert_eq!(service.current().recording_shortcut, current.recording_shortcut);
+        assert!(path.is_dir());
+        std::fs::remove_dir(path).unwrap();
+    }
+
 
     #[test]
     fn old_settings_keep_cloud_polish_and_new_local_choice_round_trips() {

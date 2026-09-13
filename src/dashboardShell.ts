@@ -2,34 +2,9 @@
 // Navigation stays in home.ts so every route follows the same lifecycle.
 import "./dashboardShell.css";
 
-type Appearance = "system" | "light" | "dark";
-const preferenceKey = "multivoice.appearance";
-const systemAppearance = window.matchMedia("(prefers-color-scheme: dark)");
-let appearance: Appearance = "system";
-try {
-  const stored = localStorage.getItem(preferenceKey);
-  if (stored === "light" || stored === "dark") appearance = stored;
-} catch { /* Appearance remains usable when storage is unavailable. */ }
-function applyAppearance(): void {
-  document.documentElement.dataset.mode = appearance === "system"
-    ? systemAppearance.matches ? "dark" : "light"
-    : appearance;
-}
-applyAppearance();
-systemAppearance.addEventListener("change", applyAppearance);
+import "./appearance";
 if ("__TAURI_INTERNALS__" in window && /Mac/.test(navigator.platform)) {
   document.documentElement.dataset.windowMaterial = "glass";
-}
-const appearanceSelect = document.querySelector<HTMLSelectElement>("#appearanceSelect");
-if (appearanceSelect) {
-  appearanceSelect.value = appearance;
-  appearanceSelect.addEventListener("change", () => {
-    const next = appearanceSelect.value;
-    if (next !== "system" && next !== "light" && next !== "dark") return;
-    appearance = next;
-    applyAppearance();
-    try { localStorage.setItem(preferenceKey, appearance); } catch { /* Optional persistence. */ }
-  });
 }
 
 const tooltip = document.createElement("div");

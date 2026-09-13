@@ -195,7 +195,8 @@ fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
 
 fn save_settings_inner(
     app: AppHandle,
-    mut settings: Settings,
+    settings: Option<Settings>,
+    shortcut_patch: Option<ShortcutPatch>,
     services: State<'_, AppServices>,
 ) -> Result<(), String> {
     let _operation = services
@@ -207,6 +208,8 @@ fn save_settings_inner(
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
+
+    let mut settings = merge_settings_shortcuts(settings, shortcut_patch, &current_settings);
 
     // The dictionary (vocabulary, corrections, snippets) is owned by the
     // Dictionary screen via save_dictionary; the Settings screen must not be
@@ -259,10 +262,50 @@ fn save_settings_inner(
     Ok(())
 }
 
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutPatch {
+    recording_shortcut: Option<String>,
+    transcript_stack_shortcut: Option<String>,
+}
+
+// Chords have a separate native-registration transaction. Ordinary preference
+// saves cannot overwrite them using a stale snapshot from another webview.
+fn merge_settings_shortcuts(
+    settings: Option<Settings>,
+    patch: Option<ShortcutPatch>,
+    current: &Settings,
+) -> Settings {
+    if let Some(patch) = patch {
+        let mut next = current.clone();
+        if let Some(shortcut) = patch.recording_shortcut {
+            next.recording_shortcut = shortcut;
+        }
+        if let Some(shortcut) = patch.transcript_stack_shortcut {
+            next.transcript_stack_shortcut = shortcut;
+        }
+        next
+    } else {
+        let mut next = settings.unwrap_or_else(|| current.clone());
+        next.recording_shortcut = current.recording_shortcut.clone();
+        next.transcript_stack_shortcut = current.transcript_stack_shortcut.clone();
+        next
+    }
+}
+
+#[tauri::command]
+async fn save_shortcut_settings(app: AppHandle, patch: ShortcutPatch) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_settings_inner(app.clone(), None, Some(patch), app.state::<AppServices>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        save_settings_inner(app.clone(), settings, app.state::<AppServices>())
+        save_settings_inner(app.clone(), Some(settings), None, app.state::<AppServices>())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -396,6 +439,10 @@ fn save_dictionary(
     update: DictionaryUpdate,
     services: State<'_, AppServices>,
 ) -> Result<(), String> {
+    let _operation = services
+        .operation
+        .try_lock()
+        .map_err(|_| "Wait for the current settings operation to finish".to_string())?;
     let mut settings = services
         .settings
         .lock()
@@ -2440,6 +2487,7 @@ pub fn run() {
             get_app_status,
             get_settings,
             save_settings,
+            save_shortcut_settings,
             save_dictionary,
             get_model_status,
             prepare_model,
@@ -2491,4 +2539,47 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod shortcut_patch_tests {
+    use super::*;
+    #[test]
+    fn shortcut_patch_preserves_latest_unrelated_preferences() {
+        let current = Settings {
+            interaction_sounds: false,
+            recording_shortcut: "Control+K".into(),
+            ..Settings::default()
+        };
+        let patched = merge_settings_shortcuts(
+            None,
+            Some(ShortcutPatch {
+                recording_shortcut: None,
+                transcript_stack_shortcut: Some("Control+L".into()),
+            }),
+            &current,
+        );
+        assert!(!patched.interaction_sounds);
+        assert_eq!(patched.recording_shortcut, "Control+K");
+        assert_eq!(patched.transcript_stack_shortcut, "Control+L");
+    }
+    #[test]
+    fn ordinary_stale_save_cannot_revert_registered_chords() {
+        let current = Settings {
+            recording_shortcut: "Control+K".into(),
+            transcript_stack_shortcut: "Control+L".into(),
+            ..Settings::default()
+        };
+        let stale = Settings {
+            interaction_sounds: false,
+            ..Settings::default()
+        };
+        let merged = merge_settings_shortcuts(Some(stale), None, &current);
+        assert_eq!(merged.recording_shortcut, current.recording_shortcut);
+        assert_eq!(
+            merged.transcript_stack_shortcut,
+            current.transcript_stack_shortcut
+        );
+        assert!(!merged.interaction_sounds);
+    }
 }

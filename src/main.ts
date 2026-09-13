@@ -1,6 +1,7 @@
+import { replaceShortcuts, type BindingRole, type Bindings } from "./shortcutRegistration";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { isRegistered, register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
+import { isRegistered, register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
 
 // "starting" covers the window between the start request and the backend
@@ -102,7 +103,8 @@ let shelfHideTimer: ReturnType<typeof setTimeout> | null = null;
 let shelfVisible = false;
 let shortcutSettings: ShortcutSettings = { ...DEFAULT_SHORTCUT_SETTINGS };
 let pushToTalkReleasePending = false;
-let shortcutRegistrationVersion = 0;
+let shortcutRegistrationQueue: Promise<void> = Promise.resolve();
+let activeBindings: Bindings = { recording: "", stack: "" };
 const POLISH_UNDO_WINDOW_MS = 8_000;
 let polishUndoOffer: { id: string } | null = null;
 let polishUndoTimer: ReturnType<typeof setTimeout> | null = null;
@@ -804,78 +806,80 @@ function shortcutCandidates(configured: string, defaults: string[]): string[] {
   return [normalized];
 }
 
-async function registerShortcut(
-  label: string,
-  shortcuts: string[],
-  handler: Parameters<typeof register>[1],
-): Promise<void> {
-  const failures: string[] = [];
-
-  for (const shortcut of shortcuts) {
-    try {
-      await register(shortcut, handler);
-
-      const registered = await isRegistered(shortcut);
-      if (registered) {
-        addEvent("info", `${label} shortcut registered: ${shortcut}`);
-        return;
-      }
-
-      failures.push(`${shortcut}: registration was not confirmed`);
-    } catch (error) {
-      failures.push(`${shortcut}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  addEvent("warning", `${label} shortcut is unavailable: ${failures.join("; ")}`);
-}
-
-async function registerRecordingShortcut(settings: ShortcutSettings): Promise<void> {
-  const defaults = isMacOS() ? RECORD_SHORTCUT_MACOS_CANDIDATES : RECORD_SHORTCUT_DEFAULT_CANDIDATES;
-  const shortcuts = shortcutCandidates(settings.recordingShortcut, defaults);
-  await registerShortcut("Recording", shortcuts, (event) => {
-    if (settings.recordingShortcutMode === "push-to-talk") {
-      if (event.state === "Pressed") {
-        void startPushToTalkRecording();
-      } else {
-        void stopPushToTalkRecording();
-      }
-      return;
-    }
-
-    if (event.state === "Pressed") {
-      void toggleRecording();
-    }
+async function registerBinding(role: BindingRole, shortcut: string): Promise<void> {
+  await register(shortcut, (event) => {
+    if (activeBindings[role] !== shortcut) return;
+    if (role === "stack") {
+      if (event.state === "Pressed") void toggleTranscriptStack();
+    } else if (shortcutSettings.recordingShortcutMode === "push-to-talk") {
+      if (event.state === "Pressed") void startPushToTalkRecording();
+      else void stopPushToTalkRecording();
+    } else if (event.state === "Pressed") void toggleRecording();
   });
-}
-
-async function registerStackShortcut(settings: ShortcutSettings): Promise<void> {
-  const defaults = isMacOS() ? STACK_SHORTCUT_MACOS_CANDIDATES : STACK_SHORTCUT_DEFAULT_CANDIDATES;
-  const shortcuts = shortcutCandidates(settings.transcriptStackShortcut, defaults);
-  await registerShortcut("Copied-messages", shortcuts, (event) => {
-    if (event.state === "Pressed") {
-      void toggleTranscriptStack();
-    }
-  });
-}
-
-async function registerGlobalShortcuts(settings = shortcutSettings): Promise<void> {
-  const version = ++shortcutRegistrationVersion;
-  const normalized = normalizeShortcutSettings(settings);
-  shortcutSettings = normalized;
-  pillHint.textContent = shortcutHint(normalized.recordingShortcut);
-
   try {
-    await unregisterAll();
+    if (!await isRegistered(shortcut)) throw new Error(`Registration was not confirmed: ${shortcut}`);
   } catch (error) {
-    addEvent("warning", `Could not clear existing shortcuts before registration: ${error instanceof Error ? error.message : String(error)}`);
+    try { await unregister(shortcut); }
+    catch (cleanup) { throw new Error(`${String(error)}; could not release unconfirmed shortcut: ${String(cleanup)}`); }
+    throw error;
   }
-
-  if (version !== shortcutRegistrationVersion) return;
-  await registerRecordingShortcut(normalized);
-  if (version !== shortcutRegistrationVersion) return;
-  await registerStackShortcut(normalized);
 }
+function queueShortcuts(operation: () => Promise<void>): Promise<void> {
+  const next = shortcutRegistrationQueue.then(operation);
+  shortcutRegistrationQueue = next.catch(() => {});
+  return next;
+}
+async function registerGlobalShortcuts(settings = shortcutSettings): Promise<void> {
+  return queueShortcuts(async () => {
+    const normalized = normalizeShortcutSettings(settings);
+    const configured = { recording: normalized.recordingShortcut, stack: normalized.transcriptStackShortcut };
+    // Only startup uses platform spelling fallbacks. Settings changes are
+    // validated by the transactional request below, never silently substituted.
+    for (const role of ["recording", "stack"] as const) {
+      if (activeBindings[role]) continue;
+      const defaults = role === "recording"
+        ? isMacOS() ? RECORD_SHORTCUT_MACOS_CANDIDATES : RECORD_SHORTCUT_DEFAULT_CANDIDATES
+        : isMacOS() ? STACK_SHORTCUT_MACOS_CANDIDATES : STACK_SHORTCUT_DEFAULT_CANDIDATES;
+      const failures: string[] = [];
+      for (const shortcut of shortcutCandidates(configured[role], defaults)) {
+        try { await registerBinding(role, shortcut); activeBindings[role] = shortcut; break; }
+        catch (error) { failures.push(String(error)); }
+      }
+      if (!activeBindings[role]) addEvent("warning", `${role} shortcut is unavailable: ${failures.join("; ")}`);
+    }
+    shortcutSettings = normalized;
+    pillHint.textContent = shortcutHint(activeBindings.recording || normalized.recordingShortcut);
+  });
+}
+
+type ShortcutPatch = { recordingShortcut?: string; transcriptStackShortcut?: string };
+void listen<{ requestId: string; patch: ShortcutPatch }>("shortcut-settings-request", ({ payload }) => {
+  void queueShortcuts(async () => {
+    let result: { requestId: string; ok: boolean; error?: string };
+    try {
+      const current = await invoke<ShortcutSettings>("get_settings");
+      const next = normalizeShortcutSettings({ ...current, ...payload.patch });
+      const previous = { ...activeBindings };
+      const actual = {
+        recording: payload.patch.recordingShortcut === undefined ? previous.recording || next.recordingShortcut : next.recordingShortcut,
+        stack: payload.patch.transcriptStackShortcut === undefined ? previous.stack || next.transcriptStackShortcut : next.transcriptStackShortcut,
+      };
+      await replaceShortcuts(previous, actual,
+        { register: registerBinding, unregister },
+        () => invoke("save_shortcut_settings", { patch: payload.patch }));
+      activeBindings = actual;
+      // settings-updated queued during persistence refreshes mode/sounds from
+      // the authoritative snapshot, without registering these chords again.
+      shortcutSettings = next;
+      pillHint.textContent = shortcutHint(next.recordingShortcut);
+      result = { requestId: payload.requestId, ok: true };
+    } catch (error) {
+      result = { requestId: payload.requestId, ok: false, error: String(error) };
+    }
+    // Notification failure cannot turn a committed registration into a failure.
+    await emit("shortcut-settings-result", result).catch((error) => addEvent("warning", String(error)));
+  }).catch((error) => addEvent("error", String(error)));
+}).catch((error) => addEvent("warning", String(error)));
 
 async function loadShortcutSettings(): Promise<ShortcutSettings> {
   try {

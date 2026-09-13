@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
 
 // Parakeet is the default engine; the whisper.cpp ids are only meaningful when
@@ -156,9 +156,11 @@ const cloudPanel = required<HTMLElement>("cloudPanel");
 const cloudAuthToken = required<HTMLInputElement>("cloudAuthToken");
 const cloudStatus = required<HTMLElement>("cloudStatus");
 const cloudTest = required<HTMLButtonElement>("cloudTest");
+const polishProviderSelect = required<HTMLSelectElement>("polishProviderSelect");
+const polishCloudAuthToken = required<HTMLInputElement>("polishCloudAuthToken");
+const contextAwarenessHelp = required<HTMLElement>("contextAwarenessHelp");
 const polishEnabled = required<HTMLInputElement>("polishEnabled");
 const polishHelp = required<HTMLElement>("polishHelp");
-const polishHelpDefault = polishHelp.textContent ?? "";
 const polishTonesPanel = required<HTMLElement>("polishTonesPanel");
 const contextAwareness = required<HTMLInputElement>("contextAwareness");
 const contextAwarenessRow = required<HTMLElement>("contextAwarenessRow");
@@ -233,7 +235,7 @@ function segControl(id: string): SegControl {
 const onMac = isMacOS();
 const KEY_GLYPHS: Record<string, string> = {
   CommandOrControl: onMac ? "⌘" : "Ctrl",
-  Command: "⌘", Cmd: "⌘", Meta: "⌘", Super: "⌘",
+  Command: "⌘", Cmd: "⌘", Meta: onMac ? "⌘" : "Win", Super: onMac ? "⌘" : "Win",
   Control: "⌃", Ctrl: "⌃",
   Alt: onMac ? "⌥" : "Alt", Option: "⌥",
   Shift: "⇧",
@@ -243,7 +245,7 @@ const KEY_GLYPHS: Record<string, string> = {
 };
 const KEY_WORDS: Record<string, string> = {
   CommandOrControl: onMac ? "Command" : "Control",
-  Command: "Command", Cmd: "Command", Meta: "Command", Super: "Command",
+  Command: "Command", Cmd: "Command", Meta: onMac ? "Command" : "Windows", Super: onMac ? "Command" : "Windows",
   Control: "Control", Ctrl: "Control",
   Alt: onMac ? "Option" : "Alt", Option: "Option",
   Shift: "Shift",
@@ -274,8 +276,8 @@ function renderShortcutChip(chip: HTMLButtonElement, accelerator: string): void 
   const keys = chip.querySelector<HTMLElement>(".keys");
   if (keys) {
     keys.replaceChildren(...tokens.map((token) => {
-      const span = document.createElement("span");
-      span.className = "key";
+      const span = document.createElement("kbd");
+      span.className = "key ds-kbd-chord-key";
       span.textContent = keyGlyph(token);
       return span;
     }));
@@ -328,11 +330,17 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
 function applyToForm(settings: Settings): void {
   locationSeg.set(settings.transcriptionLocation);
   modelSelect.value = settings.model;
+  const speechName = document.getElementById("selectedSpeechModel");
+  if (speechName) speechName.textContent = `${settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
+  const polishName = document.getElementById("selectedPolishModel");
+  if (polishName) polishName.textContent = settings.polishModel === "qwen3.5-0.8b" ? "Qwen3.5 · 0.8B" : settings.polishModel === "qwen3.5-2b" ? "Qwen3.5 · 2B" : settings.polishModel;
   updateModelSize(settings.model);
   remoteUrl.value = settings.remoteUrl;
   remoteAuthToken.value = settings.remoteAuthToken;
   remoteTimeoutSeconds.value = String(settings.remoteTimeoutSeconds);
   cloudAuthToken.value = settings.cloudAuthToken;
+  polishCloudAuthToken.value = settings.cloudAuthToken;
+  polishProviderSelect.value = settings.polishProvider;
   langSelect.value = settings.language;
   audioDeviceSelect.value = settings.audioDevice ?? "";
   noiseSuppression.checked = settings.noiseSuppression ?? true;
@@ -360,18 +368,22 @@ function applyToForm(settings: Settings): void {
   updatePolishUi(settings);
 }
 
-// Polish needs the cloud token even in Local mode (transcript text goes to
-// the same Worker). Without one, the toggle is disabled and says why. The
-// per-category tone rows only matter while polish is on.
+// Speech and polish use independent providers and share only the cloud token.
 function updatePolishUi(settings: Settings): void {
-  const hasToken = settings.polishProvider === "local" || settings.cloudAuthToken.trim() !== "";
+  const local = settings.polishProvider === "local";
+  const hasToken = local || settings.cloudAuthToken.trim() !== "";
   polishEnabled.disabled = !hasToken;
-  polishHelp.textContent = settings.polishProvider === "local"
-    ? "Uses your selected local model for live cleanup and a final pass. Manage downloads in Models."
-    : hasToken
-    ? polishHelpDefault
-    : "Requires a MultiVoice Cloud token (add one under Location → MultiVoice Cloud).";
+  polishHelp.textContent = local
+    ? settings.transcriptionLocation === "local"
+      ? "Cleans previews as you dictate locally, then runs a final pass. Manage local model downloads in Models."
+      : "Runs a final cleanup pass on this device after remote transcription finishes. Manage downloads in Models."
+    : hasToken ? "Sends transcript text to MultiVoice Cloud for cleanup. Speech transcription can stay local."
+    : "Add your MultiVoice Cloud token below to enable cloud cleanup.";
+  polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local);
+  document.getElementById("polishLocalModelRow")?.toggleAttribute("hidden", !local);
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
+  contextAwarenessHelp.textContent = "On macOS, reads vocabulary from the focused window at recording start and limited text before the caret for final cleanup. No screenshots or continuous screen reading. "
+    + (local ? "Cleanup context stays on this device." : "When cloud cleanup runs, this context is sent with the transcript to MultiVoice Cloud.");
 }
 
 // Mirror of the Rust normalization: only known categories and tones survive,
@@ -414,6 +426,7 @@ function readFromForm(): Settings {
     insertAtCursor: insertAtCursor.checked,
     fnPushToTalk: fnPushToTalk.checked,
     polishEnabled: polishEnabled.checked,
+    polishProvider: polishProviderSelect.value === "local" ? "local" : "cloud",
     contextAwareness: contextAwareness.checked,
     polishTones: Object.fromEntries(
       POLISH_TONE_CATEGORIES.map((category) => [category, polishToneSegs[category].get()]),
@@ -472,7 +485,8 @@ function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
   if (!key) return "";
 
   const modifiers: string[] = [];
-  if (event.metaKey || event.ctrlKey) modifiers.push("CommandOrControl");
+  if (event.metaKey) modifiers.push(onMac ? "Command" : "Super");
+  if (event.ctrlKey) modifiers.push("Control");
   if (event.altKey) modifiers.push("Alt");
   if (event.shiftKey) modifiers.push("Shift");
 
@@ -520,49 +534,102 @@ function shortcutKeyName(event: KeyboardEvent): string {
   return aliases[event.code] ?? "";
 }
 
+let cancelShortcutCapture: (() => void) | null = null;
+let shortcutSavePending = false;
+function canonicalShortcut(shortcut: string): string {
+  return accelTokens(shortcut).map((part) => {
+    if (["CommandOrControl", "CmdOrCtrl"].includes(part)) return onMac ? "meta" : "control";
+    if (["Command", "Cmd", "Meta", "Super"].includes(part)) return "meta";
+    if (["Control", "Ctrl"].includes(part)) return "control";
+    if (["Alt", "Option"].includes(part)) return "alt";
+    return part.replace(/^Digit/, "").toLowerCase();
+  }).sort().join("+");
+}
+async function saveShortcutSettings(patch: { recordingShortcut?: string; transcriptStackShortcut?: string }): Promise<void> {
+  const requestId = crypto.randomUUID();
+  await new Promise<void>((resolve, reject) => {
+    let unlisten: (() => void) | undefined;
+    let settled = false;
+    const timer = setTimeout(() => { settled = true; unlisten?.(); reject(new Error("Shortcut registration did not respond. Reopen Settings to check the active binding.")); }, 10000);
+    void listen<{ requestId: string; ok: boolean; error?: string }>("shortcut-settings-result", ({ payload }) => {
+      if (settled || payload.requestId !== requestId) return;
+      settled = true;
+      clearTimeout(timer); unlisten?.();
+      if (payload.ok) resolve(); else reject(new Error(payload.error ?? "Shortcut registration failed"));
+    }).then((off) => {
+      if (settled) { off(); return; }
+      unlisten = off;
+      return emitTo("main", "shortcut-settings-request", { requestId, patch });
+    }).catch((error) => { settled = true; clearTimeout(timer); unlisten?.(); reject(error); });
+  });
+}
 function beginShortcutCapture(chip: HTMLButtonElement, label: string): void {
-  if (chip.classList.contains("capturing")) return;
+  if (shortcutSavePending) return;
+  cancelShortcutCapture?.();
   chip.classList.add("capturing");
   shortcutStatus.textContent = "Press a key combination, or Esc to cancel.";
-
   const stopCapture = (message?: string) => {
     window.removeEventListener("keydown", onKeyDown, true);
     chip.classList.remove("capturing");
     shortcutStatus.textContent = message ?? shortcutStatusDefault;
+    cancelShortcutCapture = null;
   };
-
+  cancelShortcutCapture = () => stopCapture();
   const onKeyDown = (event: KeyboardEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
+    event.preventDefault(); event.stopPropagation();
     const shortcut = shortcutFromKeyboardEvent(event);
-    if (shortcut === null) {
-      stopCapture();
+    if (shortcut === null) { stopCapture(); return; }
+    if (!shortcut) { shortcutStatus.textContent = "Use a modifier key or a function key."; return; }
+    if (canonicalShortcut(shortcut) === canonicalShortcut(chip.dataset.shortcut ?? "")) {
+      stopCapture("This shortcut is already assigned to this action.");
       return;
     }
-    if (!shortcut) {
-      shortcutStatus.textContent = "Use a modifier key or a function key.";
+    const other = chip === recordingShortcutChip ? transcriptStackShortcutChip : recordingShortcutChip;
+    if (canonicalShortcut(shortcut) === canonicalShortcut(other.dataset.shortcut ?? "")) {
+      shortcutStatus.textContent = "That combination is already assigned to the other action. Choose another.";
       return;
     }
-
-    renderShortcutChip(chip, shortcut);
-    stopCapture(`${label} shortcut set to ${shortcut}.`);
-    void persistSettings().catch(reportAsyncError);
+    const patch = chip === recordingShortcutChip ? { recordingShortcut: shortcut } : { transcriptStackShortcut: shortcut };
+    stopCapture("Registering shortcut…");
+    shortcutSavePending = true;
+    recordingShortcutChip.disabled = transcriptStackShortcutChip.disabled = true;
+    void saveShortcutSettings(patch).then(() => {
+      currentSettings = { ...currentSettings, ...patch };
+      applyToForm(currentSettings);
+      shortcutStatus.textContent = `${label} shortcut saved: ${accelTokens(shortcut).map(keyWord).join(" + ")}.`;
+    }).catch((error) => {
+      applyToForm(currentSettings);
+      shortcutStatus.textContent = String(error instanceof Error ? error.message : error);
+      reportAsyncError(error);
+    }).finally(() => {
+      shortcutSavePending = false;
+      recordingShortcutChip.disabled = transcriptStackShortcutChip.disabled = false;
+    });
   };
-
   window.addEventListener("keydown", onKeyDown, true);
 }
 
+function showSaveStatus(message: string, error = false): void {
+  const status = document.getElementById("settingsSaveStatus");
+  if (status) { status.textContent = message; status.dataset.error = String(error); }
+}
 async function persistSettings(): Promise<boolean> {
   const nextSettings = readFromForm();
+  showSaveStatus("Saving…");
   try {
     await invoke("save_settings", { settings: nextSettings });
-    currentSettings = nextSettings;
+    currentSettings = { ...nextSettings,
+      recordingShortcut: currentSettings.recordingShortcut,
+      transcriptStackShortcut: currentSettings.transcriptStackShortcut,
+    };
     addEvent("info", "Settings saved");
+    showSaveStatus("Saved.");
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addEvent("error", message);
     applyToForm(currentSettings);
+    showSaveStatus(`Could not save: ${message}`, true);
     return false;
   }
 }
@@ -810,7 +877,7 @@ let meterScreenVisible = false;
 // screen is actually on-screen and the window is visible, so navigating to
 // another screen — or hiding the window — releases the mic and stops the loop.
 function refreshMeter(): void {
-  if (meterScreenVisible && document.visibilityState === "visible") {
+  if (meterScreenVisible && required<HTMLElement>("screen-settings").classList.contains("active") && !document.querySelector<HTMLElement>("[data-settings-page=audio]")?.hidden && document.visibilityState === "visible") {
     void startMeter();
   } else {
     stopMeter();
@@ -864,7 +931,15 @@ cloudTest.addEventListener("click", () => {
 });
 remoteUrl.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+polishProviderSelect.addEventListener("change", () => {
+  void persistSettings().then(() => updatePolishUi(currentSettings)).catch(reportAsyncError);
+});
+polishCloudAuthToken.addEventListener("change", () => {
+  cloudAuthToken.value = polishCloudAuthToken.value;
+  void persistSettings().then(() => updatePolishUi(currentSettings)).catch(reportAsyncError);
+});
 cloudAuthToken.addEventListener("change", () => {
+  polishCloudAuthToken.value = cloudAuthToken.value;
   void persistSettings()
     .then(() => updatePolishUi(currentSettings))
     .catch(reportAsyncError);
@@ -943,26 +1018,45 @@ function isMacOS(): boolean {
 }
 if (!isMacOS()) {
   insertAtCursorRow.hidden = true;
+  insertAtCursorRow.closest<HTMLElement>(".settings-section")?.setAttribute("hidden", "");
   fnPushToTalkRow.hidden = true;
   // Context awareness reads the macOS Accessibility tree; there is no
   // Windows/Linux implementation yet.
   contextAwarenessRow.hidden = true;
+  contextAwarenessRow.closest<HTMLElement>(".settings-section")?.setAttribute("hidden", "");
 }
 
 // Settings auto-persist on change; the form must never submit/navigate, which
 // in the home window would reload the whole webview.
 document.getElementById("settingsForm")?.addEventListener("submit", (event) => event.preventDefault());
 
-// Run the meter only while the Settings screen is on-screen. IntersectionObserver
-// reports the screen as not-intersecting whenever home.ts toggles it to
-// display:none, which releases the mic; navigating back restarts it.
-const settingsScreen = required<HTMLElement>("screen-settings");
+// Observe only Audio; hidden categories release this meter's own stream.
+// The backend dictation capture has a separate lifetime.
+
 new IntersectionObserver((entries) => {
   meterScreenVisible = entries.some((entry) => entry.isIntersecting);
   refreshMeter();
-}).observe(settingsScreen);
+}).observe(document.querySelector<HTMLElement>("[data-settings-page=audio]")!);
 
-document.addEventListener("visibilitychange", refreshMeter);
+document.addEventListener("home-screen-changed", () => {
+  if (!required<HTMLElement>("screen-settings").classList.contains("active")) cancelShortcutCapture?.();
+  refreshMeter();
+});
+document.addEventListener("settings-category-changed", () => {
+  cancelShortcutCapture?.();
+  refreshMeter();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") cancelShortcutCapture?.();
+  refreshMeter();
+});
+new MutationObserver(() => {
+  if (!required<HTMLElement>("screen-settings").classList.contains("active")) {
+    cancelShortcutCapture?.();
+    meterScreenVisible = false;
+    refreshMeter();
+  }
+}).observe(required<HTMLElement>("screen-settings"), { attributes: true, attributeFilter: ["class", "hidden"] });
 window.addEventListener("beforeunload", stopMeter);
 
 void listen<ModelPrepareProgressEvent>("model-prepare-progress", (event) => {
