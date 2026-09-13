@@ -35,15 +35,7 @@ interface UsageStatsSummary {
   unallocatedWords: number;
 }
 
-interface TranscriptHistoryItem {
-  id: string;
-  createdAt: number;
-  text: string;
-  durationSeconds: number;
-}
-
 const TYPING_WPM = 40;
-const RECENT_LIMIT = 5;
 
 const homeEmpty = byId("homeEmpty");
 const homeStats = byId("homeStats");
@@ -62,8 +54,6 @@ const statZeroEditTile = byId("statZeroEditTile");
 const statZeroEdit = byId("statZeroEdit");
 const statZeroEditMeta = byId("statZeroEditMeta");
 const statChart = byId("statChart");
-const statRecent = byId("statRecent");
-const statViewAll = document.getElementById("statViewAll");
 const renderMonthlyUsage = mountMonthlyUsage(byId("monthlyUsage"));
 
 function byId(id: string): HTMLElement {
@@ -166,57 +156,6 @@ function renderZeroEdit(summary: UsageStatsSummary): void {
       : "last 30 days";
 }
 
-function relativeTime(createdAtMs: number): string {
-  const date = new Date(createdAtMs);
-  if (Number.isNaN(date.getTime())) return "";
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  if (sameDay) return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function wordCount(text: string): number {
-  const trimmed = text.trim();
-  return trimmed ? trimmed.split(/\s+/).length : 0;
-}
-
-function renderRecent(items: TranscriptHistoryItem[]): void {
-  if (items.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "act-empty";
-    empty.textContent = "No dictations yet.";
-    statRecent.replaceChildren(empty);
-    return;
-  }
-
-  statRecent.replaceChildren(
-    ...items.slice(0, RECENT_LIMIT).map((item) => {
-      const row = document.createElement("div");
-      row.className = "act-row";
-
-      const text = document.createElement("span");
-      text.className = "act-text";
-      text.textContent = item.text;
-      text.title = item.text;
-
-      const time = document.createElement("span");
-      time.className = "act-time";
-      time.textContent = relativeTime(item.createdAt);
-
-      const words = document.createElement("span");
-      words.className = "act-words num";
-      const count = wordCount(item.text);
-      words.textContent = `${count} ${count === 1 ? "word" : "words"}`;
-
-      row.append(text, time, words);
-      return row;
-    }),
-  );
-}
-
 async function refresh(): Promise<void> {
   let summary: UsageStatsSummary;
   try {
@@ -230,16 +169,6 @@ async function refresh(): Promise<void> {
   }
 
   renderStats(summary);
-  if (!summary.hasData) return;
-
-  // The recent list is secondary: a failure here must not blank the stats
-  // that already loaded.
-  try {
-    const history = await invoke<TranscriptHistoryItem[]>("get_transcript_history");
-    renderRecent(history);
-  } catch {
-    renderRecent([]);
-  }
 }
 
 function emptyStats(): UsageStatsSummary {
@@ -262,10 +191,6 @@ function emptyStats(): UsageStatsSummary {
     unallocatedWords: 0,
   };
 }
-
-statViewAll?.addEventListener("click", () => {
-  document.querySelector<HTMLButtonElement>('.nav-item[data-screen="notes"]')?.click();
-});
 
 // A finished dictation changes the aggregate; refresh when one lands.
 void listen("transcript-history-updated", () => {
