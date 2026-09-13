@@ -5,9 +5,11 @@ mod audio;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod ax_context;
 mod clipboard;
+mod cursor_preview;
 mod host;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod insertion;
+mod live_preview;
 mod local_models;
 #[cfg(target_os = "macos")]
 mod macos_ax;
@@ -74,6 +76,7 @@ struct AppServices {
     operation: Mutex<()>,
     preview_generation: AtomicU64,
     preview_gate: Mutex<()>,
+    cursor_snapshot: Mutex<live_preview::Snapshot>,
     preview_cancel: Mutex<Option<Arc<AtomicBool>>>,
     local_models: local_models::LocalModels,
     audio: Mutex<AudioService>,
@@ -992,6 +995,17 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
     // If a previous start failed after opening the transcription worker but before
     // audio capture became active, clear that stale worker before the next attempt.
     cancel_transcription_for_location(&services, settings.transcription_location)?;
+    invalidate_previews(&services);
+    let cursor_session = services.preview_generation.load(Ordering::SeqCst);
+    update_cursor_snapshot(&app, |s| {
+        s.begin(
+            cursor_session,
+            settings.transcription_location != TranscriptionLocation::Local,
+        );
+        true
+    });
+    let mut cursor_guard = CursorSessionGuard::new(&app, cursor_session);
+    let _ = app.emit("transcript-session-started", cursor_session);
 
     let stream_sink = match settings.transcription_location {
         TranscriptionLocation::Local => {
@@ -1048,6 +1062,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
             "error",
             format!("Microphone stream failed: {message}"),
         );
+        hide_cursor_session(&stream_error_app, cursor_session);
         let _ = stream_error_app.emit("recording-stream-error", message);
     });
 
@@ -1102,6 +1117,13 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
             settings.transcription_location, settings.model, settings.input_gain
         ),
     );
+    if let Ok(snapshot) = services.cursor_snapshot.lock() {
+        if snapshot.session_id == cursor_session && snapshot.phase == live_preview::Phase::Recording
+        {
+            cursor_preview::show(&app);
+        }
+    }
+    cursor_guard.keep_visible = true;
     Ok(settings.max_recording_seconds)
 }
 
@@ -1226,6 +1248,15 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .try_lock()
         .map_err(|_| "Dictation is already finishing".to_string())?;
     invalidate_previews(services);
+    let cursor_session = {
+        let mut snapshot = services.cursor_snapshot.lock().map_err(|e| e.to_string())?;
+        if snapshot.phase == live_preview::Phase::Recording {
+            snapshot.finishing();
+            let _ = app.emit("cursor-preview-state", &*snapshot);
+        }
+        snapshot.session_id
+    };
+    let mut cursor_guard = CursorSessionGuard::new(app, cursor_session);
 
     let trace = services.debug_trace.lock().ok().and_then(|mut t| t.take());
     let settings = services
@@ -1255,6 +1286,9 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     );
     let raw_transcription = finish_transcription_raw(app, services, &recording, &settings)?;
     let raw_transcript = raw_transcription.text;
+    update_cursor_snapshot(app, |s| {
+        s.full_text(cursor_session, &raw_transcript, false, false)
+    });
     if let Some(trace) = &trace {
         trace.event("full-transcription", serde_json::json!({"text":raw_transcript,"droppedStreamFrames":stats.dropped_stream_frames,"backend":raw_transcription.backend}));
     }
@@ -1477,6 +1511,15 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         Err(err) => emit_backend_event(app, "warning", format!("Could not save note: {err}")),
     }
 
+    update_cursor_snapshot(app, |s| {
+        s.full_text(cursor_session, &transcript, true, polished)
+    });
+    cursor_guard.keep_visible = true;
+    let cursor_app = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(1200));
+        hide_cursor_session(&cursor_app, cursor_session);
+    });
     Ok(transcript)
 }
 
@@ -2005,6 +2048,12 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
         .transcription_cancel_requested
         .store(true, Ordering::SeqCst);
     invalidate_previews(&services);
+    let cursor_session = services
+        .cursor_snapshot
+        .lock()
+        .map(|s| s.session_id)
+        .unwrap_or(0);
+    hide_cursor_session(&app, cursor_session);
     services.local_models.unload();
     if let Some(handle) = services
         .local_transcription_cancel
@@ -2047,6 +2096,67 @@ pub(crate) fn emit_backend_event(app: &AppHandle, level: &'static str, message: 
     );
 }
 
+#[tauri::command]
+fn get_cursor_preview_state(
+    services: State<'_, AppServices>,
+) -> Result<live_preview::Snapshot, String> {
+    services
+        .cursor_snapshot
+        .lock()
+        .map(|s| s.clone())
+        .map_err(|e| e.to_string())
+}
+fn update_cursor_snapshot(
+    app: &AppHandle,
+    update: impl FnOnce(&mut live_preview::Snapshot) -> bool,
+) {
+    if let Ok(mut snapshot) = app.state::<AppServices>().cursor_snapshot.lock() {
+        if update(&mut snapshot) {
+            let _ = app.emit("cursor-preview-state", &*snapshot);
+        }
+    }
+}
+fn hide_cursor_session(app: &AppHandle, session: u64) {
+    if let Ok(mut snapshot) = app.state::<AppServices>().cursor_snapshot.lock() {
+        if snapshot.hide(session) {
+            let _ = app.emit("cursor-preview-state", &*snapshot);
+            cursor_preview::hide(app);
+        }
+    }
+}
+fn emit_transcript_preview(app: &AppHandle, preview: TranscriptPreviewEvent) {
+    update_cursor_snapshot(app, |s| {
+        s.preview(
+            preview.session_id,
+            preview.revision,
+            &preview.text,
+            preview.polished,
+        )
+    });
+    let _ = app.emit("transcript-preview", preview);
+}
+struct CursorSessionGuard {
+    app: AppHandle,
+    session: u64,
+    keep_visible: bool,
+}
+impl CursorSessionGuard {
+    fn new(app: &AppHandle, session: u64) -> Self {
+        Self {
+            app: app.clone(),
+            session,
+            keep_visible: false,
+        }
+    }
+}
+impl Drop for CursorSessionGuard {
+    fn drop(&mut self) {
+        if !self.keep_visible {
+            hide_cursor_session(&self.app, self.session);
+        }
+    }
+}
+
 fn invalidate_previews(services: &AppServices) {
     if let Ok(_gate) = services.preview_gate.lock() {
         services.preview_generation.fetch_add(1, Ordering::SeqCst);
@@ -2063,7 +2173,6 @@ fn start_transcript_preview_forwarder(
     settings: Settings,
     trace: Option<note_debug::Trace>,
 ) -> TranscriptionPreviewSender {
-    invalidate_previews(&app.state::<AppServices>());
     let generation = app
         .state::<AppServices>()
         .preview_generation
@@ -2072,7 +2181,6 @@ fn start_transcript_preview_forwarder(
     if let Ok(mut current) = app.state::<AppServices>().preview_cancel.lock() {
         *current = Some(preview_cancel.clone());
     }
-    let _ = app.emit("transcript-session-started", generation);
     let (tx, rx) = mpsc::channel::<TranscriptPreview>();
     // One current inference plus one replaceable pending revision, never a backlog.
     let pending = Arc::new(preview::LatestPreview::default());
@@ -2119,8 +2227,8 @@ fn start_transcript_preview_forwarder(
                             if services.preview_generation.load(Ordering::SeqCst) == generation
                                 && pending.is_current(rev)
                             {
-                                let _ = app.emit(
-                                    "transcript-preview",
+                                emit_transcript_preview(
+                                    &app,
                                     TranscriptPreviewEvent {
                                         session_id: generation,
                                         revision: rev,
@@ -2152,8 +2260,8 @@ fn start_transcript_preview_forwarder(
             if let Some(trace) = &trace {
                 trace.event("transcript-preview", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"text":preview.text,"finalPreview":preview.final_preview,"note":"Cumulative merged raw text. A preview without a matching polish-start was coalesced or finalization began before it ran."}));
             }
-            let _ = app.emit(
-                "transcript-preview",
+            emit_transcript_preview(
+                &app,
                 TranscriptPreviewEvent {
                     session_id: generation,
                     revision: rev,
@@ -2272,6 +2380,7 @@ pub fn run() {
             operation: Mutex::new(()),
             preview_generation: AtomicU64::new(0),
             preview_gate: Mutex::new(()),
+            cursor_snapshot: Mutex::new(live_preview::Snapshot::default()),
             preview_cancel: Mutex::new(None),
             local_models: local_models::LocalModels::default(),
             audio: Mutex::new(AudioService::default()),
@@ -2315,6 +2424,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_cursor_preview_state,
             get_note_debug_status,
             set_note_debug_capture,
             get_note_metadata,

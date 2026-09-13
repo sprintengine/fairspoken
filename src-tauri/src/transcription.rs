@@ -261,11 +261,18 @@ impl ActiveEngine {
         } else {
             None
         };
+        // Interactive dictation needs a preview during continuous speech too.
+        // Existing silence cuts still fire earlier; retain overlap/backpressure.
+        let chunk_seconds = if preview_tx.is_some() {
+            settings.whisper_chunk_seconds.min(5)
+        } else {
+            settings.whisper_chunk_seconds
+        };
         SessionHandle::start_traced(
             transcriber,
             settings.language.clone(),
             initial_prompt,
-            settings.whisper_chunk_seconds,
+            chunk_seconds,
             preview_tx,
             trace,
         )

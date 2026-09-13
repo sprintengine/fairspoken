@@ -33,6 +33,7 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, "index.html"),
         home: resolve(__dirname, "home.html"),
+        "cursor-preview": resolve(__dirname, "cursor-preview.html"),
         "transcript-shelf": resolve(__dirname, "transcript-shelf.html"),
       },
     },

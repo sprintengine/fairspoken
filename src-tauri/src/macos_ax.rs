@@ -31,6 +31,13 @@ extern "C" {
         value: *mut RawCFTypeRef,
     ) -> i32;
     fn AXValueGetValue(value: RawCFTypeRef, value_type: u32, out: *mut c_void) -> bool;
+    fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> i32;
+    fn AXUIElementCopyParameterizedAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        parameter: RawCFTypeRef,
+        value: *mut RawCFTypeRef,
+    ) -> i32;
     fn AXUIElementIsAttributeSettable(
         element: AXUIElementRef,
         attribute: CFStringRef,
@@ -44,6 +51,68 @@ extern "C" {
 }
 
 const K_AX_VALUE_TYPE_CFRANGE: u32 = 4;
+
+/// Global screen points, top-left origin (the AX/Quartz coordinate system).
+#[derive(Clone, Copy, Debug)]
+pub struct CaretBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Geometry only: never reads the text value. Run off the main thread because
+/// Accessibility is cross-process IPC. Unsupported controls return no anchor.
+pub fn focused_caret_bounds() -> Option<CaretBounds> {
+    let (pid, bundle) = frontmost_pid_and_bundle()?;
+    if is_password_manager(&bundle) {
+        return None;
+    }
+    // Setting the system-wide element's timeout changes the process default;
+    // scope this geometry lookup's timeout to the target application instead.
+    let application = application_element(pid)?;
+    unsafe { AXUIElementSetMessagingTimeout(application.element_ref(), 0.1) };
+    let focused = AxElement(application.copy_attribute("AXFocusedUIElement")?);
+    unsafe { AXUIElementSetMessagingTimeout(focused.element_ref(), 0.1) };
+    if focused.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+        return None;
+    }
+    let range = focused.copy_attribute("AXSelectedTextRange")?;
+    // A selected span has no unambiguous insertion caret; use mouse fallback.
+    if read_cf_range(&range)?.length != 0 {
+        return None;
+    }
+    let attribute = CFString::new("AXBoundsForRange");
+    let mut raw = std::ptr::null();
+    let error = unsafe {
+        AXUIElementCopyParameterizedAttributeValue(
+            focused.element_ref(),
+            attribute.as_concrete_TypeRef(),
+            range.as_CFTypeRef(),
+            &mut raw,
+        )
+    };
+    if error != 0 || raw.is_null() {
+        return None;
+    }
+    let value = unsafe { CFType::wrap_under_create_rule(raw) };
+    let mut rect = core_graphics::geometry::CGRect::default();
+    let valid =
+        unsafe { AXValueGetValue(value.as_CFTypeRef(), 3, &mut rect as *mut _ as *mut c_void) };
+    let bounds = CaretBounds {
+        x: rect.origin.x,
+        y: rect.origin.y,
+        width: rect.size.width,
+        height: rect.size.height,
+    };
+    (valid
+        && [bounds.x, bounds.y, bounds.width, bounds.height]
+            .iter()
+            .all(|v| v.is_finite())
+        && bounds.width >= 0.0
+        && bounds.height > 0.0)
+        .then_some(bounds)
+}
 /// Cap for any single text attribute read during the harvest walk — web
 /// areas can carry megabytes in one AXValue.
 const TEXT_ATTRIBUTE_CAP_BYTES: usize = 2048;

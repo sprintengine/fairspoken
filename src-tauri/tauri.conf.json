@@ -63,6 +63,24 @@
         "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "visible": false
+      },
+      {
+        "title": "Dictation preview",
+        "label": "cursor-preview",
+        "url": "cursor-preview.html",
+        "width": 360,
+        "height": 152,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "focusable": false
       }
     ],
     "security": {
