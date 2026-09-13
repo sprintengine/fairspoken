@@ -48,6 +48,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     await page.waitForTimeout(3600);
     assert.equal(await page.locator('mark, del').count(), 0, 'marks and deleted text expire');
     assert.equal(await page.locator('#previewText').textContent(), 'Hello Sam, please send the draft tomorrow.');
+    await emit({ ...base, revision: 2, phase: 'finishing', text: base.text + ' tomorrow' });
+    assert.equal(await canonical(), 'Hello Sam, please send the draft tomorrow.', 'final raw input retains the polished prefix while the final pass runs');
+    await emit({ ...base, revision: 2, phase: 'complete', text: 'Hello Sam, please send the draft tomorrow morning.', polished: true });
+    assert.equal(await canonical(), 'Hello Sam, please send the draft tomorrow morning.');
+    assert(await page.locator('mark').count() > 0, 'the final polish pass also highlights its changes');
     const long = Array.from({ length: 75 }, (_, i) => `Sentence ${i} stays available to read.`).join('\n');
     await emit({ ...base, sessionId: 2, text: long });
     const scroller = page.locator('#previewText');

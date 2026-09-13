@@ -1,9 +1,22 @@
-//! Passive, session-scoped transcription preview beside the insertion caret.
+//! Nonactivating, session-scoped transcription preview beside the insertion caret.
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager};
 
 pub const WINDOW_LABEL: &str = "cursor-preview";
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+static HOVER_SESSION: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_interacting(session: u64, active: bool) {
+    if active {
+        HOVER_SESSION.store(session, Ordering::SeqCst);
+    } else {
+        let _ = HOVER_SESSION.compare_exchange(session, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+pub fn is_interacting(session: u64) -> bool {
+    session != 0 && HOVER_SESSION.load(Ordering::SeqCst) == session
+}
 #[cfg(target_os = "macos")]
 static AX_LOOKUP_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -38,6 +51,7 @@ fn position(anchor: Rect, area: Rect, width: f64, height: f64) -> (f64, f64) {
 /// Captures one anchor per recording. A generation guard inside the actual UI
 /// closure prevents a late Accessibility response from reviving a hidden box.
 pub fn show(app: &AppHandle) {
+    HOVER_SESSION.store(0, Ordering::SeqCst);
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     std::thread::spawn(move || {
@@ -76,9 +90,9 @@ pub fn show(app: &AppHandle) {
             let Some(window) = ui_app.get_webview_window(WINDOW_LABEL) else {
                 return;
             };
-            // Both are required: a transparent webview still intercepts clicks.
+            // The native panel accepts scrolling while never becoming key.
             let _ = window.set_focusable(false);
-            let _ = window.set_ignore_cursor_events(true);
+            let _ = window.set_ignore_cursor_events(false);
             #[cfg(target_os = "macos")]
             show_macos(&window, caret);
             #[cfg(not(target_os = "macos"))]
@@ -88,12 +102,19 @@ pub fn show(app: &AppHandle) {
 }
 
 pub fn hide(app: &AppHandle) {
+    HOVER_SESSION.store(0, Ordering::SeqCst);
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let ui_app = app.clone();
     let _ = app.run_on_main_thread(move || {
         if GENERATION.load(Ordering::SeqCst) != generation {
             return;
         }
+        #[cfg(target_os = "macos")]
+        PANEL.with(|slot| {
+            if let Some(panel) = slot.borrow().as_ref() {
+                panel.orderOut(None);
+            }
+        });
         if let Some(window) = ui_app.get_webview_window(WINDOW_LABEL) {
             let _ = window.hide();
         }
@@ -101,9 +122,98 @@ pub fn hide(app: &AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
+use objc2::{define_class, rc::Retained, MainThreadOnly};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSPanel;
+
+#[cfg(target_os = "macos")]
+define_class!(
+    #[unsafe(super(NSPanel))]
+    #[thread_kind = MainThreadOnly]
+    struct PreviewPanel;
+    impl PreviewPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key(&self) -> bool { false }
+        #[unsafe(method(canBecomeMainWindow))]
+        fn can_become_main(&self) -> bool { false }
+    }
+);
+#[cfg(target_os = "macos")]
+thread_local! {
+    static PANEL: std::cell::RefCell<Option<Retained<PreviewPanel>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn native_panel(
+    window: &tauri::WebviewWindow,
+    mtm: objc2::MainThreadMarker,
+) -> Option<Retained<PreviewPanel>> {
+    use objc2_app_kit::{
+        NSBackingStoreType, NSColor, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+        NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
+        NSWindowOrderingMode, NSWindowStyleMask,
+    };
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    PANEL.with(|slot| {
+        if let Some(panel) = slot.borrow().as_ref() {
+            return Some(panel.clone());
+        }
+        let raw = window.ns_window().ok()?;
+        let source = unsafe { &*(raw as *const NSWindow) };
+        let content = source.contentView()?;
+        let frame = source.frame();
+        let panel: Retained<PreviewPanel> = unsafe {
+            objc2::msg_send![PreviewPanel::alloc(mtm),
+            initWithContentRect: frame,
+            styleMask: NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+            backing: NSBackingStoreType::Buffered,
+            defer: false]
+        };
+        panel.setOpaque(false);
+        panel.setBackgroundColor(Some(&NSColor::clearColor()));
+        panel.setHasShadow(false);
+        panel.setLevel(3); // NSFloatingWindowLevel
+        panel.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+        panel.setFloatingPanel(true);
+        panel.setHidesOnDeactivate(false);
+        panel.setBecomesKeyOnlyIfNeeded(true);
+        panel.setIgnoresMouseEvents(false);
+        panel.setAcceptsMouseMovedEvents(true);
+        // Keep Tauri's original host hidden. Reparent its content, preserving
+        // the existing WKWebView, IPC bridge, and frontend listeners.
+        source.orderOut(None);
+        source.setContentView(None);
+        panel.setContentView(Some(&content));
+        let material = NSVisualEffectView::initWithFrame(
+            NSVisualEffectView::alloc(mtm),
+            NSRect::new(
+                NSPoint::new(16.0, 16.0),
+                NSSize::new(frame.size.width - 32.0, frame.size.height - 32.0),
+            ),
+        );
+        material.setMaterial(NSVisualEffectMaterial::Popover);
+        material.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        material.setState(NSVisualEffectState::Active);
+        material.setWantsLayer(true);
+        if let Some(layer) = material.layer() {
+            unsafe {
+                let _: () = objc2::msg_send![&*layer, setCornerRadius: 12.0_f64];
+            }
+            layer.setMasksToBounds(true);
+        }
+        content.addSubview_positioned_relativeTo(&material, NSWindowOrderingMode::Below, None);
+        *slot.borrow_mut() = Some(panel.clone());
+        Some(panel)
+    })
+}
+
+#[cfg(target_os = "macos")]
 fn show_macos(window: &tauri::WebviewWindow, caret: Option<crate::macos_ax::CaretBounds>) {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSEvent, NSScreen, NSWindow};
+    use objc2_app_kit::{NSEvent, NSScreen};
     use objc2_foundation::NSPoint;
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -155,16 +265,15 @@ fn show_macos(window: &tauri::WebviewWindow, caret: Option<crate::macos_ax::Care
         width: visible.size.width,
         height: visible.size.height,
     };
-    let Ok(raw) = window.ns_window() else {
+    let Some(native) = native_panel(window, mtm) else {
         return;
     };
-    let native = unsafe { &*(raw as *const NSWindow) };
     let size = native.frame().size;
     let (x, y) = position(anchor, area, size.width, size.height);
     native.setFrameOrigin(NSPoint::new(x, primary_top - y - size.height));
     // Unlike makeKeyAndOrderFront / application activation, this only changes
     // visibility and leaves the insertion target's keyboard focus untouched.
-    native.orderFrontRegardless();
+    native.orderFront(None);
 }
 
 #[cfg(not(target_os = "macos"))]
