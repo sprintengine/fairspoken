@@ -1,0 +1,17 @@
+{
+  "verifiedAt": "2026-09-13",
+  "assets": [
+    {
+      "file": "openai.png",
+      "sha256": "6025a4347a8eaed17e31eaebf7834e33ec4af26cc7f59be586ac59ba5157fa1c"
+    },
+    {
+      "file": "qwen.svg",
+      "sha256": "f7e324607c3f657953977d2742fbb8a3a0a354a13736671d27bfb906e9d1f3f2"
+    },
+    {
+      "file": "QWEN-LICENSE.txt",
+      "sha256": "55367b61ccd2a016a0159ad886bd66a3ee6cb5e873d0c75c803c897dd245b075"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+@import "./design-system/extension-icon.css";
+
+.publisher-icon {
+  --ds-extension-icon-size: var(--sem-size-control-lg);
+  color: var(--sem-color-text-muted);
+}
+/* An upstream avatar brings its own plate and clear space. Preserve both;
+   never tint or filter a publisher's artwork to follow the app theme. */
+.publisher-icon--plated .ds-extension-icon-art { width: 100%; height: 100%; }

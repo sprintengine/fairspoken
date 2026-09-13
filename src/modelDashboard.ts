@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./modelDashboard.css";
+import { createPublisherIcon } from "./publisherIcons";
 
 type Settings = { model: string; transcriptionLocation: string; polishEnabled: boolean; polishProvider: "local" | "cloud"; polishModel: string; cloudAuthToken: string; [key: string]: unknown };
 type Model = { id: string; name: string; publisher: string; description: string; bytes: number; installed: boolean; selected: boolean; loaded: boolean; source: string; downloads: number | null; supported: boolean };
@@ -32,8 +33,7 @@ async function choose(patch: Partial<Settings>): Promise<void> {
 const size = (bytes: number): string => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
 function row(id: string, title: string, publisher: string, detail: string, status: string): { element: HTMLElement; actions: HTMLElement } {
   const element = document.createElement("div"); element.className = "ds-list-row model-row";
-  const icon = document.createElement("span"); icon.className = "ds-extension-icon"; icon.setAttribute("aria-hidden", "true");
-  const letters = document.createElement("span"); letters.className = "ds-extension-icon-monogram"; letters.textContent = publisher.slice(0, 2).toUpperCase(); icon.append(letters);
+  const icon = createPublisherIcon(publisher);
   const content = document.createElement("div"); content.className = "ds-list-row-content";
   const name = document.createElement("div"); name.className = "ds-list-row-title"; name.textContent = title;
   const description = document.createElement("span"); description.className = "ds-list-row-supporting"; description.textContent = detail;
@@ -55,7 +55,7 @@ function progressUpdate(value: Download): void {
 }
 function render(): void {
   rows.clear();
-  root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "Runs on this device. Only engines supported by this build are listed." : `Currently using ${settings.transcriptionLocation === "cloud" ? "MultiVoice Cloud" : "your remote host"}. Choose Use to switch to local dictation.`;
+  root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "Available speech models for this device." : `Currently using ${settings.transcriptionLocation === "cloud" ? "MultiVoice Cloud" : "your remote host"}. Choose Use to switch to local dictation.`;
   const speechList = root.querySelector("#dictationModels")!; speechList.replaceChildren();
   for (const m of speech) {
     const parakeet = m.model.startsWith("parakeet");
@@ -69,12 +69,12 @@ function render(): void {
     }, selected || speechDownload !== null));
     speechList.append(r.element);
   }
-  root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Polish is off. Your words receive the usual dictionary corrections." : settings.polishProvider === "local" ? "Local polish is enabled. Your text stays on this device for cleanup." : "MultiVoice Cloud polish is enabled. Transcript text is sent to your configured cloud service.";
+  root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Polish is off. Dictionary corrections still apply." : settings.polishProvider === "local" ? "Local cleanup stays on this device." : "Cloud cleanup sends text to your configured service.";
   const providerActions = root.querySelector("#polishProviderActions")!;
   providerActions.replaceChildren(button("Off", () => choose({ polishEnabled: false }), !settings.polishEnabled), button("Use cloud", () => choose({ polishProvider: "cloud", polishEnabled: true }), !settings.cloudAuthToken || (settings.polishEnabled && settings.polishProvider === "cloud")));
   const polishList = root.querySelector("#polishModels")!; polishList.replaceChildren();
   for (const m of catalog.polish) {
-    const r = row(m.id, m.name, m.publisher, `${m.description} · ${size(m.bytes)} download${m.downloads !== null ? ` · ${m.downloads.toLocaleString()} Hub downloads` : ""}`, !m.supported ? "Unavailable on this platform" : m.selected && m.installed ? (m.loaded ? "Selected · loaded in memory" : "Selected · loads when needed") : m.installed ? "Downloaded" : "Available to download");
+    const r = row(m.id, m.name, m.publisher, `${m.publisher} · ${m.description} · ${size(m.bytes)} download${m.downloads !== null ? ` · ${m.downloads.toLocaleString()} Hub downloads` : ""}`, !m.supported ? "Unavailable on this platform" : m.selected && m.installed ? (m.loaded ? "Selected · loaded in memory" : "Selected · loads when needed") : m.installed ? "Downloaded" : "Available to download");
     if (busyDownload() && download?.model === m.id) {
       r.actions.append(button("Cancel download", async () => { await invoke("cancel_local_model_download"); say("Cancelling download…"); }));
     } else {
