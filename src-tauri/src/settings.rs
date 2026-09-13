@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -253,7 +254,22 @@ impl SettingsService {
         let payload = serde_json::to_string_pretty(&next)
             .map_err(|err| format!("Failed to serialize settings: {err}"))?;
         let temporary = self.path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-        if let Err(error) = fs::write(&temporary, payload).and_then(|_| fs::rename(&temporary, &self.path)) {
+        let write = || -> std::io::Result<()> {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                // Replacing the file must not broaden access to stored API tokens.
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(payload.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, &self.path)
+        };
+        if let Err(error) = write() {
             let _ = fs::remove_file(&temporary);
             return Err(format!("Failed to write settings: {error}"));
         }
@@ -635,5 +651,23 @@ mod tests {
             normalized.transcript_stack_shortcut,
             "CommandOrControl+Shift+Digit2"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_keeps_settings_private_and_replaces_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!("multivoice-settings-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        let mut service = SettingsService { path: path.clone(), current: Settings::default() };
+        service.save(Settings::default()).unwrap();
+        let next = Settings { interaction_sounds: false, ..Settings::default() };
+        service.save(next).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let saved: Settings = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(!saved.interaction_sounds);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
     }
 }
