@@ -1,0 +1,1 @@
+Framework-neutral reference CSS vendored from Sprint Engine Studio design-system on 2026-09-13. Source: the upstream design system/design-system. Keep semantic tokens, component anatomy, states and accessibility aligned with the source. Product model catalog layout is in ../modelDashboard.css.

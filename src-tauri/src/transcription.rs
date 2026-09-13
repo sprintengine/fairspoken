@@ -4,7 +4,7 @@ use crate::settings::Settings;
 use parakeet_rs::{ParakeetTDT, Transcriber};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 #[cfg(feature = "whisper")]
@@ -42,6 +42,12 @@ const NO_STREAMED_AUDIO: &str = "No audio frames were streamed to the transcribe
 /// Both Parakeet and (optionally) Whisper implement this so the chunked
 /// streaming machinery is engine-agnostic.
 pub trait ChunkTranscriber: Send + Sync {
+    fn ready(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn load_failed(&self) -> bool {
+        false
+    }
     /// `language` and `initial_prompt` are honoured by Whisper; Parakeet
     /// ignores them.
     fn transcribe_pcm(
@@ -114,11 +120,12 @@ impl TranscriptionService {
         Ok(None)
     }
 
-    pub fn start_session_with_cancel(
+    pub fn start_session_traced(
         &mut self,
         settings: &Settings,
         models: &ModelService,
         preview_tx: Option<TranscriptionPreviewSender>,
+        trace: Option<crate::note_debug::Trace>,
     ) -> Result<TranscriptionSessionStart, String> {
         if self.session.is_some() {
             return Err("Transcription session already in progress".to_string());
@@ -126,7 +133,9 @@ impl TranscriptionService {
 
         self.active
             .ensure(settings.model, models, settings.use_gpu)?;
-        let handle = self.active.start_chunked_session(settings, preview_tx)?;
+        let handle = self
+            .active
+            .start_chunked_session(settings, preview_tx, trace)?;
         let audio_tx = handle.audio_tx.clone();
         let cancel_handle = handle.cancel_handle();
         self.session = Some(handle);
@@ -140,7 +149,13 @@ impl TranscriptionService {
     /// session, so a host worker can hold the model warm before the first job
     /// arrives.
     pub fn preload(&mut self, settings: &Settings, models: &ModelService) -> Result<(), String> {
-        self.active.ensure(settings.model, models, settings.use_gpu)
+        self.active
+            .ensure(settings.model, models, settings.use_gpu)?;
+        self.active
+            .transcriber
+            .as_ref()
+            .ok_or("Transcription engine is unavailable")?
+            .ready()
     }
 
     pub fn finish_session(
@@ -149,6 +164,11 @@ impl TranscriptionService {
         settings: &Settings,
         models: &ModelService,
     ) -> Result<String, String> {
+        // A saturated callback channel must never lose words in the final text.
+        // The full capture buffer is authoritative when any stream frame dropped.
+        if recording.dropped_stream_frames > 0 {
+            self.cancel_session();
+        }
         if let Some(handle) = self.session.take() {
             match handle.finish() {
                 Ok(transcript) => return Ok(transcript),
@@ -189,7 +209,11 @@ impl ActiveEngine {
     ) -> Result<(), String> {
         if self.active_model == Some(model)
             && self.active_use_gpu == Some(use_gpu)
-            && self.transcriber.is_some()
+            && self
+                .transcriber
+                .as_ref()
+                .map(|t| !t.load_failed())
+                .unwrap_or(false)
         {
             return Ok(());
         }
@@ -201,13 +225,21 @@ impl ActiveEngine {
             ));
         }
 
-        let path = models.path_for(model);
-        let transcriber: Arc<dyn ChunkTranscriber> = match model {
-            SttModel::Parakeet => Arc::new(ParakeetTranscriber::load(&path)?),
-            #[cfg(feature = "whisper")]
-            SttModel::Whisper(_) => Arc::new(WhisperTranscriber::load(&path, use_gpu)?),
-        };
-
+        let transcriber = Arc::new(LazyTranscriber {
+            model,
+            path: models.path_for(model),
+            use_gpu,
+            loaded: OnceLock::new(),
+        });
+        // The chunk coordinator starts immediately and drains PCM while this
+        // worker loads weights. Loading never occupies the Tauri/UI thread.
+        let warm = transcriber.clone();
+        thread::Builder::new()
+            .name("speech-model-loader".into())
+            .spawn(move || {
+                let _ = warm.get();
+            })
+            .map_err(|e| format!("Could not start model loader: {e}"))?;
         self.transcriber = Some(transcriber);
         self.active_model = Some(model);
         self.active_use_gpu = Some(use_gpu);
@@ -218,6 +250,7 @@ impl ActiveEngine {
         &self,
         settings: &Settings,
         preview_tx: Option<TranscriptionPreviewSender>,
+        trace: Option<crate::note_debug::Trace>,
     ) -> Result<SessionHandle, String> {
         let transcriber = self
             .transcriber
@@ -228,12 +261,13 @@ impl ActiveEngine {
         } else {
             None
         };
-        SessionHandle::start(
+        SessionHandle::start_traced(
             transcriber,
             settings.language.clone(),
             initial_prompt,
             settings.whisper_chunk_seconds,
             preview_tx,
+            trace,
         )
     }
 
@@ -260,6 +294,48 @@ impl ActiveEngine {
             &settings.language,
             initial_prompt.as_deref(),
         )
+    }
+}
+
+/// One initialization shared by warmup and inference. The audio coordinator
+/// never waits on this lock; it continues spooling PCM up to the capture limit.
+struct LazyTranscriber {
+    model: SttModel,
+    path: std::path::PathBuf,
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
+    use_gpu: bool,
+    loaded: OnceLock<Result<Arc<dyn ChunkTranscriber>, String>>,
+}
+impl LazyTranscriber {
+    fn get(&self) -> Result<&Arc<dyn ChunkTranscriber>, String> {
+        self.loaded
+            .get_or_init(|| match self.model {
+                SttModel::Parakeet => ParakeetTranscriber::load(&self.path)
+                    .map(|m| Arc::new(m) as Arc<dyn ChunkTranscriber>),
+                #[cfg(feature = "whisper")]
+                SttModel::Whisper(_) => WhisperTranscriber::load(&self.path, self.use_gpu)
+                    .map(|m| Arc::new(m) as Arc<dyn ChunkTranscriber>),
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+}
+impl ChunkTranscriber for LazyTranscriber {
+    fn ready(&self) -> Result<(), String> {
+        self.get().map(|_| ())
+    }
+    fn load_failed(&self) -> bool {
+        matches!(self.loaded.get(), Some(Err(_)))
+    }
+    fn transcribe_pcm(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        language: &str,
+        initial_prompt: Option<&str>,
+    ) -> Result<String, String> {
+        self.get()?
+            .transcribe_pcm(samples, sample_rate, language, initial_prompt)
     }
 }
 
@@ -366,12 +442,30 @@ impl ChunkTranscriber for WhisperTranscriber {
 }
 
 impl SessionHandle {
+    #[cfg(test)]
     fn start(
         transcriber: Arc<dyn ChunkTranscriber>,
         language: String,
         initial_prompt: Option<String>,
         chunk_seconds: u16,
         preview_tx: Option<TranscriptionPreviewSender>,
+    ) -> Result<Self, String> {
+        Self::start_traced(
+            transcriber,
+            language,
+            initial_prompt,
+            chunk_seconds,
+            preview_tx,
+            None,
+        )
+    }
+    fn start_traced(
+        transcriber: Arc<dyn ChunkTranscriber>,
+        language: String,
+        initial_prompt: Option<String>,
+        chunk_seconds: u16,
+        preview_tx: Option<TranscriptionPreviewSender>,
+        trace: Option<crate::note_debug::Trace>,
     ) -> Result<Self, String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(STREAM_CHANNEL_DEPTH);
         let (control_tx, control_rx) = mpsc::channel::<SessionControl>();
@@ -387,6 +481,7 @@ impl SessionHandle {
                     audio_rx,
                     control_rx,
                     preview_tx,
+                    trace,
                 );
                 let _ = result_tx.send(result);
             })
@@ -453,6 +548,7 @@ fn run_chunked_session(
     audio_rx: Receiver<AudioFrame>,
     control_rx: Receiver<SessionControl>,
     preview_tx: Option<TranscriptionPreviewSender>,
+    trace: Option<crate::note_debug::Trace>,
 ) -> Result<String, String> {
     let chunk_seconds = usize::from(chunk_seconds.clamp(5, 60));
     let (job_tx, job_rx) = mpsc::channel::<WhisperChunkJob>();
@@ -461,6 +557,8 @@ fn run_chunked_session(
         .name("transcription-chunk-worker".to_string())
         .spawn(move || {
             for job in job_rx {
+                let started = std::time::Instant::now();
+                if let Some(trace) = &trace { trace.event("asr-chunk-start", serde_json::json!({"index":job.index,"samples":job.pcm_i16.len(),"sampleRate":job.sample_rate,"durationSeconds":job.pcm_i16.len() as f64 / job.sample_rate.max(1) as f64,"overlapsPrevious":job.overlaps_previous,"language":language,"initialPrompt":initial_prompt})); }
                 let result = transcriber
                     .transcribe_pcm(
                         &job.pcm_i16,
@@ -485,6 +583,7 @@ fn run_chunked_session(
                         }
                     });
 
+                if let Some(trace) = &trace { trace.event("asr-chunk-result", serde_json::json!({"index":job.index,"text":result.as_ref().ok().map(|r|&r.text),"error":result.as_ref().err(),"durationMs":started.elapsed().as_millis() as u64})); }
                 let should_stop = result.is_err();
                 if chunk_result_tx.send(result).is_err() || should_stop {
                     break;
@@ -815,7 +914,9 @@ fn dispatch_final_chunk(
             sample_rate,
             overlaps_previous,
         })
-        .map_err(|_| "Transcription chunk worker stopped while receiving final audio".to_string())?;
+        .map_err(|_| {
+            "Transcription chunk worker stopped while receiving final audio".to_string()
+        })?;
     *chunk_index += 1;
     Ok(())
 }
@@ -1101,7 +1202,8 @@ fn audio_activity_stats(samples: &[i16], sample_rate: u32) -> AudioActivityStats
     let mut active_windows = 0;
     for window in samples.chunks(window_samples) {
         let (window_peak, window_rms) = peak_and_rms(window);
-        if window_peak >= SPEECH_WINDOW_PEAK_THRESHOLD || window_rms >= SPEECH_WINDOW_RMS_THRESHOLD {
+        if window_peak >= SPEECH_WINDOW_PEAK_THRESHOLD || window_rms >= SPEECH_WINDOW_RMS_THRESHOLD
+        {
             active_windows += 1;
         }
     }
@@ -1220,6 +1322,73 @@ mod tests {
     }
 
     #[test]
+    fn cold_engine_does_not_block_audio_spooling_or_lose_opening_samples() {
+        struct DelayedEngine {
+            release: Mutex<mpsc::Receiver<()>>,
+            started: mpsc::Sender<()>,
+            seen: Arc<Mutex<Vec<i16>>>,
+            first: std::sync::atomic::AtomicBool,
+        }
+        impl ChunkTranscriber for DelayedEngine {
+            fn transcribe_pcm(
+                &self,
+                samples: &[i16],
+                _: u32,
+                _: &str,
+                _: Option<&str>,
+            ) -> Result<String, String> {
+                if self.first.swap(false, Ordering::SeqCst) {
+                    self.started.send(()).unwrap();
+                    self.release.lock().unwrap().recv().unwrap();
+                }
+                self.seen.lock().unwrap().extend_from_slice(samples);
+                Ok("words".into())
+            }
+        }
+        let (release_tx, release_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let engine = Arc::new(DelayedEngine {
+            release: Mutex::new(release_rx),
+            started: started_tx,
+            seen: seen.clone(),
+            first: std::sync::atomic::AtomicBool::new(true),
+        });
+        let handle = SessionHandle::start(engine, "en".into(), None, 5, None).unwrap();
+        handle
+            .audio_tx
+            .send(AudioFrame {
+                pcm_i16: vec![2000; 5000],
+                sample_rate: 1000,
+            })
+            .unwrap();
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        // More than the callback channel depth must drain even with inference held.
+        for n in 0..100 {
+            handle
+                .audio_tx
+                .send(AudioFrame {
+                    pcm_i16: vec![3000 + n; 100],
+                    sample_rate: 1000,
+                })
+                .unwrap();
+        }
+        // Finish before releasing the cold engine: finalization must retain everything.
+        let finished = std::thread::spawn(move || handle.finish());
+        release_tx.send(()).unwrap();
+        assert!(!finished.join().unwrap().unwrap().is_empty());
+        let samples = seen.lock().unwrap();
+        assert_eq!(samples[0], 2000);
+        assert!(samples.len() >= 15000); // overlaps may repeat, never omit
+        for n in 0..100 {
+            assert!(samples.contains(&(3000 + n)));
+        }
+        assert_eq!(*samples.last().unwrap(), 3099);
+    }
+
+    #[test]
     fn streaming_session_transcribes_and_merges_chunks_in_order() {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen_rates = Arc::new(Mutex::new(Vec::new()));
@@ -1229,8 +1398,16 @@ mod tests {
         });
         let sample_rate = 16_000;
         let chunk_seconds = 5_u16;
-        let handle = SessionHandle::start(transcriber, "en".to_string(), None, chunk_seconds, None)
-            .expect("start session");
+        let trace = crate::note_debug::Trace::new(true);
+        let handle = SessionHandle::start_traced(
+            transcriber,
+            "en".to_string(),
+            Some("Vocabulary hint".into()),
+            chunk_seconds,
+            None,
+            trace.clone(),
+        )
+        .expect("start session");
 
         // Three chunks' worth of speech so the dispatcher emits several jobs.
         let chunk_samples = sample_rate as usize * usize::from(chunk_seconds);
@@ -1249,6 +1426,29 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(transcript, expected);
+        if let Some(trace) = trace {
+            let metadata = trace.finish(&transcript, &transcript, &transcript, &transcript);
+            let starts: Vec<_> = metadata
+                .events
+                .iter()
+                .filter(|e| e.kind == "asr-chunk-start")
+                .collect();
+            let results: Vec<_> = metadata
+                .events
+                .iter()
+                .filter(|e| e.kind == "asr-chunk-result")
+                .collect();
+            assert_eq!(starts.len(), count);
+            assert_eq!(results.len(), count);
+            for (index, (start, result)) in starts.iter().zip(&results).enumerate() {
+                assert_eq!(start.data["index"], index);
+                assert_eq!(start.data["initialPrompt"], "Vocabulary hint");
+                assert_eq!(result.data["index"], index);
+                assert_eq!(result.data["text"], format!("c{index}"));
+                assert!(result.data["error"].is_null());
+                assert!(start.sequence < result.sequence);
+            }
+        }
         // Every chunk is handed to the engine at the captured sample rate.
         assert_eq!(seen_rates.lock().unwrap().len(), count);
         assert!(seen_rates
@@ -1422,7 +1622,11 @@ mod tests {
 
         let job = rx.try_recv().expect("gap chunk job");
         assert_eq!(job.index, 0);
-        assert_eq!(job.pcm_i16.len(), total, "gap cut ships the whole utterance");
+        assert_eq!(
+            job.pcm_i16.len(),
+            total,
+            "gap cut ships the whole utterance"
+        );
         assert!(!job.overlaps_previous);
         assert!(buffer.is_empty(), "gap cut leaves no overlap tail");
         assert_eq!(dispatched_chunks, 1);
@@ -1470,7 +1674,10 @@ mod tests {
             0,
         )
         .expect("dispatch");
-        assert!(rx.try_recv().is_err(), "tiny utterances wait for more audio");
+        assert!(
+            rx.try_recv().is_err(),
+            "tiny utterances wait for more audio"
+        );
     }
 
     #[test]
@@ -1495,7 +1702,10 @@ mod tests {
         )
         .expect("dispatch");
 
-        assert!(rx.try_recv().is_err(), "no new job while the engine is behind");
+        assert!(
+            rx.try_recv().is_err(),
+            "no new job while the engine is behind"
+        );
         assert_eq!(buffer.len(), before, "audio keeps accumulating instead");
         assert_eq!(dispatched_chunks, MAX_PENDING_CHUNK_JOBS);
     }

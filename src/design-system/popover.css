@@ -1,0 +1,301 @@
+/* Popover — the anchored overlay engine. One shell for everything
+ * dropdown-shaped: overflow menus, filter menus, select listboxes, pickers.
+ * Extracted from the source product's Popover / PointerPopover primitives
+ * (src/renderer/src/components/ui/).
+ *
+ * The surface is lifted to the end of <body> and positioned in fixed viewport
+ * coordinates, so it escapes every scroll container and stacking context on
+ * the page. The consumer writes the one or two anchoring edges into
+ * --ds-popover-top/right/bottom/left (the edge nearest the trigger, so a stale
+ * measurement can never drift the glued edge) and mirrors the trigger's width
+ * into --ds-popover-trigger-width for width-coupled listboxes.
+ *
+ * The shell owns chrome only — border, radius, background, shadow, layer,
+ * entrance — and deliberately no padding: a menu wants full-bleed rows, a
+ * dialog-role body wants an even inset, and neither should fight a default. */
+
+.ds-popover {
+  position: fixed;
+  top: var(--ds-popover-top, auto);
+  right: var(--ds-popover-right, auto);
+  bottom: var(--ds-popover-bottom, auto);
+  left: var(--ds-popover-left, auto);
+  z-index: var(--sem-z-popover);
+  box-sizing: border-box;
+  /* The vertical half of the 8px viewport clamp: a surface taller than the
+   * window is bounded to it and scrolls, never pinned to the top edge and
+   * run off the bottom. */
+  max-height: calc(100vh - 2 * var(--sem-space-sm));
+  overflow-y: auto;
+  border: 1px solid var(--sem-color-border-strong);
+  border-radius: var(--sem-radius-overlay);
+  background: var(--sem-color-bg-surface-raised);
+  /* The token, not the shipped literal — six kit files hardcode a dark-only
+   * shadow here (MC-2110); the token is the spec. */
+  box-shadow: var(--sem-shadow-popover);
+  color: var(--sem-color-text-default);
+  font-family: var(--sem-font-family-ui);
+  font-size: var(--sem-font-size-body);
+  line-height: var(--sem-font-line-default);
+  /* The one sanctioned popover entrance: a 4px drop-and-fade composing the
+   * token duration/ease pair. Not a fourth motion — this is the third of the
+   * three the principles allow. */
+  animation: ds-popover-enter var(--sem-motion-duration-normal) var(--sem-motion-ease-standard);
+}
+
+/* Closed is out of the document — or `hidden`, which must win over the
+ * fixed-position display. */
+.ds-popover[hidden] {
+  display: none;
+}
+
+/* Coordinate-anchored: opens at a viewport point (right-click, caret, drop
+ * location) instead of at a trigger. One layer up — a context menu is
+ * summoned OVER whatever is already open, including an open popover. */
+.ds-popover--pointer {
+  z-index: var(--sem-z-menu);
+}
+
+/* Cursor-error: the pointer-anchored REPORT of a failed click. Same family,
+ * different job — it carries a status.danger message rather than a menu, so it
+ * takes the soft tone tint and the tone hairline in place of the raised
+ * surface and the neutral edge. Everything else (portal, fixed coordinates,
+ * viewport clamp, elevation, radius) is the shell's, unchanged.
+ *
+ * The one exception to "there is no arrow variant": the click that raised this
+ * left nothing on screen to anchor to, so the caret is the anchor. */
+.ds-popover--cursor-error {
+  z-index: var(--sem-z-popover);
+  /* The caret hangs past the surface edge, so this level cannot clip. */
+  overflow: visible;
+  border-color: var(--sem-color-status-danger);
+  background: var(--sem-color-status-danger-soft);
+  /* The entrance scales from the caret so the box visibly emanates from the
+   * click; the pair is the sanctioned popover motion, not a fourth one. */
+  transform-origin: var(--ds-popover-caret-left, 50%) var(--ds-popover-caret-origin, 100%);
+  animation: ds-popover-cursor-error-enter var(--sem-motion-duration-normal)
+    var(--sem-motion-ease-standard);
+}
+
+/* Collapsed shows one clipped line; expanded grows to the message and scrolls.
+ * The heights are layout measures — the reading limits of a transient report,
+ * not steps on the control ramp. */
+.ds-popover-cursor-error-body {
+  max-height: 36px;
+  overflow: hidden;
+  transition: max-height var(--sem-motion-duration-normal) var(--sem-motion-ease-standard);
+}
+
+.ds-popover--cursor-error[data-expanded] .ds-popover-cursor-error-body {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* The message row: the shape-coded failed glyph at the leading edge, the text,
+ * and the reveal actions. Tone by glyph plus tint, never by a coloured edge. */
+.ds-popover-cursor-error-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sem-space-xs);
+  padding: var(--sem-space-xs) var(--sem-space-md);
+}
+
+.ds-popover-cursor-error-message {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--sem-font-size-micro);
+  line-height: var(--sem-font-line-default);
+  color: var(--sem-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Expanded, the message is the full text of an error — an identifier, not
+ * prose, so it reads in mono and keeps its own line breaks. */
+.ds-popover--cursor-error[data-expanded] .ds-popover-cursor-error-message {
+  font-family: var(--sem-font-family-mono);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* A 1px-calibrated triangle from a rotated square, so the fill and both outer
+ * hairlines continue cleanly off the box edge. It is aimed at the click even
+ * when the box is clamped sideways. */
+.ds-popover-caret {
+  position: absolute;
+  left: var(--ds-popover-caret-left, 50%);
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+}
+
+.ds-popover-caret::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--sem-color-status-danger);
+  background: var(--sem-color-status-danger-soft);
+  transform: rotate(45deg);
+}
+
+/* Box above the click: the caret hangs below it, pointing down. */
+.ds-popover-caret--down {
+  bottom: -5px;
+}
+
+.ds-popover-caret--down::before {
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+/* Box below the click: the caret sits above it, pointing up. */
+.ds-popover-caret--up {
+  top: -5px;
+}
+
+.ds-popover-caret--up::before {
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+/* Masks the 1px join where the rotated square meets the surface border. */
+.ds-popover-caret-seam {
+  position: absolute;
+  left: var(--ds-popover-caret-left, 50%);
+  width: 11px;
+  height: 1px;
+  background: var(--sem-color-status-danger-soft);
+  pointer-events: none;
+}
+
+.ds-popover-caret-seam--down {
+  bottom: 0;
+}
+
+.ds-popover-caret-seam--up {
+  top: 0;
+}
+
+@keyframes ds-popover-cursor-error-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ds-popover-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-popover {
+    animation: none;
+  }
+  .ds-popover-cursor-error-body {
+    transition: none;
+  }
+}
+
+/* ── Scope body ──────────────────────────────────────────────────────────
+ * A named CONTENT part for the dialog-role surface: the answer to "what may
+ * that machine do here?", opened from a quiet link-button on a row's meta line
+ * ("6 scopes").
+ *
+ * It is documented as a part rather than left to each host because the shape
+ * has to be identical in three places — the Remote settings row, the inbound
+ * pair-request card, and the mobile companion — and a surface that says what
+ * another machine is permitted to do is the last one that should be drawn
+ * three times with three different orders. The shell still owns the chrome and
+ * still carries no padding of its own; this part brings the inset with it,
+ * which is the rule the Anatomy note states ("content padding belongs to the
+ * content").
+ *
+ * The order is the argument: what is held, a rule, what is not held with the
+ * one action that changes it, and a consequence in plain words. Held first,
+ * because the reader came to find out what is already true. */
+.ds-popover-scope-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sem-space-sm);
+  padding: var(--sem-space-sm) var(--sem-space-lg);
+  font-family: var(--sem-font-family-ui);
+  font-size: var(--sem-font-size-body);
+  color: var(--sem-color-text-default);
+}
+
+/* The heading over a list. `meta` at `font.weight.emphasis` — a step BELOW the
+ * body text it introduces, which is what a label over a list is: the surface's
+ * subject is the identifiers, not the words above them. */
+.ds-popover-scope-heading {
+  font-size: var(--sem-font-size-meta);
+  font-weight: var(--sem-font-weight-emphasis);
+  color: var(--sem-color-text-primary);
+}
+
+/* The second heading rides a line with its own action — "Not granted" beside
+ * the link-button that grants. The action is inline with the heading rather
+ * than under the list because it acts on the whole group; parked at the bottom
+ * it would read as belonging to the last row. */
+.ds-popover-scope-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sem-space-sm);
+}
+
+/* The second group's heading is one step quieter than the first: the reader
+ * came for what is held, and the ink order says so. */
+.ds-popover-scope-headline .ds-popover-scope-heading {
+  color: var(--sem-color-text-muted);
+}
+
+/* The identifiers, one per line, in mono at `meta`. A list rather than a set of
+ * pills because a popover column is narrow and a wrapped pill set at this width
+ * reads as ragged; the scope-pill component is for the wide surface (the
+ * pairing code card), and this is the same content in a column. */
+.ds-popover-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sem-space-3xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--sem-font-family-mono);
+  font-size: var(--sem-font-size-meta);
+  color: var(--sem-color-text-default);
+}
+
+/* Not granted: one step of ink, and nothing else. Never a danger tint — a
+ * scope the person never granted is a fact, not a fault — and never the only
+ * carrier of the difference, which the heading above it states in words. */
+.ds-popover-scope-list--missing {
+  color: var(--sem-color-text-subtle);
+}
+
+/* The hairline between the two groups. One rule, and it is what separates them:
+ * a second heading alone would let the eye run the two lists together. */
+.ds-popover-scope-rule {
+  height: 1px;
+  background: var(--sem-color-border-subtle);
+}
+
+/* The consequence, in the reader's own language — "It can't see chats or
+ * terminals here." One line, `micro`, `text.muted`: it is the sentence that
+ * explains why something they expected to see is missing, and it is the reason
+ * this surface exists rather than a bare list. */
+.ds-popover-scope-note {
+  font-size: var(--sem-font-size-micro);
+  color: var(--sem-color-text-muted);
+}

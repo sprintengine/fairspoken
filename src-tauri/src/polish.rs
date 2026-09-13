@@ -94,11 +94,34 @@ pub enum PolishDecision {
     Failed(String),
 }
 
+#[cfg(test)]
 pub fn maybe_polish(
+    raw: &str,
+    settings: &Settings,
+    target: Option<&PolishTargetApp>,
+    surrounding: Option<&str>,
+) -> PolishDecision {
+    maybe_polish_traced(raw, settings, target, surrounding, None)
+}
+pub fn maybe_polish_traced(
+    raw: &str,
+    settings: &Settings,
+    target: Option<&PolishTargetApp>,
+    surrounding: Option<&str>,
+    span: Option<&crate::note_debug::Span>,
+) -> PolishDecision {
+    let result = maybe_polish_impl(raw, settings, target, surrounding, span);
+    if let Some(span) = span {
+        span.finish(raw, &result);
+    }
+    result
+}
+fn maybe_polish_impl(
     raw_transcript: &str,
     settings: &Settings,
     target_app: Option<&PolishTargetApp>,
     surrounding_text: Option<&str>,
+    span: Option<&crate::note_debug::Span>,
 ) -> PolishDecision {
     if !settings.polish_enabled {
         return PolishDecision::Disabled;
@@ -131,7 +154,15 @@ pub fn maybe_polish(
         None
     };
 
-    match polish_transcript(raw_transcript, settings, target_app, category, tone, surrounding) {
+    match polish_transcript(
+        raw_transcript,
+        settings,
+        target_app,
+        category,
+        tone,
+        surrounding,
+        span,
+    ) {
         Ok(response) => {
             let text = response.text.trim();
             if !response.changed || text.is_empty() || text == raw_transcript.trim() {
@@ -157,9 +188,10 @@ fn polish_transcript(
     category: AppCategory,
     tone: String,
     surrounding_text: Option<&str>,
+    span: Option<&crate::note_debug::Span>,
 ) -> Result<PolishResponse, String> {
-    let base_url = reqwest::Url::parse(&cloud_url())
-        .map_err(|err| format!("invalid cloud URL: {err}"))?;
+    let base_url =
+        reqwest::Url::parse(&cloud_url()).map_err(|err| format!("invalid cloud URL: {err}"))?;
     let url = base_url
         .join("v1/polish")
         .map_err(|err| format!("invalid polish URL: {err}"))?;
@@ -188,6 +220,9 @@ fn polish_transcript(
         vocabulary: settings.vocabulary_hints.clone(),
     };
 
+    if let Some(span) = span {
+        span.event("polish-request", serde_json::json!({"provider":"cloud","body":request,"prompt":"The cloud service owns its system prompt; it is not available to this client."}));
+    }
     let client = Client::builder()
         .timeout(POLISH_TIMEOUT)
         .build()
@@ -201,9 +236,13 @@ fn polish_transcript(
     if !response.status().is_success() {
         return Err(format!("polish returned {}", response.status()));
     }
-    response
-        .json::<PolishResponse>()
-        .map_err(|err| format!("polish response was invalid: {err}"))
+    let value = response
+        .json::<serde_json::Value>()
+        .map_err(|err| format!("polish response was invalid: {err}"))?;
+    if let Some(span) = span {
+        span.event("polish-response", value.clone());
+    }
+    serde_json::from_value(value).map_err(|err| format!("polish response was invalid: {err}"))
 }
 
 #[cfg(test)]
@@ -314,7 +353,12 @@ mod tests {
         ));
 
         assert!(matches!(
-            maybe_polish(raw, &polish_settings(), Some(&app("com.googlecode.iterm2")), None),
+            maybe_polish(
+                raw,
+                &polish_settings(),
+                Some(&app("com.googlecode.iterm2")),
+                None
+            ),
             PolishDecision::Skipped("terminal app frontmost")
         ));
     }

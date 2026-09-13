@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { initializeNoteDebug, attachMetadataMenu, renderNoteMetadata, closeMetadataView } from "./noteMetadata";
 
 // The durable notes library: every dictation is auto-saved server-side, and
 // this screen lists, searches, edits, pins, copies, and deletes them.
@@ -19,6 +20,7 @@ const searchInput = document.getElementById("notesSearchInput") as HTMLInputElem
 
 let notes: Note[] = [];
 let selectedId: string | null = null;
+let metadataId: string | null = null;
 let query = "";
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -125,7 +127,10 @@ function renderList(): void {
       pin.innerHTML = pinIcon(note.pinned);
 
       row.append(title, meta, pin);
+      attachMetadataMenu(row, note.id, () => { selectedId = note.id; metadataId = note.id; render(); });
       row.addEventListener("click", () => {
+        metadataId = null;
+        closeMetadataView();
         selectedId = note.id;
         render();
       });
@@ -170,6 +175,11 @@ function renderDetail(): void {
     return;
   }
 
+  if (metadataId === note.id) {
+    renderNoteMetadata(noteDetail, note.id, () => { metadataId = null; closeMetadataView(); render(); document.querySelector<HTMLButtonElement>(`.note-row[data-id="${CSS.escape(note.id)}"]`)?.focus(); });
+    return;
+  }
+  closeMetadataView();
   const head = document.createElement("div");
   head.className = "nd-head";
   const title = document.createElement("div");
@@ -324,3 +334,5 @@ void listen("notes-updated", () => {
 }).catch(reportError);
 
 void load();
+
+void initializeNoteDebug(() => renderList());

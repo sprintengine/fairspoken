@@ -4,6 +4,7 @@ import "./homeStats";
 import "./notes";
 import "./dictionary";
 import "./activity";
+import "./modelDashboard";
 import { createSpeedTest } from "./speedTest";
 import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
 
@@ -11,7 +12,7 @@ import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
 // The Settings screen's own controls are driven independently by settings.ts,
 // the Home screen's stats by homeStats.ts, and the Notes library by notes.ts.
 
-const SCREENS = ["home", "notes", "dictionary", "activity", "settings"] as const;
+const SCREENS = ["home", "notes", "dictionary", "activity", "models", "settings"] as const;
 type Screen = (typeof SCREENS)[number];
 
 const TITLES: Record<Screen, string> = {
@@ -20,6 +21,7 @@ const TITLES: Record<Screen, string> = {
   dictionary: "Dictionary",
   activity: "Activity",
   settings: "Settings",
+  models: "Models",
 };
 
 const navItems = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-item"));

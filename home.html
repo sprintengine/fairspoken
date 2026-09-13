@@ -42,6 +42,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h4l2.5 7 5-14L17 12h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Activity
         </button>
+        <button class="nav-item ds-list-row" data-screen="models">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5" stroke-linejoin="round"/></svg>
+          Models
+        </button>
         <button class="nav-item" data-screen="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M18.4 18.4l-2.1-2.1M7.7 7.7 5.6 5.6" stroke-linecap="round"/></svg>
           Settings
@@ -144,6 +148,24 @@
             </div>
             <div class="activity-list" id="activityList" aria-live="polite" aria-label="Activity"></div>
           </div>
+        </section>
+
+        <section class="screen" id="screen-models" data-mode="dark" aria-label="Models">
+          <div class="models-toolbar">
+            <p>Choose what listens and what cleans up your words.</p>
+            <button class="ds-button ds-button--outline" id="refreshModels" type="button">Refresh from Hugging Face</button>
+          </div>
+          <p id="modelFeedback" class="model-feedback" role="status" aria-live="polite"></p>
+          <section class="ds-section" aria-labelledby="dictationModelsTitle">
+            <div class="ds-section-header"><h2 class="ds-section-title" id="dictationModelsTitle">Dictation</h2></div>
+            <div class="ds-section-body"><p class="models-description" id="dictationProvider"></p><div id="dictationModels"></div></div>
+          </section>
+          <section class="ds-section" aria-labelledby="polishModelsTitle">
+            <div class="ds-section-header"><h2 class="ds-section-title" id="polishModelsTitle">Text polish</h2><div id="polishProviderActions" class="models-actions"></div></div>
+            <div class="ds-section-body"><p class="models-description" id="polishProvider"></p><div id="polishModels"></div>
+              <p class="models-description">With local dictation, polish cleans up live previews, then makes a final pass before copying. Remote dictation receives the final pass when its transcript arrives. Cleanup models load as you dictate and unload after five minutes idle. Memory figures are estimates. Very long dictations keep the complete original text when they exceed the cleanup limit.</p>
+            </div>
+          </section>
         </section>
 
         <!-- ════ SETTINGS (driven by settings.ts) ════ -->

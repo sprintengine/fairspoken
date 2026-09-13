@@ -8,14 +8,17 @@ mod clipboard;
 mod host;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod insertion;
+mod local_models;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_input;
 mod models;
+mod note_debug;
 mod notes;
 mod polish;
 mod post_processing;
+mod preview;
 mod remote_transcription;
 mod settings;
 mod sounds;
@@ -66,6 +69,13 @@ const SILENCE_PEAK_THRESHOLD: f32 = 0.008;
 static BACKEND_EVENT_ID: AtomicU64 = AtomicU64::new(1);
 
 struct AppServices {
+    debug_capture_enabled: AtomicBool,
+    debug_trace: Mutex<Option<note_debug::Trace>>,
+    operation: Mutex<()>,
+    preview_generation: AtomicU64,
+    preview_gate: Mutex<()>,
+    preview_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    local_models: local_models::LocalModels,
     audio: Mutex<AudioService>,
     clipboard: ClipboardService,
     models: ModelService,
@@ -119,6 +129,58 @@ fn get_app_status(services: State<'_, AppServices>) -> BackendStatus {
     }
 }
 
+#[derive(Clone, Serialize)]
+struct NoteDebugStatus {
+    available: bool,
+    enabled: bool,
+}
+#[tauri::command]
+fn get_note_debug_status(services: State<'_, AppServices>) -> NoteDebugStatus {
+    NoteDebugStatus {
+        available: note_debug::AVAILABLE,
+        enabled: note_debug::AVAILABLE && services.debug_capture_enabled.load(Ordering::SeqCst),
+    }
+}
+#[tauri::command]
+fn set_note_debug_capture(
+    app: AppHandle,
+    enabled: bool,
+    services: State<'_, AppServices>,
+) -> Result<(), String> {
+    if !note_debug::AVAILABLE {
+        return Err("Note metadata is development-only".into());
+    }
+    services
+        .debug_capture_enabled
+        .store(enabled, Ordering::SeqCst);
+    let _ = app.emit(
+        "note-debug-status",
+        NoteDebugStatus {
+            available: true,
+            enabled,
+        },
+    );
+    Ok(())
+}
+#[tauri::command]
+async fn get_note_metadata(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<note_debug::NoteMetadata>, String> {
+    if !note_debug::AVAILABLE {
+        return Err("Note metadata is development-only".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppServices>()
+            .notes
+            .lock()
+            .map_err(|e| e.to_string())?
+            .metadata(&id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
     services
@@ -128,12 +190,15 @@ fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
         .map(|service| service.current())
 }
 
-#[tauri::command]
-fn save_settings(
+fn save_settings_inner(
     app: AppHandle,
     mut settings: Settings,
     services: State<'_, AppServices>,
 ) -> Result<(), String> {
+    let _operation = services
+        .operation
+        .try_lock()
+        .map_err(|_| "Wait for the current dictation to finish".to_string())?;
     let current_settings = services
         .settings
         .lock()
@@ -164,6 +229,18 @@ fn save_settings(
             .unload();
     }
 
+    if settings.polish_enabled && settings.polish_provider == settings::PolishProvider::Local {
+        local_models::spec(&settings.polish_model)?;
+        if !services.local_models.installed(&settings.polish_model) {
+            return Err("Download the selected polish model first".into());
+        }
+    }
+    if !settings.polish_enabled
+        || settings.polish_provider != current_settings.polish_provider
+        || settings.polish_model != current_settings.polish_model
+    {
+        services.local_models.unload();
+    }
     let normalized = {
         let mut service = services
             .settings
@@ -177,6 +254,106 @@ fn save_settings(
     #[cfg(target_os = "macos")]
     sync_fn_push_to_talk(&app, services.inner(), normalized.fn_push_to_talk);
     Ok(())
+}
+
+#[tauri::command]
+async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_settings_inner(app.clone(), settings, app.state::<AppServices>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_local_model_catalog(
+    app: AppHandle,
+    refresh: bool,
+) -> Result<local_models::Catalog, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<AppServices>();
+        let settings = services
+            .settings
+            .lock()
+            .map_err(|e| e.to_string())?
+            .current();
+        Ok(services.local_models.catalog(&settings, refresh))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn download_local_model(app: AppHandle, model: String) -> Result<(), String> {
+    local_models::spec(&model)?;
+    app.state::<AppServices>().local_models.begin_download()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppServices>()
+            .local_models
+            .download(&app, &model)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn cancel_local_model_download(services: State<'_, AppServices>) {
+    services.local_models.cancel_download();
+}
+
+#[tauri::command]
+async fn remove_local_model(app: AppHandle, model: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<AppServices>();
+        let _operation = services
+            .operation
+            .try_lock()
+            .map_err(|_| "Wait for dictation to finish".to_string())?;
+        if services
+            .audio
+            .lock()
+            .map_err(|e| e.to_string())?
+            .is_recording()
+        {
+            return Err("Stop recording before removing a model".into());
+        }
+        services.local_models.remove(&model)?;
+        let mut store = services.settings.lock().map_err(|e| e.to_string())?;
+        let mut settings = store.current();
+        if settings.polish_provider == settings::PolishProvider::Local
+            && settings.polish_model == model
+        {
+            settings.polish_enabled = false;
+            store.save(settings)?;
+            let _ = app.emit("settings-updated", store.current());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
+    let ids = [
+        "parakeet-tdt-0.6b-v3",
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large-v2",
+        "large-v3",
+        "large-v3-turbo",
+    ];
+    ids.iter()
+        .filter_map(|id| SttModel::from_model_id(id))
+        .map(|m| ModelStatus {
+            model: m,
+            cached: services.models.files_present(m),
+            model_path: services.models.path_for(m).display().to_string(),
+            message: String::new(),
+        })
+        .collect()
 }
 
 /// Applies the hold-Fn setting: the event tap is installed at most once per
@@ -270,6 +447,9 @@ struct BackendLogEvent {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptPreviewEvent {
+    session_id: u64,
+    revision: u64,
+    polished: bool,
     index: usize,
     text: String,
     final_preview: bool,
@@ -290,10 +470,7 @@ fn get_model_status(
 }
 
 #[tauri::command]
-fn prepare_model(
-    model: SttModel,
-    services: State<'_, AppServices>,
-) -> Result<ModelStatus, String> {
+fn prepare_model(model: SttModel, services: State<'_, AppServices>) -> Result<ModelStatus, String> {
     services.models.prepare(model)
 }
 
@@ -504,6 +681,7 @@ fn open_home_window(app: AppHandle, screen: Option<String>) -> Result<(), String
         .ok_or_else(|| "Home window is not configured".to_string())?;
 
     window.show().map_err(|err| err.to_string())?;
+    let _ = window.unminimize();
     window.set_focus().map_err(|err| err.to_string())?;
 
     // The window is created hidden at startup, so its webview listeners are
@@ -721,11 +899,18 @@ fn delete_transcript_history_item(
 }
 
 #[tauri::command]
-fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u16, String> {
-    services
-        .transcription_cancel_requested
-        .store(false, Ordering::SeqCst);
-
+async fn start_recording(app: AppHandle) -> Result<u16, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        start_recording_inner(app.clone(), app.state::<AppServices>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Result<u16, String> {
+    let _operation = services
+        .operation
+        .try_lock()
+        .map_err(|_| "Dictation is still finishing".to_string())?;
     let recording_active = services
         .audio
         .lock()
@@ -735,14 +920,22 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
         return Err("Recording already in progress".to_string());
     }
 
+    services
+        .transcription_cancel_requested
+        .store(false, Ordering::SeqCst);
     let settings = services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
 
+    let trace = note_debug::Trace::new(services.debug_capture_enabled.load(Ordering::SeqCst));
+    *services.debug_trace.lock().map_err(|e| e.to_string())? = trace.clone();
+    if let Some(trace) = &trace {
+        trace.event("recording-settings", serde_json::json!({"speechModel":settings.model,"location":settings.transcription_location,"polishEnabled":settings.polish_enabled,"polishProvider":settings.polish_provider,"polishModel":settings.polish_model,"contextAwareness":settings.context_awareness,"dictionaryVocabulary":settings.vocabulary_hints,"chunkSeconds":settings.whisper_chunk_seconds,"note":"Accessibility collection is unchanged by debug capture. Configured authentication secrets and audio samples are not captured."}));
+    }
     // Context awareness Phase B: harvest on-screen terms into this session's
-    // vocabulary hints (session-only; nothing is persisted). Budgeted and
+    // vocabulary hints (session-only, except optional dev metadata). Budgeted and
     // thread-timed so a wedged app cannot delay recording start beyond the
     // AX timeout. The terms are kept in service state so the finish flow
     // (which re-reads settings) sees the same hints.
@@ -750,23 +943,45 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
     let mut harvested_terms: Vec<String> = Vec::new();
     #[cfg(target_os = "macos")]
     if settings.context_awareness {
-        match with_ax_timeout(macos_ax::harvest_screen_vocabulary) {
-            Some(Some(terms)) if !terms.is_empty() => {
+        let harvest = with_ax_timeout(macos_ax::harvest_screen_context);
+        if let Some(trace) = &trace {
+            trace.event("accessibility-harvest", serde_json::json!({"status":match &harvest { Some(Some(_)) => "read", Some(None) => "excluded-or-unavailable", None => "timeout" },"windowTexts":harvest.as_ref().and_then(|v|v.as_ref()).map(|v|&v.0),"extractedTerms":harvest.as_ref().and_then(|v|v.as_ref()).map(|v|&v.1),"sentToPolish":"Only extracted terms, not the windowTexts, are added to vocabulary."}));
+        }
+        match harvest {
+            Some(Some((_, terms))) if !terms.is_empty() => {
                 emit_backend_event(
                     &app,
                     "info",
-                    format!("Context harvest: {} on-screen terms added as hints", terms.len()),
+                    format!(
+                        "Context harvest: {} on-screen terms added as hints",
+                        terms.len()
+                    ),
                 );
                 harvested_terms = terms;
             }
-            Some(None) => {
-                emit_backend_event(
-                    &app,
-                    "info",
-                    "Context harvest skipped (password manager or no frontmost app)",
-                );
-            }
+            Some(None) => emit_backend_event(
+                &app,
+                "info",
+                "Context harvest skipped (password manager or no frontmost app)",
+            ),
             _ => {}
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    if settings.context_awareness {
+        if let Some(trace) = &trace {
+            trace.event(
+                "accessibility-harvest",
+                serde_json::json!({"status":"platform-unavailable"}),
+            );
+        }
+    }
+    if !settings.context_awareness {
+        if let Some(trace) = &trace {
+            trace.event(
+                "accessibility-harvest",
+                serde_json::json!({"status":"disabled"}),
+            );
         }
     }
     if let Ok(mut session_vocabulary) = services.session_vocabulary.lock() {
@@ -780,12 +995,20 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
 
     let stream_sink = match settings.transcription_location {
         TranscriptionLocation::Local => {
-            let preview_tx = start_transcript_preview_forwarder(app.clone());
+            let preview_tx =
+                start_transcript_preview_forwarder(app.clone(), settings.clone(), trace.clone());
             let start = services
                 .transcription
                 .lock()
                 .map_err(|_| "Transcription service lock failed".to_string())?
-                .start_session_with_cancel(&settings, &services.models, Some(preview_tx))?;
+                .start_session_traced(&settings, &services.models, Some(preview_tx), trace.clone());
+            let start = match start {
+                Ok(start) => start,
+                Err(err) => {
+                    invalidate_previews(&services);
+                    return Err(err);
+                }
+            };
             *services
                 .local_transcription_cancel
                 .lock()
@@ -840,6 +1063,7 @@ fn start_recording(app: AppHandle, services: State<'_, AppServices>) -> Result<u
             Some(on_stream_error),
         )
     {
+        invalidate_previews(&services);
         if settings.transcription_location == TranscriptionLocation::Local {
             services
                 .transcription
@@ -917,7 +1141,13 @@ fn start_audio_level_forwarder(app: AppHandle) -> mpsc::SyncSender<LevelSample> 
                     last_emit = std::time::Instant::now();
                 }
             }
-            let _ = app.emit("audio-level", AudioLevelEvent { peak: 0.0, rms: 0.0 });
+            let _ = app.emit(
+                "audio-level",
+                AudioLevelEvent {
+                    peak: 0.0,
+                    rms: 0.0,
+                },
+            );
         })
         .ok();
     tx
@@ -980,17 +1210,24 @@ fn start_max_duration_watchdog(app: AppHandle, generation: u64, max_recording_se
 }
 
 #[tauri::command]
-fn stop_and_transcribe(app: AppHandle, services: State<'_, AppServices>) -> Result<String, String> {
-    perform_stop_and_transcribe(&app, &services)
+async fn stop_and_transcribe(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        perform_stop_and_transcribe(&app, &app.state::<AppServices>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The full dictation commit pipeline. Free of the command layer so both the
 /// `stop_and_transcribe` command and the max-duration watchdog can run it.
 fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Result<String, String> {
-    services
-        .transcription_cancel_requested
-        .store(false, Ordering::SeqCst);
+    let _operation = services
+        .operation
+        .try_lock()
+        .map_err(|_| "Dictation is already finishing".to_string())?;
+    invalidate_previews(services);
 
+    let trace = services.debug_trace.lock().ok().and_then(|mut t| t.take());
     let settings = services
         .settings
         .lock()
@@ -1018,6 +1255,9 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     );
     let raw_transcription = finish_transcription_raw(app, services, &recording, &settings)?;
     let raw_transcript = raw_transcription.text;
+    if let Some(trace) = &trace {
+        trace.event("full-transcription", serde_json::json!({"text":raw_transcript,"droppedStreamFrames":stats.dropped_stream_frames,"backend":raw_transcription.backend}));
+    }
 
     // AI polish sits between the raw transcript and the user's deterministic
     // rules — user-authored corrections/snippets stay authoritative and run
@@ -1045,41 +1285,66 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(not(target_os = "macos"))]
     let caret_context: Option<ax_context::CaretContext> = None;
 
-    let (transcript_for_rules, polished) = match polish::maybe_polish(
-        &raw_transcript,
-        &settings,
-        frontmost_app.as_ref(),
-        caret_context.as_ref().map(|context| context.before.as_str()),
-    ) {
-            polish::PolishDecision::Polished(outcome) => {
-                emit_backend_event(
-                    app,
-                    "info",
-                    format!(
-                        "Transcript polished ({}ms, {})",
-                        outcome.duration_ms, outcome.model
-                    ),
-                );
-                (outcome.text, true)
-            }
-            polish::PolishDecision::Unchanged { duration_ms } => {
-                emit_backend_event(
-                    app,
-                    "info",
-                    format!("Transcript polish made no changes ({duration_ms}ms)"),
-                );
-                (raw_transcript.clone(), false)
-            }
-            polish::PolishDecision::Skipped(reason) => {
-                emit_backend_event(app, "info", format!("Polish skipped: {reason}"));
-                (raw_transcript.clone(), false)
-            }
-            polish::PolishDecision::Failed(reason) => {
-                emit_backend_event(app, "warning", format!("Polish skipped: {reason}"));
-                (raw_transcript.clone(), false)
-            }
-            polish::PolishDecision::Disabled => (raw_transcript.clone(), false),
-        };
+    if let Some(trace) = &trace {
+        trace.event("accessibility-caret", serde_json::json!({"enabled":settings.context_awareness,"status":if !settings.context_awareness { "disabled" } else if caret_context.is_some() { "read" } else { "unavailable-excluded-or-timeout" },"before":caret_context.as_ref().map(|c|&c.before),"afterChar":caret_context.as_ref().and_then(|c|c.after_char),"sentToPolish":"Only before is supplied to the final polish pass; afterChar is used for paste spacing."}));
+    }
+    let final_span = trace
+        .as_ref()
+        .map(|t| t.span("final", &raw_transcript, frontmost_app.as_ref()));
+    let decision = if settings.polish_provider == settings::PolishProvider::Local {
+        services.local_models.polish_traced(
+            &raw_transcript,
+            &settings,
+            frontmost_app.as_ref(),
+            caret_context.as_ref().map(|c| c.before.as_str()),
+            &services.transcription_cancel_requested,
+            final_span.as_ref(),
+        )
+    } else {
+        polish::maybe_polish_traced(
+            &raw_transcript,
+            &settings,
+            frontmost_app.as_ref(),
+            caret_context.as_ref().map(|c| c.before.as_str()),
+            final_span.as_ref(),
+        )
+    };
+    if services
+        .transcription_cancel_requested
+        .load(Ordering::SeqCst)
+    {
+        return Err("Transcription was cancelled".into());
+    }
+    let (transcript_for_rules, polished) = match decision {
+        polish::PolishDecision::Polished(outcome) => {
+            emit_backend_event(
+                app,
+                "info",
+                format!(
+                    "Transcript polished ({}ms, {})",
+                    outcome.duration_ms, outcome.model
+                ),
+            );
+            (outcome.text, true)
+        }
+        polish::PolishDecision::Unchanged { duration_ms } => {
+            emit_backend_event(
+                app,
+                "info",
+                format!("Transcript polish made no changes ({duration_ms}ms)"),
+            );
+            (raw_transcript.clone(), false)
+        }
+        polish::PolishDecision::Skipped(reason) => {
+            emit_backend_event(app, "info", format!("Polish skipped: {reason}"));
+            (raw_transcript.clone(), false)
+        }
+        polish::PolishDecision::Failed(reason) => {
+            emit_backend_event(app, "warning", format!("Polish skipped: {reason}"));
+            (raw_transcript.clone(), false)
+        }
+        polish::PolishDecision::Disabled => (raw_transcript.clone(), false),
+    };
 
     let processed = apply_transcript_post_processing(&transcript_for_rules, &settings);
     if processed.corrections_applied > 0 {
@@ -1099,6 +1364,12 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     }
     let transcript = processed.text;
 
+    if services
+        .transcription_cancel_requested
+        .load(Ordering::SeqCst)
+    {
+        return Err("Transcription was cancelled".into());
+    }
     let stored_item = services
         .transcript_history
         .lock()
@@ -1133,6 +1404,12 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(not(target_os = "macos"))]
     let clipboard_text = transcript_clipboard_text(&transcript);
 
+    if services
+        .transcription_cancel_requested
+        .load(Ordering::SeqCst)
+    {
+        return Err("Transcription was cancelled".into());
+    }
     services.clipboard.write_text(&clipboard_text)?;
     let _ = app.emit(
         "transcript-history-updated",
@@ -1175,6 +1452,26 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     // home window so the Notes screen refreshes live.
     match save_note(services, transcript.clone(), stats.duration_seconds) {
         Ok(note) => {
+            if let Some(trace) = &trace {
+                let metadata = trace.finish(
+                    &raw_transcript,
+                    &transcript_for_rules,
+                    &transcript,
+                    &clipboard_text,
+                );
+                let saved = services
+                    .notes
+                    .lock()
+                    .map_err(|e| e.to_string())
+                    .and_then(|notes| notes.attach_metadata(&note.id, &metadata));
+                if let Err(err) = saved {
+                    emit_backend_event(
+                        app,
+                        "warning",
+                        format!("Note saved but debug metadata could not be saved: {err}"),
+                    );
+                }
+            }
             let _ = app.emit("notes-updated", &note);
         }
         Err(err) => emit_backend_event(app, "warning", format!("Could not save note: {err}")),
@@ -1378,8 +1675,13 @@ fn stop_and_validate_recording(
             app,
             "warning",
             format!(
-                "{} audio frames were dropped while streaming to the transcriber; the transcript may be missing words",
-                stats.dropped_stream_frames
+                "{} audio frames were dropped from live streaming; {}",
+                stats.dropped_stream_frames,
+                if settings.transcription_location == TranscriptionLocation::Local {
+                    "the final pass will use the complete recording"
+                } else {
+                    "the remote transcript may be missing words"
+                }
             ),
         );
     }
@@ -1476,6 +1778,11 @@ fn stop_side_effect_free_test_capture(
     app: AppHandle,
     services: State<'_, AppServices>,
 ) -> Result<SpeedTestCapture, String> {
+    let _operation = services
+        .operation
+        .try_lock()
+        .map_err(|_| "Dictation is already finishing".to_string())?;
+    invalidate_previews(&services);
     services
         .transcription_cancel_requested
         .store(false, Ordering::SeqCst);
@@ -1587,11 +1894,7 @@ fn set_measured_typing_wpm(
     Ok(summary)
 }
 
-fn save_note(
-    services: &AppServices,
-    text: String,
-    duration_seconds: f32,
-) -> Result<Note, String> {
+fn save_note(services: &AppServices, text: String, duration_seconds: f32) -> Result<Note, String> {
     services
         .notes
         .lock()
@@ -1681,7 +1984,11 @@ fn debug_dump_ax_context(app: AppHandle) -> Result<(), String> {
         emit_backend_event(
             &app,
             "info",
-            format!("AX spike harvest ({} terms): {}", terms.len(), terms.join(", ")),
+            format!(
+                "AX spike harvest ({} terms): {}",
+                terms.len(),
+                terms.join(", ")
+            ),
         );
         Ok(())
     }
@@ -1697,6 +2004,8 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
     services
         .transcription_cancel_requested
         .store(true, Ordering::SeqCst);
+    invalidate_previews(&services);
+    services.local_models.unload();
     if let Some(handle) = services
         .local_transcription_cancel
         .lock()
@@ -1715,9 +2024,7 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
 /// never wait on a wedged app. A timed-out thread is left to finish (or hang)
 /// on its own and its result is dropped.
 #[cfg(target_os = "macos")]
-fn with_ax_timeout<T: Send + 'static>(
-    read: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
+fn with_ax_timeout<T: Send + 'static>(read: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let (tx, rx) = mpsc::channel();
     thread::Builder::new()
         .name("ax-context-read".to_string())
@@ -1740,23 +2047,124 @@ pub(crate) fn emit_backend_event(app: &AppHandle, level: &'static str, message: 
     );
 }
 
-fn start_transcript_preview_forwarder(app: AppHandle) -> TranscriptionPreviewSender {
-    let (tx, rx) = mpsc::channel::<TranscriptPreview>();
-    thread::Builder::new()
-        .name("transcript-preview-forwarder".to_string())
-        .spawn(move || {
-            for preview in rx {
-                let _ = app.emit(
-                    "transcript-preview",
-                    TranscriptPreviewEvent {
-                        index: preview.index,
-                        text: preview.text,
-                        final_preview: preview.final_preview,
-                    },
-                );
+fn invalidate_previews(services: &AppServices) {
+    if let Ok(_gate) = services.preview_gate.lock() {
+        services.preview_generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut cancel) = services.preview_cancel.lock() {
+            if let Some(cancel) = cancel.take() {
+                cancel.store(true, Ordering::SeqCst);
             }
-        })
-        .ok();
+        }
+    }
+}
+
+fn start_transcript_preview_forwarder(
+    app: AppHandle,
+    settings: Settings,
+    trace: Option<note_debug::Trace>,
+) -> TranscriptionPreviewSender {
+    invalidate_previews(&app.state::<AppServices>());
+    let generation = app
+        .state::<AppServices>()
+        .preview_generation
+        .load(Ordering::SeqCst);
+    let preview_cancel = Arc::new(AtomicBool::new(false));
+    if let Ok(mut current) = app.state::<AppServices>().preview_cancel.lock() {
+        *current = Some(preview_cancel.clone());
+    }
+    let _ = app.emit("transcript-session-started", generation);
+    let (tx, rx) = mpsc::channel::<TranscriptPreview>();
+    // One current inference plus one replaceable pending revision, never a backlog.
+    let pending = Arc::new(preview::LatestPreview::default());
+    if settings.polish_enabled && settings.polish_provider == settings::PolishProvider::Local {
+        let app = app.clone();
+        let pending = pending.clone();
+        let trace = trace.clone();
+        thread::spawn(move || {
+            #[cfg(target_os = "macos")]
+            let target = macos_input::frontmost_app().map(|a| polish::PolishTargetApp {
+                bundle_id: a.bundle_id,
+                name: a.name,
+            });
+            #[cfg(not(target_os = "macos"))]
+            let target: Option<polish::PolishTargetApp> = None;
+            // Load cleanup weights alongside capture and ASR initialization.
+            let _ = app
+                .state::<AppServices>()
+                .local_models
+                .warm(&settings.polish_model, &preview_cancel);
+            loop {
+                let services = app.state::<AppServices>();
+                if services.preview_generation.load(Ordering::SeqCst) != generation {
+                    break;
+                }
+                let next = pending.take();
+                if let Some((rev, preview)) = next {
+                    let span = trace
+                        .as_ref()
+                        .map(|t| t.span(&format!("preview-{rev}"), &preview.text, target.as_ref()));
+                    let result = services.local_models.polish_traced(
+                        &preview.text,
+                        &settings,
+                        target.as_ref(),
+                        None,
+                        &preview_cancel,
+                        span.as_ref(),
+                    );
+                    if let Some(trace) = &trace {
+                        trace.event("preview-disposition", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"current":services.preview_generation.load(Ordering::SeqCst) == generation && pending.is_current(rev),"hasPolishedOutput":matches!(&result,polish::PolishDecision::Polished(_))}));
+                    }
+                    if let polish::PolishDecision::Polished(outcome) = result {
+                        if let Ok(_gate) = services.preview_gate.lock() {
+                            if services.preview_generation.load(Ordering::SeqCst) == generation
+                                && pending.is_current(rev)
+                            {
+                                let _ = app.emit(
+                                    "transcript-preview",
+                                    TranscriptPreviewEvent {
+                                        session_id: generation,
+                                        revision: rev,
+                                        polished: true,
+                                        index: preview.index,
+                                        text: outcome.text,
+                                        final_preview: false,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        });
+    }
+    thread::spawn(move || {
+        for preview in rx {
+            let services = app.state::<AppServices>();
+            let Ok(_gate) = services.preview_gate.lock() else {
+                break;
+            };
+            if services.preview_generation.load(Ordering::SeqCst) != generation {
+                break;
+            }
+            let rev = pending.submit(preview.clone());
+            if let Some(trace) = &trace {
+                trace.event("transcript-preview", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"text":preview.text,"finalPreview":preview.final_preview,"note":"Cumulative merged raw text. A preview without a matching polish-start was coalesced or finalization began before it ran."}));
+            }
+            let _ = app.emit(
+                "transcript-preview",
+                TranscriptPreviewEvent {
+                    session_id: generation,
+                    revision: rev,
+                    polished: false,
+                    index: preview.index,
+                    text: preview.text.clone(),
+                    final_preview: preview.final_preview,
+                },
+            );
+        }
+    });
     tx
 }
 
@@ -1768,6 +2176,7 @@ fn start_note_retention_sweeper(app: AppHandle) {
         .spawn(move || loop {
             thread::sleep(Duration::from_secs(60));
             let services = app.state::<AppServices>();
+            services.local_models.unload_if_idle();
             let retention_minutes = services
                 .settings
                 .lock()
@@ -1842,6 +2251,9 @@ fn cancel_remote_transcription_if_needed(services: &AppServices) -> Result<(), S
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            let _ = open_home_window(app.clone(), None);
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
@@ -1855,6 +2267,13 @@ pub fn run() {
             }
         })
         .manage(AppServices {
+            debug_capture_enabled: AtomicBool::new(false),
+            debug_trace: Mutex::new(None),
+            operation: Mutex::new(()),
+            preview_generation: AtomicU64::new(0),
+            preview_gate: Mutex::new(()),
+            preview_cancel: Mutex::new(None),
+            local_models: local_models::LocalModels::default(),
             audio: Mutex::new(AudioService::default()),
             clipboard: ClipboardService,
             models: ModelService::default(),
@@ -1882,6 +2301,7 @@ pub fn run() {
                 emit_backend_event(handle, "warning", format!("Could not position pill: {err}"));
             }
             start_note_retention_sweeper(handle.clone());
+            let _ = open_home_window(handle.clone(), None);
             #[cfg(target_os = "macos")]
             {
                 let services = app.state::<AppServices>();
@@ -1895,6 +2315,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_note_debug_status,
+            set_note_debug_capture,
+            get_note_metadata,
+            get_local_model_catalog,
+            get_dictation_models,
+            download_local_model,
+            cancel_local_model_download,
+            remove_local_model,
             get_app_status,
             get_settings,
             save_settings,
@@ -1931,6 +2359,22 @@ pub fn run() {
             get_speed_test_summary,
             set_measured_typing_wpm,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                let _ = open_home_window(app.clone(), None);
+            }
+            tauri::RunEvent::Exit => {
+                let services = app.state::<AppServices>();
+                services.local_models.cancel_download();
+                services
+                    .transcription_cancel_requested
+                    .store(true, Ordering::SeqCst);
+                invalidate_previews(&services);
+                services.local_models.unload();
+            }
+            _ => {}
+        });
 }

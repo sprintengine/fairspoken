@@ -42,6 +42,18 @@ pub enum RecordingShortcutMode {
     PushToTalk,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolishProvider {
+    Local,
+    #[default]
+    Cloud,
+}
+
+fn default_polish_model() -> String {
+    "qwen3.5-0.8b".to_string()
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -105,6 +117,10 @@ pub struct Settings {
     /// back to the raw transcript.
     #[serde(default)]
     pub polish_enabled: bool,
+    #[serde(default)]
+    pub polish_provider: PolishProvider,
+    #[serde(default = "default_polish_model")]
+    pub polish_model: String,
     /// Per-app-category tone for AI polish. Keys are category ids
     /// (`messaging | email | docs | code | other`), values are
     /// `default | casual | formal | off` (`off` disables polish for that
@@ -178,6 +194,8 @@ impl Default for Settings {
             insert_at_cursor: default_insert_at_cursor(),
             fn_push_to_talk: false,
             polish_enabled: false,
+            polish_provider: PolishProvider::Cloud,
+            polish_model: default_polish_model(),
             polish_tones: HashMap::new(),
             context_awareness: false,
         }
@@ -454,6 +472,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_settings_keep_cloud_polish_and_new_local_choice_round_trips() {
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("polishProvider");
+        old.as_object_mut().unwrap().remove("polishModel");
+        old["polishEnabled"] = serde_json::json!(true);
+        let restored: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.polish_provider, super::PolishProvider::Cloud);
+        assert!(restored.polish_enabled);
+        let local = Settings {
+            polish_provider: super::PolishProvider::Local,
+            ..restored
+        };
+        let restored: Settings =
+            serde_json::from_value(serde_json::to_value(local).unwrap()).unwrap();
+        assert_eq!(restored.polish_provider, super::PolishProvider::Local);
+        assert!(restored.cloud_auth_token.is_empty());
+    }
+
+    #[test]
     fn default_shortcuts_are_persisted_settings() {
         let settings = Settings::default();
 
@@ -543,7 +580,10 @@ mod tests {
         .polish_tones;
 
         assert_eq!(normalized.len(), 2);
-        assert_eq!(normalized.get("messaging").map(String::as_str), Some("casual"));
+        assert_eq!(
+            normalized.get("messaging").map(String::as_str),
+            Some("casual")
+        );
         assert_eq!(normalized.get("docs").map(String::as_str), Some("off"));
     }
 

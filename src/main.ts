@@ -19,6 +19,9 @@ interface BackendLogEvent {
 }
 
 interface TranscriptPreviewEvent {
+  sessionId: number;
+  revision: number;
+  polished: boolean;
   index: number;
   text: string;
   finalPreview: boolean;
@@ -906,8 +909,17 @@ void listen<BackendLogEvent>("backend-event", (event) => {
   addEventWithId(event.payload.id, event.payload.level, event.payload.message);
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
+let previewSession = 0;
+let previewRevision = 0;
+let previewPolished = false;
+void listen<number>("transcript-session-started", event => {
+  if (event.payload > previewSession) { previewSession = event.payload; previewRevision = 0; previewPolished = false; }
+});
 void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
-  showLiveTranscript(event.payload.text);
+  const p = event.payload;
+  if (p.sessionId !== previewSession || p.revision < previewRevision || (p.revision === previewRevision && previewPolished && !p.polished)) return;
+  previewRevision = p.revision; previewPolished = p.polished;
+  if (appState === "recording" || appState === "starting") showLiveTranscript(p.text);
 }).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 
 void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event) => {

@@ -155,9 +155,8 @@ impl ModelService {
             let path = dir.join(file.name);
             if !path.is_file() {
                 cached = false;
-                first_problem.get_or_insert_with(|| {
-                    format!("Missing model file: {}", path.display())
-                });
+                first_problem
+                    .get_or_insert_with(|| format!("Missing model file: {}", path.display()));
                 continue;
             }
             if let Some(hash) = file.hash {
@@ -386,7 +385,7 @@ impl WhisperModel {
     }
 }
 
-fn default_model_dir() -> PathBuf {
+pub(crate) fn default_model_dir() -> PathBuf {
     if let Some(path) = env::var_os("MULTIVOICE_TAURI_MODEL_DIR") {
         return PathBuf::from(path);
     }
@@ -544,7 +543,10 @@ mod tests {
             SttModel::from_model_id("parakeet-tdt-0.6b-v3"),
             Some(SttModel::Parakeet)
         );
-        assert_eq!(SttModel::from_model_id("parakeet"), Some(SttModel::Parakeet));
+        assert_eq!(
+            SttModel::from_model_id("parakeet"),
+            Some(SttModel::Parakeet)
+        );
         assert!(!SttModel::Parakeet.is_whisper());
     }
 

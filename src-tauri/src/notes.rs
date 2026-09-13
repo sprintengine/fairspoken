@@ -49,6 +49,63 @@ impl Default for NotesService {
 }
 
 impl NotesService {
+    pub fn attach_metadata(
+        &self,
+        id: &str,
+        metadata: &crate::note_debug::NoteMetadata,
+    ) -> Result<(), String> {
+        if !crate::note_debug::AVAILABLE {
+            return Err("Note metadata is development-only".into());
+        }
+        if self.find(id).is_none() {
+            return Err("Note was not found".into());
+        }
+        let path = self.metadata_path(id)?;
+        fs::create_dir_all(path.parent().ok_or("Invalid metadata path")?)
+            .map_err(|e| e.to_string())?;
+        let partial = path.with_extension("partial");
+        let payload = serde_json::to_vec_pretty(metadata).map_err(|e| e.to_string())?;
+        use std::io::Write;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&partial).map_err(|e| e.to_string())?;
+        file.write_all(&payload).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        fs::rename(partial, path).map_err(|e| e.to_string())
+    }
+    pub fn metadata(&self, id: &str) -> Result<Option<crate::note_debug::NoteMetadata>, String> {
+        if !crate::note_debug::AVAILABLE {
+            return Err("Note metadata is development-only".into());
+        }
+        if self.find(id).is_none() {
+            return Err("Note was not found".into());
+        }
+        let path = self.metadata_path(id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        serde_json::from_reader(file)
+            .map(Some)
+            .map_err(|e| format!("Could not read note metadata: {e}"))
+    }
+    fn metadata_path(&self, id: &str) -> Result<PathBuf, String> {
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("Invalid note id".into());
+        }
+        Ok(self.path.with_extension("debug").join(format!("{id}.json")))
+    }
+    fn remove_metadata(&self, id: &str) {
+        if let Ok(path) = self.metadata_path(id) {
+            let _ = fs::remove_file(path);
+        }
+    }
     /// Pinned notes first, then newest-first within each group.
     pub fn list(&self) -> Vec<Note> {
         let mut ordered = self.notes.clone();
@@ -119,6 +176,7 @@ impl NotesService {
         if self.notes.len() == original_len {
             return Err("Note was not found".to_string());
         }
+        self.remove_metadata(id);
         self.save()
     }
 
@@ -130,6 +188,11 @@ impl NotesService {
         }
         let cutoff = current_epoch_millis().saturating_sub(u64::from(retention_minutes) * 60_000);
         let original_len = self.notes.len();
+        for note in &self.notes {
+            if !note.pinned && note.updated_at < cutoff {
+                self.remove_metadata(&note.id);
+            }
+        }
         self.notes
             .retain(|note| note.pinned || note.updated_at >= cutoff);
         if self.notes.len() == original_len {
@@ -148,6 +211,7 @@ impl NotesService {
         while self.notes.len() > MAX_NOTES && index > 0 {
             index -= 1;
             if !self.notes[index].pinned {
+                self.remove_metadata(&self.notes[index].id);
                 self.notes.remove(index);
             }
         }
@@ -201,6 +265,85 @@ mod tests {
             notes: Vec::new(),
             path: std::env::temp_dir().join("multivoice-notes-test-unused.json"),
         }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn metadata_is_immutable_recording_evidence_and_follows_note_lifecycle() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut notes = NotesService {
+            notes: Vec::new(),
+            path: dir.join("notes.json"),
+        };
+        let note = notes.add(new("polished note")).unwrap();
+        assert!(notes.metadata(&note.id).unwrap().is_none());
+        let trace = crate::note_debug::Trace::new(true).unwrap();
+        trace.event(
+            "accessibility-harvest",
+            serde_json::json!({"windowTexts":["project context"],"extractedTerms":["Project"]}),
+        );
+        let metadata = trace.finish(
+            "raw dictation",
+            "polished note",
+            "polished note",
+            "polished note ",
+        );
+        notes.attach_metadata(&note.id, &metadata).unwrap();
+        notes.update_text(&note.id, "edited later").unwrap();
+        assert_eq!(
+            notes
+                .metadata(&note.id)
+                .unwrap()
+                .unwrap()
+                .saved_text
+                .as_deref(),
+            Some("polished note")
+        );
+        let reloaded = NotesService {
+            notes: serde_json::from_str(&fs::read_to_string(&notes.path).unwrap()).unwrap(),
+            path: notes.path.clone(),
+        };
+        assert_eq!(
+            reloaded
+                .metadata(&note.id)
+                .unwrap()
+                .unwrap()
+                .original_transcript
+                .as_deref(),
+            Some("raw dictation")
+        );
+        let path = notes.metadata_path(&note.id).unwrap();
+        notes.delete(&note.id).unwrap();
+        assert!(!path.exists());
+        assert!(notes.metadata_path("../outside").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    #[cfg(debug_assertions)]
+    fn expiry_removes_metadata_and_pinning_retains_it() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut notes = NotesService {
+            notes: Vec::new(),
+            path: dir.join("notes.json"),
+        };
+        let a = notes.add(new("expired")).unwrap();
+        let b = notes.add(new("pinned")).unwrap();
+        let metadata = crate::note_debug::Trace::new(true).unwrap().finish(
+            "raw",
+            "polished",
+            "saved",
+            "clipboard",
+        );
+        notes.attach_metadata(&a.id, &metadata).unwrap();
+        notes.attach_metadata(&b.id, &metadata).unwrap();
+        notes.set_pinned(&b.id, true).unwrap();
+        for note in &mut notes.notes {
+            note.updated_at = 0;
+        }
+        notes.sweep_expired(1).unwrap();
+        assert!(!notes.metadata_path(&a.id).unwrap().exists());
+        assert!(notes.metadata_path(&b.id).unwrap().exists());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

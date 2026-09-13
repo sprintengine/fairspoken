@@ -1,0 +1,383 @@
+/* List row — the pick-an-item worklist row, and the most repeated surface in
+ * the product: rails, sources, inboxes, categories, search results.
+ *
+ * Family contract: a neutral selection FILL plus an accent EDGE on the pane
+ * being driven, two selection tiers so a multi-pane surface has one such row,
+ * background-only hover, and trailing actions that stay hidden until pointed
+ * at or focused. */
+
+.ds-list-row {
+  /* Positioned so `.ds-list-row-cursor` can hang in the leading gutter. The
+     action host is positioned too, but it only exists on rows that reveal
+     actions, and a cursor is not conditional on that. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sem-space-sm);
+  width: 100%;
+  padding: var(--sem-space-xs) var(--sem-space-md);
+  border: 0;
+  border-radius: var(--sem-radius-control);
+  background: transparent;
+  color: var(--sem-color-text-muted);
+  font-family: var(--sem-font-family-ui);
+  font-size: var(--sem-font-size-body);
+  line-height: var(--sem-font-line-default);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--sem-motion-duration-fast) var(--sem-motion-ease-standard),
+    color var(--sem-motion-duration-fast) var(--sem-motion-ease-standard);
+}
+
+/* Hover is a background change only — no shadow, no scale, no glow, and no
+ * border that would shift the row's geometry. */
+.ds-list-row:hover {
+  background: var(--sem-color-bg-hover);
+  color: var(--sem-color-text-default);
+}
+
+.ds-list-row:focus-visible {
+  outline: var(--sem-focus-ring);
+  outline-offset: var(--sem-focus-ring-offset);
+}
+
+.ds-list-row:disabled,
+.ds-list-row[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ── Selection ───────────────────────────────────────────────────────────
+ * Two tiers. `--selected` is the pane the user is driving; `--resting` is
+ * every other pane's remembered choice.
+ *
+ * `--selected` is a neutral fill PLUS a 2px inset accent edge (owner ruling
+ * 2026-09-05). The fill alone lost: one step of neutral grey is the quietest
+ * mark on the surface, and any row wearing a status tint — which is a hue,
+ * a whole-row wash and an ink change — read as the chosen one instead. The
+ * person could not find the row their keyboard was driving.
+ *
+ * The edge, not the fill: an accent FILL would still be wrong, because the
+ * accent's other job is "this is the action worth clicking" and a filled row
+ * outranks the button beside it. An edge marks the row without claiming that
+ * weight. It is also the same 2px accent border the focused terminal wears
+ * (`terminal-focus-ring`), so the row in the rail and the surface it drives
+ * carry one mark between them — which is the question this treatment exists
+ * to answer.
+ *
+ * `--resting` takes the fill and NOT the edge. That is the whole two-tier
+ * rule made visible: exactly one edge on screen, on the pane with focus.
+ *
+ * Still ruled out, unchanged: an accent fill, a left bar, a glow. */
+.ds-list-row--selected {
+  background: var(--sem-color-bg-selected);
+  box-shadow: inset 0 0 0 2px var(--sem-color-accent-primary);
+  color: var(--sem-color-text-primary);
+}
+
+.ds-list-row--selected:hover {
+  background: var(--sem-color-bg-selected);
+}
+
+.ds-list-row--resting {
+  background: var(--sem-color-bg-selected-resting);
+  color: var(--sem-color-text-default);
+}
+
+/* ── Cursor ──────────────────────────────────────────────────────────────
+ * The row the keyboard is on, in a list that is one tab stop and walks with
+ * `aria-activedescendant`. A third channel: it has to stay visible on a row
+ * that is already selected AND stay distinct from one that is merely hovered,
+ * which neither of those two fills can manage over the other.
+ *
+ * A mark rather than a fill or an outline, and `text.primary` rather than the
+ * accent — `border.focus` and `accent.primary` are the same value in all but
+ * one theme, so an accent bar in the gutter reads as a slipped focus ring.
+ * Mounts inside `.ds-list-row`, which is positioned for it.
+ *
+ * A list that moves real DOM focus with its cursor renders none of this: the
+ * focus ring is already the mark. */
+.ds-list-row-cursor {
+  position: absolute;
+  left: 0;
+  top: var(--sem-space-2xs);
+  bottom: var(--sem-space-2xs);
+  width: var(--sem-space-3xs);
+  /* Fully rounded, as `status-dot` is: on a 2px bar a radius step and a pill
+     are the same stub, and matching the dot keeps one spelling for "a small
+     round mark". */
+  border-radius: 999px;
+  background: var(--sem-color-text-primary);
+  pointer-events: none;
+}
+
+/* ── Leading ─────────────────────────────────────────────────────────────
+ * A status glyph, monogram, or type icon. Never a decorative avatar. */
+.ds-list-row-leading {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--sem-icon-size-lg);
+  height: var(--sem-icon-size-lg);
+  color: var(--sem-color-text-subtle);
+}
+
+.ds-list-row-leading svg {
+  width: var(--sem-icon-size-sm);
+  height: var(--sem-icon-size-sm);
+}
+
+.ds-list-row--selected .ds-list-row-leading {
+  color: var(--sem-color-text-default);
+}
+
+/* ── Text ────────────────────────────────────────────────────────────────
+ * Title is the row's one priority and claims the width; everything else is
+ * demoted to the supporting line or the trailing slot.
+ *
+ * The text block is a flex row so both children blockify: the ellipsis they
+ * declare below is inert on an inline box. The gap also carries the word
+ * space between title and supporting that inline layout used to supply. */
+.ds-list-row-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sem-space-xs);
+}
+
+/* The title claims the width it needs; the supporting clause takes what is
+ * left (basis 0) and so truncates first. */
+.ds-list-row-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--sem-font-size-body);
+  font-weight: var(--sem-font-weight-medium);
+  letter-spacing: var(--sem-font-tracking-normal);
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ds-list-row-supporting {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: var(--sem-font-size-meta);
+  color: var(--sem-color-text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Identifiers are mono, tabular, and optically opened at this size. */
+.ds-list-row-id {
+  font-family: var(--sem-font-family-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--sem-font-size-meta);
+  letter-spacing: var(--sem-font-tracking-wide);
+  color: var(--sem-color-text-subtle);
+}
+
+/* ── Trailing ────────────────────────────────────────────────────────────
+ * Display-only: a count, a timestamp, a status word. Never interactive —
+ * the row itself renders as the button, and nesting a control inside it is
+ * invalid HTML. Row actions go in the actions slot instead. */
+.ds-list-row-trailing {
+  flex: none;
+  font-family: var(--sem-font-family-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--sem-font-size-meta);
+  color: var(--sem-color-text-muted);
+}
+
+/* ── Actions ─────────────────────────────────────────────────────────────
+ * Withheld until the row is pointed at or focused. The slot reserves its
+ * width at rest so revealing never reflows the row, and the actions appear
+ * on keyboard focus as well as hover — hover-only is a bug, not a style.
+ * Ceiling: two actions. Anything more belongs in an overflow menu. */
+.ds-list-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sem-space-3xs);
+  opacity: 0;
+  transition: opacity var(--sem-motion-duration-fast) var(--sem-motion-ease-standard);
+}
+
+/* Hover reveal hangs off the host, not the row: in the host pattern the actions
+ * are the row's SIBLING, so a descendant selector on the row never matches.
+ * The row-scoped focus rule stays for a row used without the host wrapper. */
+.ds-list-row-host:hover .ds-list-row-actions,
+.ds-list-row-host:focus-within .ds-list-row-actions,
+.ds-list-row:focus-visible .ds-list-row-actions,
+.ds-list-row-actions:focus-within {
+  opacity: 1;
+}
+
+/* The row is a button, so its actions live in a sibling wrapper rather than
+ * inside it. This is the wrapper's contract. */
+.ds-list-row-host {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ds-list-row-host .ds-list-row-actions {
+  position: absolute;
+  right: var(--sem-space-sm);
+}
+
+/* The absolute slot reserves no width of its own, so the host declares how
+ * many actions it carries and the row reserves that much trailing padding —
+ * text truncates before it reaches the icons, and revealing never reflows. */
+.ds-list-row-host[data-actions='1'] .ds-list-row {
+  padding-right: calc(var(--sem-space-sm) + var(--sem-size-control-xs) + var(--sem-space-xs));
+}
+
+.ds-list-row-host[data-actions='2'] .ds-list-row {
+  padding-right: calc(
+    var(--sem-space-sm) + var(--sem-size-control-xs) * 2 + var(--sem-space-3xs) + var(--sem-space-xs)
+  );
+}
+
+.ds-list-row-action {
+  display: grid;
+  place-items: center;
+  width: var(--sem-size-control-xs);
+  height: var(--sem-size-control-xs);
+  min-width: var(--sem-size-hit-target-min);
+  min-height: var(--sem-size-hit-target-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--sem-radius-chip);
+  background: transparent;
+  color: var(--sem-color-text-muted);
+  /* Without this the button falls back to the UA font — a third family the
+   * system does not have. Latent while the actions are icon-only. */
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ds-list-row-action:hover {
+  background: var(--sem-color-bg-active);
+  color: var(--sem-color-text-primary);
+}
+
+.ds-list-row-action:focus-visible {
+  outline: var(--sem-focus-ring);
+  outline-offset: var(--sem-focus-ring-offset);
+}
+
+.ds-list-row-action svg {
+  width: var(--sem-icon-size-sm);
+  height: var(--sem-icon-size-sm);
+}
+
+/* ── Attention ───────────────────────────────────────────────────────────
+ * The two things a row can say on its own: an agent on it is waiting for the
+ * person (`--needs-input`), or it finished while they were looking elsewhere
+ * and they have not opened it since (`--finished`). Each takes the WHOLE row
+ * — a tinted fill and the title in the tone's ink — because a dot or a chip
+ * beside an otherwise quiet row is the weakest possible carrier for the one
+ * state that actually wants the person to look (owner ruling 2026-09-04,
+ * twice: first the needs-input dot, then the "Done" chip).
+ *
+ * A FILL, and only a fill. The edge is selection's channel and status may not
+ * borrow it (owner ruling 2026-09-05, reversing the ring these two carried).
+ * A green ring around a finished row is indistinguishable from the accent
+ * edge on the row being driven — and because the ring is the louder of the
+ * two marks, a row saying "I finished while you were out" was read as "this
+ * is the one you are in". The two questions are answered by two channels:
+ * status is the wash, selection is the edge, and a row can wear both at once
+ * without either being mistaken for the other.
+ *
+ * A left bar remains a ruled rejection for both: the leading gutter belongs
+ * to the cursor and to identity.
+ *
+ * `--finished` is one notch under `--needs-input` by construction: it asks
+ * for a look, not an answer, so its fill is `status.good-faint` rather than
+ * `-soft`. When a row is both, needs-input wins.
+ *
+ * Both hold until the person opens the row — a finished row clears the moment
+ * it becomes the selected one — and both are colour PLUS words: the trailing
+ * slot or a visually-hidden clause says "needs input" / "finished" in text. */
+.ds-list-row--needs-input {
+  background: var(--sem-color-status-warn-soft);
+  color: var(--sem-color-status-warn);
+}
+
+.ds-list-row--needs-input:hover {
+  background: var(--sem-color-status-warn-soft);
+}
+
+.ds-list-row--finished {
+  background: var(--sem-color-status-good-faint);
+  color: var(--sem-color-status-good);
+}
+
+.ds-list-row--finished:hover {
+  background: var(--sem-color-status-good-faint);
+}
+
+/* Nothing to restate for the selected case: these rules declare no
+ * `box-shadow`, so the accent edge set by `--selected` survives underneath a
+ * status wash untouched. That composition IS the contract — the tint says
+ * what happened, the edge says where you are. */
+
+.ds-list-row--needs-input .ds-list-row-supporting,
+.ds-list-row--finished .ds-list-row-supporting,
+.ds-list-row--needs-input .ds-list-row-trailing,
+.ds-list-row--finished .ds-list-row-trailing {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* The one-shot flash a row plays as it ENTERS either state — "just changed",
+ * the second of the two things motion may mean (see liveness). It paints in
+ * the tone the row is already wearing, plays once, and stops: what keeps the
+ * row loud while it waits is the ink above, never a loop. Painted on a
+ * pointer-inert overlay so replaying it never remounts the row. */
+.ds-list-row-flash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: ds-list-row-flash var(--sem-motion-duration-pulse) var(--sem-motion-ease-standard) 1;
+}
+
+.ds-list-row--needs-input .ds-list-row-flash {
+  --ds-row-flash-tint: var(--sem-color-status-warn);
+  --ds-row-flash-fill: var(--sem-color-status-warn-soft);
+}
+
+.ds-list-row--finished .ds-list-row-flash {
+  --ds-row-flash-tint: var(--sem-color-status-good);
+  --ds-row-flash-fill: var(--sem-color-status-good-soft);
+}
+
+@keyframes ds-list-row-flash {
+  0% {
+    background: var(--ds-row-flash-fill);
+    box-shadow: inset 0 0 0 1px var(--ds-row-flash-tint);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+/* Reduced motion removes the fade, never the reveal itself — the actions
+ * must still become available. The attention flash drops entirely: the
+ * fill, ring and ink already carry the state. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-list-row,
+  .ds-list-row-actions {
+    transition: none;
+  }
+
+  .ds-list-row-flash {
+    animation: none;
+  }
+}

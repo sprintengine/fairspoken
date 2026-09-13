@@ -156,13 +156,9 @@ impl ContextNode for AxElement {
         if value.type_of() != CFArray::<CFType>::type_id() {
             return Vec::new();
         }
-        let array = unsafe {
-            CFArray::<CFType>::wrap_under_get_rule(value.as_CFTypeRef() as CFArrayRef)
-        };
-        array
-            .iter()
-            .map(|child| AxElement(child.clone()))
-            .collect()
+        let array =
+            unsafe { CFArray::<CFType>::wrap_under_get_rule(value.as_CFTypeRef() as CFArrayRef) };
+        array.iter().map(|child| AxElement(child.clone())).collect()
     }
 }
 
@@ -179,6 +175,9 @@ fn frontmost_pid_and_bundle() -> Option<(i32, String)> {
 /// the frontmost window's AX tree. Returns `None` when reads are skipped
 /// entirely (password manager frontmost / no frontmost app).
 pub fn harvest_screen_vocabulary() -> Option<Vec<String>> {
+    harvest_screen_context().map(|(_, terms)| terms)
+}
+pub fn harvest_screen_context() -> Option<(Vec<String>, Vec<String>)> {
     let (pid, bundle_id) = frontmost_pid_and_bundle()?;
     if is_password_manager(&bundle_id) {
         return None;
@@ -190,17 +189,18 @@ pub fn harvest_screen_vocabulary() -> Option<Vec<String>> {
     if let Some(focused) = focused_element() {
         roots.push(focused);
     }
-    if let Some(window) = application_element(pid).and_then(|app| {
-        app.copy_attribute("AXFocusedWindow").map(AxElement)
-    }) {
+    if let Some(window) = application_element(pid)
+        .and_then(|app| app.copy_attribute("AXFocusedWindow").map(AxElement))
+    {
         roots.push(window);
     }
     if roots.is_empty() {
-        return Some(Vec::new());
+        return Some((Vec::new(), Vec::new()));
     }
 
     let texts = collect_context_text(roots, &WalkBudget::standard());
-    Some(extract_candidate_terms(&texts))
+    let terms = extract_candidate_terms(&texts);
+    Some((texts, terms))
 }
 
 /// Raw focused-element facts for the Phase-0 spike command.
@@ -335,11 +335,10 @@ pub fn focused_caret_context() -> Option<CaretContext> {
         let start = chars.len().saturating_sub(CARET_BEFORE_CHARS);
         chars[start..].iter().collect()
     };
-    let after_char = String::from_utf16_lossy(
-        &utf16[selection_end..(selection_end + 2).min(utf16.len())],
-    )
-    .chars()
-    .next();
+    let after_char =
+        String::from_utf16_lossy(&utf16[selection_end..(selection_end + 2).min(utf16.len())])
+            .chars()
+            .next();
 
     Some(CaretContext { before, after_char })
 }

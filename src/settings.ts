@@ -51,6 +51,8 @@ interface Settings {
   insertAtCursor: boolean;
   fnPushToTalk: boolean;
   polishEnabled: boolean;
+  polishProvider: "local" | "cloud";
+  polishModel: string;
   polishTones: Record<string, string>;
   contextAwareness: boolean;
 }
@@ -106,6 +108,8 @@ const DEFAULTS: Settings = {
   insertAtCursor: isMacOS(),
   fnPushToTalk: false,
   polishEnabled: false,
+  polishProvider: "cloud",
+  polishModel: "qwen3.5-0.8b",
   polishTones: {},
   contextAwareness: false,
 };
@@ -360,9 +364,11 @@ function applyToForm(settings: Settings): void {
 // the same Worker). Without one, the toggle is disabled and says why. The
 // per-category tone rows only matter while polish is on.
 function updatePolishUi(settings: Settings): void {
-  const hasToken = settings.cloudAuthToken.trim() !== "";
+  const hasToken = settings.polishProvider === "local" || settings.cloudAuthToken.trim() !== "";
   polishEnabled.disabled = !hasToken;
-  polishHelp.textContent = hasToken
+  polishHelp.textContent = settings.polishProvider === "local"
+    ? "Uses your selected local model for live cleanup and a final pass. Manage downloads in Models."
+    : hasToken
     ? polishHelpDefault
     : "Requires a MultiVoice Cloud token (add one under Location → MultiVoice Cloud).";
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
@@ -383,6 +389,7 @@ function normalizePolishTones(tones: Record<string, string>): Record<string, str
 
 function readFromForm(): Settings {
   return normalizeSettings({
+    ...currentSettings,
     transcriptionLocation: locationSeg.get() as TranscriptionLocation,
     model: modelSelect.value as SttModel,
     remoteUrl: remoteUrl.value,
@@ -968,4 +975,10 @@ void loadSettings().catch((error) => {
   modelDownload.dataset.state = "error";
   modelDownloadStatus.textContent = "Settings failed to load";
   modelDownloadStatus.title = message;
+});
+
+// Model selection is also owned by the Models dashboard in this window.
+void listen<Settings>("settings-updated", (event) => {
+  currentSettings = normalizeSettings(event.payload);
+  applyToForm(currentSettings);
 });

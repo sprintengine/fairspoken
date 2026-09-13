@@ -5,8 +5,9 @@
 //! off-macOS.
 //!
 //! Privacy rules enforced by the callers and re-checked here where possible:
-//! reads are local, session-only, never persisted; secure fields and password
-//! managers are excluded before any text reaches this module.
+//! reads are local and session-only unless optional development metadata capture
+//! is enabled; secure fields and password managers are excluded before any text
+//! reaches this module.
 
 use std::time::{Duration, Instant};
 
