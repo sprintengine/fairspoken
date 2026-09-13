@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import "@fontsource/inter/latin-600.css"; // brand wordmark, matching Multicode's title strip
+import "./dashboardShell";
 import "./homeStats";
 import "./notes";
 import "./dictionary";
@@ -12,7 +13,7 @@ import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
 // The Settings screen's own controls are driven independently by settings.ts,
 // the Home screen's stats by homeStats.ts, and the Notes library by notes.ts.
 
-const SCREENS = ["home", "notes", "dictionary", "activity", "models", "settings"] as const;
+const SCREENS = ["home", "notes", "dictionary", "activity", "models", "settings", "profile"] as const;
 type Screen = (typeof SCREENS)[number];
 
 const TITLES: Record<Screen, string> = {
@@ -22,6 +23,7 @@ const TITLES: Record<Screen, string> = {
   activity: "Activity",
   settings: "Settings",
   models: "Models",
+  profile: "Your profile",
 };
 
 const navItems = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-item"));
@@ -50,7 +52,7 @@ function go(screen: Screen): void {
   speedTest?.stop();
   voiceTest?.stop();
   for (const item of navItems) {
-    if (item.dataset.screen === screen) {
+    if (item.dataset.screen === screen || (screen === "dictionary" && item.dataset.screen === "settings")) {
       item.setAttribute("aria-current", "page");
     } else {
       item.removeAttribute("aria-current");
@@ -103,6 +105,19 @@ for (const item of navItems) {
     const target = item.dataset.screen;
     if (target && isScreen(target)) {
       go(target);
+    }
+  });
+}
+
+for (const opener of document.querySelectorAll<HTMLElement>("[data-route]")) {
+  opener.addEventListener("click", () => {
+    const target = opener.dataset.route;
+    if (target && isScreen(target)) {
+      go(target);
+      if (screenTitle) {
+        screenTitle.tabIndex = -1;
+        screenTitle.focus();
+      }
     }
   });
 }

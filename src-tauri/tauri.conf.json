@@ -40,11 +40,17 @@
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "transparent": false,
+        "transparent": true,
         "shadow": true,
         "alwaysOnTop": false,
         "skipTaskbar": false,
-        "visible": false
+        "visible": false,
+        "windowEffects": {
+          "effects": [
+            "underWindowBackground"
+          ],
+          "state": "active"
+        }
       },
       {
         "title": "Multivoice Transcript Shelf",

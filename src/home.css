@@ -1,55 +1,36 @@
-/* MultiVoice home window — the calm, neutral counterpart to the glass pill.
-   Reference bar: Linear (sidebar nav, settings pane, list rhythm).
-   Structure is carried by spacing + headings + a single hairline — never by
-   stacked cards. One product accent (the pill's red), the 6px-dot status
-   idiom, two radii, three font weights, a fixed display/body/meta/micro scale. */
+@import "./design-system/tokens.css";
+/* Legacy feature layouts consume semantic aliases. The Studio window shell
+   and shared control states are owned by dashboardShell.css. */
 
 :root {
-  /* Surfaces — neutral, slightly warm ink. Sidebar + controls are the only
-     elevated surfaces; content groups sit flat on --bg. */
-  --bg:            #0d0d0f;
-  --bg-elevated:   #151517;
-  --bg-row-hover:  #1b1b1f;
-  --bg-input:      #18181b;
-  --track:         #222226;
-
-  --border:        rgba(255,255,255,0.07);
-  --border-strong: rgba(255,255,255,0.11);
-
-  --text:          #ededee;
-  --text-secondary:#9a9aa2;
-  --text-muted:    #62626b;
-
-  /* Single product accent (shared with the pill). */
-  --accent:        #ff1a3d;
-  --accent-strong: #ff3552;
-  --accent-quiet:  rgba(255,26,61,0.14);
-  --focus:         rgba(255,53,82,0.55);
-
-  --dot-good:      #30d158;
-  --dot-idle:      #62626b;
-  --warning:       #ffa600;
-
-  /* Type scale — one fixed rhythm, referenced everywhere. */
-  --fs-display:    28px;
-  --fs-stat:       20px;
-  --fs-title:      15px;
-  --fs-body:       13px;
-  --fs-meta:       12px;
-  --fs-micro:      11px;
-
-  /* Two radii only. */
-  --r:             8px;
-  --r-sm:          6px;
-
-  /* Page gutter for the content column. */
-  --gutter:        24px;
-
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-
-  /* Brand wordmark font — Inter, matching the Multicode title strip. Bundled
-     via @fontsource/inter (see home.ts) so it renders identically offline. */
-  --font-brand: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --bg: var(--sem-color-bg-surface);
+  --bg-elevated: var(--sem-color-bg-app);
+  --bg-row-hover: var(--sem-color-bg-hover);
+  --bg-input: var(--sem-color-bg-surface-raised);
+  --track: var(--sem-color-bg-selected);
+  --border: var(--sem-color-border-subtle);
+  --border-strong: var(--sem-color-border-default);
+  --text: var(--sem-color-text-primary);
+  --text-secondary: var(--sem-color-text-default);
+  --text-muted: var(--sem-color-text-muted);
+  --accent: var(--sem-color-accent-primary);
+  --accent-strong: var(--sem-color-accent-hover);
+  --accent-quiet: var(--sem-color-accent-soft);
+  --focus: var(--sem-color-border-focus);
+  --dot-good: var(--sem-color-status-good);
+  --dot-idle: var(--sem-color-text-disabled);
+  --warning: var(--sem-color-status-warn);
+  --fs-display: calc(var(--sem-font-size-title) * 2);
+  --fs-stat: calc(var(--sem-font-size-title) * 1.5);
+  --fs-title: var(--sem-font-size-title);
+  --fs-body: var(--sem-font-size-body);
+  --fs-meta: var(--sem-font-size-meta);
+  --fs-micro: var(--sem-font-size-micro);
+  --r: var(--sem-radius-shell);
+  --r-sm: var(--sem-radius-control);
+  --gutter: var(--sem-space-4xl);
+  --mono: var(--sem-font-family-mono);
+  --font-brand: var(--sem-font-family-ui);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -57,7 +38,7 @@ html, body { height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sem-font-family-ui);
   font-size: var(--fs-body);
   line-height: 1.42;
   -webkit-font-smoothing: antialiased;
@@ -66,7 +47,7 @@ body {
 .num { font-variant-numeric: tabular-nums slashed-zero; }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums slashed-zero; }
 
-:focus-visible { outline: none; }
+:focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
 .nav-item:focus-visible, .btn:focus-visible, .icon-btn:focus-visible,
 .note-row:focus-visible, .chip button:focus-visible, .switch:focus-visible,
 .seg button:focus-visible, .shortcut:focus-visible {
@@ -179,7 +160,7 @@ body {
 .btn-ghost { background: none; border-color: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { color: var(--text); background: var(--bg-row-hover); }
 .btn-sm { padding: 4px 9px; font-size: var(--fs-meta); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--sem-color-text-on-accent); }
 .btn-primary:hover { background: var(--accent-strong); }
 
 .icon-btn {
@@ -230,7 +211,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
   transition: transform 120ms ease, background 120ms ease;
 }
 .switch:checked { background: var(--accent); border-color: var(--accent); }
-.switch:checked::after { background: #fff; transform: translateX(14px); }
+.switch:checked::after { background: var(--sem-color-text-on-accent); transform: translateX(14px); }
 .switch:disabled { opacity: .5; cursor: default; }
 
 /* Segmented control — for two-value mode switches. Neutral active state; the
@@ -246,7 +227,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
   padding: 3px 11px; border-radius: 4px; cursor: pointer;
 }
 .seg button:hover { color: var(--text); }
-.seg button[aria-pressed="true"] { background: #28282d; color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--sem-color-bg-selected); color: var(--text); }
 
 /* ── Empty / placeholder states ──────────────────────────── */
 .empty {
@@ -278,7 +259,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 
 .chart { display: flex; align-items: flex-end; gap: 14px; height: 128px; padding: 4px 0 0; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; height: 100%; justify-content: flex-end; }
-.bar { width: 100%; max-width: 34px; min-height: 3px; border-radius: 4px 4px 2px 2px; background: #2c2c31; }
+.bar { width: 100%; max-width: 34px; min-height: 3px; border-radius: 4px 4px 2px 2px; background: var(--sem-color-bg-selected); }
 .bar.today { background: var(--accent); }
 .bar-day { color: var(--text-muted); font-size: var(--fs-micro); }
 .bar-col.is-today .bar-day { color: var(--text-secondary); }
@@ -503,9 +484,9 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .listen .rdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: st-pulse 1.4s ease-out infinite; }
 .listen .clock { margin-left: auto; font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; color: var(--text); }
 @keyframes st-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(255,26,61,.45); }
-  70% { box-shadow: 0 0 0 7px rgba(255,26,61,0); }
-  100% { box-shadow: 0 0 0 0 rgba(255,26,61,0); }
+  0% { box-shadow: 0 0 0 0 var(--sem-color-accent-soft-strong); }
+  70% { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 .transcribe { display: flex; align-items: center; gap: 9px; color: var(--text-secondary); }
 .transcribe .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }

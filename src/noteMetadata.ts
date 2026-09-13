@@ -14,7 +14,7 @@ export async function initializeNoteDebug(refresh: () => void): Promise<void> {
   try {
     const state = await invoke<{available: boolean; enabled: boolean}>("get_note_debug_status");
     available = state.available; if (!available) return;
-    const toolbar = document.createElement("div"); toolbar.className = "note-debug-toolbar"; toolbar.dataset.mode = "dark";
+    const toolbar = document.createElement("div"); toolbar.className = "note-debug-toolbar";
     toolbar.title = "Captures future notes locally, including Accessibility text when Context awareness is on. Resets when the app restarts.";
     const label = document.createElement("span"); label.id = "noteDebugLabel"; label.textContent = "Capture metadata (dev)";
     const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "ds-switch"; toggle.setAttribute("role", "switch"); toggle.setAttribute("aria-labelledby", label.id); toggle.setAttribute("aria-checked", String(state.enabled));
@@ -43,7 +43,7 @@ export function attachMetadataMenu(row: HTMLElement, id: string, open: () => voi
   row.setAttribute("aria-haspopup", "menu"); row.setAttribute("aria-expanded", "false");
   const show = (x: number, y: number) => {
     closeMenu(); menuOrigin = row;
-    menu = document.createElement("div"); menu.id = "note-metadata-menu"; menu.className = "ds-popover ds-popover--pointer"; menu.dataset.mode = "dark"; menu.setAttribute("role", "menu"); menu.setAttribute("aria-label", "Note actions");
+    menu = document.createElement("div"); menu.id = "note-metadata-menu"; menu.className = "ds-popover ds-popover--pointer"; menu.setAttribute("role", "menu"); menu.setAttribute("aria-label", "Note actions");
     const list = document.createElement("div"); list.className = "ds-menu";
     const item = control("View metadata", () => { closeMenu(); open(); }); item.className = "ds-menu-item"; item.setAttribute("role", "menuitem"); item.dataset.noteId = id;
     list.append(item); menu.append(list); document.body.append(menu);
@@ -81,7 +81,7 @@ function block(title: string, text: unknown, collapsed = false): HTMLElement {
 }
 export function renderNoteMetadata(host: HTMLElement, id: string, back: () => void): void {
   const generation = ++viewGeneration;
-  const view = document.createElement("div"); view.className = "note-metadata"; view.dataset.mode = "dark";
+  const view = document.createElement("div"); view.className = "note-metadata";
   const head = document.createElement("div"); head.className = "note-metadata-heading";
   const title = document.createElement("h2"); title.textContent = "Note metadata"; title.tabIndex = -1;
   const exit = control("Back to note", back); head.append(title, exit); view.append(head);
