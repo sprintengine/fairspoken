@@ -278,10 +278,6 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
-.settings-form { max-width: 640px; }
-.settings-section { margin-bottom: 34px; }
-.settings-section:last-child { margin-bottom: 0; }
-.settings-section > h2 { font-size: var(--fs-body); font-weight: 600; padding-bottom: 6px; }
 
 /* Row grammar — one idiom for every setting: label + muted help on the left,
    a compact right-aligned control sized to its content, never to the panel. */
@@ -289,7 +285,6 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
   display: flex; align-items: center; justify-content: space-between;
   gap: 32px; padding: 11px 0; min-height: 48px; border-top: 1px solid var(--border);
 }
-.settings-section > h2 + .row { border-top: none; }
 /* Rows hidden from script must stay hidden despite the display rule above. */
 .row[hidden] { display: none; }
 .row-text { min-width: 0; max-width: 380px; }
@@ -333,12 +328,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 }
 .shortcut:hover { background: var(--bg-row-hover); }
 .shortcut .keys { display: inline-flex; align-items: center; gap: 3px; }
-.shortcut .key {
-  min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center;
-  border: 1px solid var(--border-strong); border-radius: 4px;
-  background: var(--bg-input); color: var(--text);
-  font-family: var(--mono); font-size: var(--fs-micro);
-}
+
 .shortcut .capture-hint { display: none; color: var(--text-muted); font-size: var(--fs-meta); padding: 0 4px; }
 .shortcut.capturing { border-color: var(--accent-strong); }
 .shortcut.capturing .keys { display: none; }

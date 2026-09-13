@@ -10,6 +10,7 @@ import "./settingsModelSummaries";
 import { selectSettingsCategory, updateSettingsHeading } from "./settingsNavigation";
 import { createSpeedTest } from "./speedTest";
 import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
+import "./settingsPremium.css";
 
 // The home window shell: owns sidebar navigation between the four screens.
 // The Settings screen's own controls are driven independently by settings.ts,
