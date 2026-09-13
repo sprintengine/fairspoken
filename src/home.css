@@ -66,8 +66,7 @@ body {
 }
 
 /* ── Title strip ─────────────────────────────────────────────
-   Full-width drag region. The wordmark is centred and pointer-transparent so
-   it never swallows a window drag; native macOS traffic lights overlay the
+   Full-width drag region. Native macOS traffic lights overlay the
    left edge (Overlay title-bar style) so we leave that gutter empty. */
 .titlebar {
   position: relative;
@@ -79,15 +78,6 @@ body {
   align-items: center;
   justify-content: center;
 }
-.wordmark {
-  display: flex; align-items: center; gap: 7px;
-  pointer-events: none;
-  font-family: var(--font-brand);
-  font-size: 12px; font-weight: 600; letter-spacing: -0.02em;
-  color: var(--text);
-}
-.wordmark-mark { width: 15px; height: 15px; flex: none; }
-.wordmark-mark img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 /* ── Workspace ─── sidebar + main, filling the height below the strip. */
 .workspace {

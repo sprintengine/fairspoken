@@ -10,17 +10,8 @@
 </head>
 <body>
   <div class="app">
-    <!-- ── Title strip ── window-drag region carrying the wordmark; under the
-         macOS Overlay title-bar style the native traffic lights float over its
-         left edge, so nothing is rendered there. -->
-    <header class="titlebar" data-tauri-drag-region>
-      <span class="wordmark" data-tauri-drag-region>
-        <span class="wordmark-mark" aria-hidden="true">
-          <img src="/logo.png" alt="" draggable="false" />
-        </span>
-        <span class="wordmark-name">multivoice</span>
-      </span>
-    </header>
+    <!-- Window-drag region beneath the native macOS traffic lights. -->
+    <header class="titlebar" data-tauri-drag-region></header>
 
     <div class="workspace">
       <!-- ── Sidebar ── -->
