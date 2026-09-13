@@ -6,6 +6,8 @@ import "./notes";
 import "./dictionary";
 import "./activity";
 import "./modelDashboard";
+import "./settingsModelSummaries";
+import { selectSettingsCategory, updateSettingsHeading } from "./settingsNavigation";
 import { createSpeedTest } from "./speedTest";
 import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
 
@@ -67,6 +69,10 @@ function go(screen: Screen): void {
   if (notesSearch) {
     notesSearch.hidden = screen !== "notes";
   }
+  if (screen === "settings") updateSettingsHeading();
+  const saveStatus = document.getElementById("settingsSaveStatus");
+  if (saveStatus) saveStatus.hidden = screen !== "settings";
+  document.dispatchEvent(new CustomEvent("home-screen-changed", { detail: { screen } }));
 }
 
 // Both tests are Home sub-routes: keep the Home nav item highlighted, swap the
@@ -86,6 +92,9 @@ function openSubRoute(sectionId: string, title: string): void {
   }
   if (screenTitle) screenTitle.textContent = title;
   if (notesSearch) notesSearch.hidden = true;
+  const saveStatus = document.getElementById("settingsSaveStatus");
+  if (saveStatus) saveStatus.hidden = true;
+  document.dispatchEvent(new CustomEvent("home-screen-changed", { detail: { screen: sectionId } }));
 }
 
 function openSpeedTest(): void {
@@ -113,6 +122,9 @@ for (const opener of document.querySelectorAll<HTMLElement>("[data-route]")) {
   opener.addEventListener("click", () => {
     const target = opener.dataset.route;
     if (target && isScreen(target)) {
+      if (target === "settings" && opener.dataset.settingsTarget) {
+        selectSettingsCategory(opener.dataset.settingsTarget);
+      }
       go(target);
       if (screenTitle) {
         screenTitle.tabIndex = -1;
