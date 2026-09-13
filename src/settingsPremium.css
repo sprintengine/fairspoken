@@ -12,7 +12,6 @@
 .settings-navigation button:hover { background: var(--sem-color-bg-hover); color: var(--sem-color-text-primary); }
 .settings-navigation button[aria-current="page"] { background: var(--sem-color-bg-selected); color: var(--sem-color-text-primary); }
 .settings-navigation button:focus-visible, .appearance-card:focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
-.settings-mobile-navigation { display: none; margin: 0; }
 .settings-content { min-width: 0; min-height: 0; overflow: auto; padding: var(--sem-space-3xl) var(--sem-space-4xl); }
 .settings-content .settings-form { width: 100%; max-width: 760px; margin: 0 auto; }
 .settings-page[hidden] { display: none; }
@@ -48,15 +47,11 @@
 .preview-main::after { content: ""; width: 85%; height: 35%; border-block: var(--sem-space-2xs) solid var(--sem-color-bg-selected); background: var(--sem-color-bg-hover); }
 .appearance-label { padding-bottom: var(--sem-space-2xs); }
 .appearance-description { margin: var(--sem-space-xl) 0 0; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
+/* Keep the settings sidebar visible even at the minimum window size. */
 @media (max-width: 999px) {
-  .settings-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-  .settings-navigation { display: none; }
-  .settings-mobile-navigation { display: flex; align-items: center; gap: var(--sem-space-lg); padding: var(--sem-space-lg) var(--sem-space-xl); border-bottom: 1px solid var(--sem-color-border-subtle); }
-  .settings-mobile-navigation label { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
-  #settingsCategorySelect { width: auto; min-width: 180px; }
-  .settings-content { padding: 0; }
-  .settings-content .settings-form { padding: var(--sem-space-2xl); }
-  .settings-mobile-navigation { position: sticky; top: 0; z-index: var(--sem-z-sticky); background: var(--sem-color-bg-surface); }
+  .settings-workspace { grid-template-columns: calc(var(--sem-size-control-lg) * 4 + var(--sem-space-xl)) minmax(0, 1fr); }
+  .settings-navigation { padding-inline: var(--sem-space-sm); }
+  .settings-content { padding: var(--sem-space-xl); }
 }
 @media (max-width: 700px) {
   .settings-card .row { grid-template-columns: minmax(0, 1fr); gap: var(--sem-space-lg); }
