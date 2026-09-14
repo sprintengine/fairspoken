@@ -31,6 +31,7 @@ mod tests {
         TranscriptPreview {
             index: 0,
             text: text.into(),
+            sealed_len: 0,
             final_preview: false,
         }
     }

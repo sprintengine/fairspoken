@@ -161,8 +161,11 @@ const waveBars = Array.from(document.querySelectorAll<HTMLElement>(".wave span")
 // Gate matches the backend's per-window speech RMS threshold, so the bars
 // consider "voice" exactly what the transcriber's gap detection does.
 const METER_GATE_RMS = 0.004;
-const METER_FULL_RMS = 0.055;
-const METER_FLOOR_SCALE = 0.16;
+// Conversational speech sits well below the old 0.055 ceiling, so the bars
+// spent their time near the floor and barely moved. This is a normal speaking
+// voice at full scale; louder speech simply clamps.
+const METER_FULL_RMS = 0.026;
+const METER_FLOOR_SCALE = 0.12;
 const METER_BAR_WEIGHTS = [0.62, 0.95, 1, 0.78, 0.88];
 const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 

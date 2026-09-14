@@ -20,6 +20,7 @@ mod models;
 mod note_debug;
 mod notes;
 mod polish;
+mod polish_stream;
 mod post_processing;
 mod preview;
 mod remote_transcription;
@@ -54,7 +55,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Size, State, WindowEvent,
 };
@@ -70,6 +71,12 @@ const MIN_RECORDING_SECONDS: f32 = 0.35;
 const SILENCE_RMS_THRESHOLD: f32 = 0.001;
 const SILENCE_PEAK_THRESHOLD: f32 = 0.008;
 static BACKEND_EVENT_ID: AtomicU64 = AtomicU64::new(1);
+/// How long the finished preview stays up so the last edits can be read.
+const CURSOR_PREVIEW_LINGER: Duration = Duration::from_secs(5);
+/// Longest a hover may hold the finished preview open. Hovering extends
+/// reading time; a hover the frontend never retracts must not pin the box
+/// on screen forever.
+const CURSOR_PREVIEW_HOVER_MAX: Duration = Duration::from_secs(60);
 
 struct AppServices {
     debug_capture_enabled: AtomicBool,
@@ -79,6 +86,9 @@ struct AppServices {
     preview_gate: Mutex<()>,
     cursor_snapshot: Mutex<live_preview::Snapshot>,
     preview_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Sealed-prefix polish state for the active dictation. Live passes and
+    /// the commit path share it, so release only has to polish the tail.
+    polish_stream: Mutex<polish_stream::PolishStream>,
     local_models: local_models::LocalModels,
     audio: Mutex<AudioService>,
     clipboard: ClipboardService,
@@ -686,11 +696,11 @@ fn test_remote_transcription_host(
 /// idle is kept as small as possible.
 fn pill_window_bounds(state: &str) -> Option<(f64, f64)> {
     match state {
-        "idle" => Some((76.0, 24.0)),
-        "hover" => Some((212.0, 46.0)),
-        "starting" | "recording" | "transcribing" => Some((212.0, 46.0)),
-        "copied" => Some((140.0, 46.0)),
-        "polished" => Some((220.0, 46.0)),
+        "idle" => Some((68.0, 24.0)),
+        "hover" => Some((186.0, 46.0)),
+        "starting" | "recording" | "transcribing" => Some((186.0, 46.0)),
+        "copied" => Some((128.0, 46.0)),
+        "polished" => Some((204.0, 46.0)),
         "error" => Some((280.0, 46.0)),
         _ => None,
     }
@@ -1053,6 +1063,12 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
     cancel_transcription_for_location(&services, settings.transcription_location)?;
     invalidate_previews(&services);
     let cursor_session = services.preview_generation.load(Ordering::SeqCst);
+    // Remote transcription streams no previews, so bind the polish stream here
+    // rather than in the forwarder: the commit path must never mistake a
+    // previous dictation's sealed text for this one's.
+    if let Ok(mut stream) = services.polish_stream.lock() {
+        stream.begin(cursor_session);
+    }
     update_cursor_snapshot(&app, |s| {
         s.begin(
             cursor_session,
@@ -1378,62 +1394,114 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     if let Some(trace) = &trace {
         trace.event("accessibility-caret", serde_json::json!({"enabled":settings.context_awareness,"status":if !settings.context_awareness { "disabled" } else if caret_context.is_some() { "read" } else { "unavailable-excluded-or-timeout" },"before":caret_context.as_ref().map(|c|&c.before),"afterChar":caret_context.as_ref().and_then(|c|c.after_char),"sentToPolish":"Only before is supplied to the final polish pass; afterChar is used for paste spacing."}));
     }
+    let caret_before = caret_context.as_ref().map(|c| c.before.as_str());
+    // Streaming polish already sealed every utterance before the last silence
+    // gap, so the commit pass only covers the words spoken since — the cost of
+    // the last sentence, not of the whole dictation. A stream with no output
+    // (remote transcription, or a transcript it cannot describe) falls back to
+    // the whole-text pass, which is always correct.
+    let tail_job = services
+        .polish_stream
+        .lock()
+        .ok()
+        .filter(|stream| stream.has_output())
+        .and_then(|stream| stream.finish_job(cursor_session, &raw_transcript))
+        .map(|mut job| {
+            // Mid-dictation the sealed prefix is the right lead-in; with
+            // nothing sealed yet, fall back to the text around the caret.
+            if job.context.is_empty() {
+                job.context = caret_before.unwrap_or_default().to_string();
+            }
+            job
+        });
+    let polish_input = tail_job
+        .as_ref()
+        .map(|job| job.raw.clone())
+        .unwrap_or_else(|| raw_transcript.clone());
     let final_span = trace
         .as_ref()
-        .map(|t| t.span("final", &raw_transcript, frontmost_app.as_ref()));
-    let decision = if settings.polish_provider == settings::PolishProvider::Local {
-        services.local_models.polish_traced(
-            &raw_transcript,
+        .map(|t| t.span("final", &polish_input, frontmost_app.as_ref()));
+    if let Some(trace) = &trace {
+        trace.event("final-polish-scope", serde_json::json!({"mode":if tail_job.is_some() { "tail" } else { "whole-transcript" },"tailChars":polish_input.len(),"transcriptChars":raw_transcript.len(),"note":"Streaming polish seals utterances at silence gaps, so the commit pass normally covers only the final utterance."}));
+    }
+    set_polish_activity(app, cursor_session, true);
+    let decision = match &tail_job {
+        Some(job) => run_polish_pass(
+            services,
+            job,
             &settings,
             frontmost_app.as_ref(),
-            caret_context.as_ref().map(|c| c.before.as_str()),
             &services.transcription_cancel_requested,
             final_span.as_ref(),
-        )
-    } else {
-        polish::maybe_polish_traced(
+        ),
+        None if settings.polish_provider == settings::PolishProvider::Local => {
+            services.local_models.polish_traced(
+                &raw_transcript,
+                &settings,
+                frontmost_app.as_ref(),
+                caret_before,
+                &services.transcription_cancel_requested,
+                final_span.as_ref(),
+            )
+        }
+        None => polish::maybe_polish_traced(
             &raw_transcript,
             &settings,
             frontmost_app.as_ref(),
-            caret_context.as_ref().map(|c| c.before.as_str()),
+            caret_before,
             final_span.as_ref(),
-        )
+        ),
     };
+    set_polish_activity(app, cursor_session, false);
     if services
         .transcription_cancel_requested
         .load(Ordering::SeqCst)
     {
         return Err("Transcription was cancelled".into());
     }
-    let (transcript_for_rules, polished) = match decision {
-        polish::PolishDecision::Polished(outcome) => {
-            emit_backend_event(
-                app,
-                "info",
-                format!(
-                    "Transcript polished ({}ms, {})",
-                    outcome.duration_ms, outcome.model
-                ),
-            );
-            (outcome.text, true)
-        }
-        polish::PolishDecision::Unchanged { duration_ms } => {
-            emit_backend_event(
-                app,
-                "info",
-                format!("Transcript polish made no changes ({duration_ms}ms)"),
-            );
-            (raw_transcript.clone(), false)
-        }
+    match &decision {
+        polish::PolishDecision::Polished(outcome) => emit_backend_event(
+            app,
+            "info",
+            format!(
+                "Transcript polished ({}ms, {})",
+                outcome.duration_ms, outcome.model
+            ),
+        ),
+        polish::PolishDecision::Unchanged { duration_ms } => emit_backend_event(
+            app,
+            "info",
+            format!("Transcript polish made no changes ({duration_ms}ms)"),
+        ),
         polish::PolishDecision::Skipped(reason) => {
-            emit_backend_event(app, "info", format!("Polish skipped: {reason}"));
-            (raw_transcript.clone(), false)
+            emit_backend_event(app, "info", format!("Polish skipped: {reason}"))
         }
         polish::PolishDecision::Failed(reason) => {
-            emit_backend_event(app, "warning", format!("Polish skipped: {reason}"));
-            (raw_transcript.clone(), false)
+            emit_backend_event(app, "warning", format!("Polish skipped: {reason}"))
         }
-        polish::PolishDecision::Disabled => (raw_transcript.clone(), false),
+        polish::PolishDecision::Disabled => {}
+    }
+    let (transcript_for_rules, polished) = match &tail_job {
+        // Sealing the commit pass yields the whole transcript: the polished
+        // prefix plus this tail. The dictation counts as polished when any
+        // pass in the session actually rewrote something, not just this one.
+        Some(job) => {
+            let text = pass_text(&decision, &job.raw);
+            services
+                .polish_stream
+                .lock()
+                .ok()
+                .and_then(|mut stream| {
+                    stream
+                        .apply(cursor_session, job, &text)
+                        .then(|| (stream.composed(), stream.changed()))
+                })
+                .unwrap_or_else(|| (raw_transcript.clone(), false))
+        }
+        None => match decision {
+            polish::PolishDecision::Polished(outcome) => (outcome.text, true),
+            _ => (raw_transcript.clone(), false),
+        },
     };
 
     let processed = apply_transcript_post_processing(&transcript_for_rules, &settings);
@@ -1579,8 +1647,13 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     thread::spawn(move || {
         // Give the final edits time to settle, and let the reader inspect older
         // text without the window disappearing underneath the pointer.
-        thread::sleep(Duration::from_secs(5));
-        while cursor_preview::is_interacting(cursor_session) {
+        thread::sleep(CURSOR_PREVIEW_LINGER);
+        // A pointerleave that never arrives — the panel moved out from under
+        // the pointer, or the webview was hidden mid-hover — used to strand the
+        // box on screen for the rest of the session. Reading is extended, never
+        // unbounded.
+        let deadline = Instant::now() + CURSOR_PREVIEW_HOVER_MAX;
+        while cursor_preview::is_interacting(cursor_session) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(200));
         }
         hide_cursor_session(&cursor_app, cursor_session);
@@ -2270,6 +2343,44 @@ fn invalidate_previews(services: &AppServices) {
     }
 }
 
+/// Runs one polish pass over a tail, through whichever provider is configured.
+/// The sealed prefix is supplied as surrounding context so the model continues
+/// the sentence instead of re-opening one.
+fn run_polish_pass(
+    services: &AppServices,
+    job: &polish_stream::TailJob,
+    settings: &Settings,
+    target: Option<&polish::PolishTargetApp>,
+    cancel: &AtomicBool,
+    span: Option<&note_debug::Span>,
+) -> polish::PolishDecision {
+    let context = (!job.context.is_empty()).then_some(job.context.as_str());
+    if settings.polish_provider == settings::PolishProvider::Local {
+        services
+            .local_models
+            .polish_traced(&job.raw, settings, target, context, cancel, span)
+    } else {
+        polish::maybe_polish_traced(&job.raw, settings, target, context, span)
+    }
+}
+
+/// What a pass contributes to the stream. Anything short of polished output —
+/// a guardrail trip, a skip, a timeout — contributes the raw tail, so the
+/// composed transcript always covers every word and polish failure stays
+/// invisible to the dictation, exactly as the one-shot pass behaved.
+fn pass_text(decision: &polish::PolishDecision, raw: &str) -> String {
+    match decision {
+        polish::PolishDecision::Polished(outcome) => outcome.text.clone(),
+        _ => raw.to_string(),
+    }
+}
+
+/// Reports polish activity on the preview so the box can show that its text is
+/// still moving.
+fn set_polish_activity(app: &AppHandle, session: u64, active: bool) {
+    update_cursor_snapshot(app, |s| s.set_polishing(session, active));
+}
+
 fn start_transcript_preview_forwarder(
     app: AppHandle,
     settings: Settings,
@@ -2286,7 +2397,9 @@ fn start_transcript_preview_forwarder(
     let (tx, rx) = mpsc::channel::<TranscriptPreview>();
     // One current inference plus one replaceable pending revision, never a backlog.
     let pending = Arc::new(preview::LatestPreview::default());
-    if settings.polish_enabled && settings.polish_provider == settings::PolishProvider::Local {
+    // Both providers stream now: there is no whole-transcript pass at release
+    // to fall back on, so whatever polish the user gets is earned here.
+    if settings.polish_enabled {
         let app = app.clone();
         let pending = pending.clone();
         let trace = trace.clone();
@@ -2298,57 +2411,91 @@ fn start_transcript_preview_forwarder(
             });
             #[cfg(not(target_os = "macos"))]
             let target: Option<polish::PolishTargetApp> = None;
-            // Load cleanup weights alongside capture and ASR initialization.
-            let _ = app
-                .state::<AppServices>()
-                .local_models
-                .warm(&settings.polish_model, &preview_cancel);
+            if settings.polish_provider == settings::PolishProvider::Local {
+                // Load cleanup weights alongside capture and ASR initialization.
+                let _ = app
+                    .state::<AppServices>()
+                    .local_models
+                    .warm(&settings.polish_model, &preview_cancel);
+            }
             loop {
                 let services = app.state::<AppServices>();
                 if services.preview_generation.load(Ordering::SeqCst) != generation {
                     break;
                 }
-                let next = pending.take();
-                if let Some((rev, preview)) = next {
-                    let span = trace
-                        .as_ref()
-                        .map(|t| t.span(&format!("preview-{rev}"), &preview.text, target.as_ref()));
-                    let result = services.local_models.polish_traced(
-                        &preview.text,
-                        &settings,
-                        target.as_ref(),
-                        None,
-                        &preview_cancel,
-                        span.as_ref(),
-                    );
-                    if let Some(trace) = &trace {
-                        trace.event("preview-disposition", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"current":services.preview_generation.load(Ordering::SeqCst) == generation && pending.is_current(rev),"hasPolishedOutput":matches!(&result,polish::PolishDecision::Polished(_))}));
-                    }
-                    if let polish::PolishDecision::Polished(outcome) = result {
-                        if let Ok(_gate) = services.preview_gate.lock() {
-                            if services.preview_generation.load(Ordering::SeqCst) == generation
-                                && pending.is_current(rev)
-                            {
-                                emit_transcript_preview(
-                                    &app,
-                                    TranscriptPreviewEvent {
-                                        session_id: generation,
-                                        revision: rev,
-                                        polished: true,
-                                        index: preview.index,
-                                        text: outcome.text,
-                                        final_preview: false,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                } else {
+                let Some((rev, preview)) = pending.take() else {
+                    set_polish_activity(&app, generation, false);
                     thread::sleep(Duration::from_millis(100));
+                    continue;
+                };
+                // Only the words past the last silence gap are ever re-sent.
+                let job = services
+                    .polish_stream
+                    .lock()
+                    .ok()
+                    .and_then(|stream| {
+                        stream.next_job(generation, &preview.text, preview.sealed_len)
+                    });
+                let Some(job) = job else {
+                    set_polish_activity(&app, generation, false);
+                    continue;
+                };
+                set_polish_activity(&app, generation, true);
+                let span = trace
+                    .as_ref()
+                    .map(|t| t.span(&format!("preview-{rev}"), &job.raw, target.as_ref()));
+                let result = run_polish_pass(
+                    &services,
+                    &job,
+                    &settings,
+                    target.as_ref(),
+                    &preview_cancel,
+                    span.as_ref(),
+                );
+                if let Some(trace) = &trace {
+                    trace.event("preview-disposition", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"tailChars":job.raw.len(),"sealedAfter":job.seal,"current":services.preview_generation.load(Ordering::SeqCst) == generation && pending.is_current(rev),"hasPolishedOutput":matches!(&result,polish::PolishDecision::Polished(_))}));
                 }
+                if matches!(result, polish::PolishDecision::Disabled) {
+                    set_polish_activity(&app, generation, false);
+                    break;
+                }
+                let text = pass_text(&result, &job.raw);
+                if let Ok(_gate) = services.preview_gate.lock() {
+                    if services.preview_generation.load(Ordering::SeqCst) != generation {
+                        break;
+                    }
+                    // A superseded revision still seals its work — that is
+                    // what keeps the tail short — but only the newest pass is
+                    // allowed to repaint the box.
+                    let composed = services
+                        .polish_stream
+                        .lock()
+                        .ok()
+                        .and_then(|mut stream| {
+                            stream
+                                .apply(generation, &job, &text)
+                                .then(|| stream.composed())
+                        })
+                        .filter(|_| pending.is_current(rev));
+                    if let Some(composed) = composed {
+                        emit_transcript_preview(
+                            &app,
+                            TranscriptPreviewEvent {
+                                session_id: generation,
+                                revision: rev,
+                                polished: true,
+                                index: preview.index,
+                                text: composed,
+                                final_preview: false,
+                            },
+                        );
+                    }
+                };
             }
+            set_polish_activity(&app, generation, false);
         });
     }
+
     thread::spawn(move || {
         for preview in rx {
             let services = app.state::<AppServices>();
@@ -2360,7 +2507,7 @@ fn start_transcript_preview_forwarder(
             }
             let rev = pending.submit(preview.clone());
             if let Some(trace) = &trace {
-                trace.event("transcript-preview", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"text":preview.text,"finalPreview":preview.final_preview,"note":"Cumulative merged raw text. A preview without a matching polish-start was coalesced or finalization began before it ran."}));
+                trace.event("transcript-preview", serde_json::json!({"revision":rev,"asrChunkIndex":preview.index,"text":preview.text,"sealedLen":preview.sealed_len,"finalPreview":preview.final_preview,"note":"Cumulative merged raw text; sealedLen marks the prefix behind the last silence gap. A preview without a matching polish-start was coalesced or finalization began before it ran."}));
             }
             emit_transcript_preview(
                 &app,
@@ -2499,6 +2646,7 @@ pub fn run() {
             speed_test: Mutex::new(SpeedTestService::default()),
             transcription: Mutex::new(TranscriptionService::default()),
             remote_transcription: Mutex::new(None),
+            polish_stream: Mutex::new(polish_stream::PolishStream::default()),
             session_vocabulary: Mutex::new(Vec::new()),
             transcript_shelf_positioned: AtomicBool::new(false),
             #[cfg(target_os = "macos")]

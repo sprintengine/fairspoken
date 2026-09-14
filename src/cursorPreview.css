@@ -2,6 +2,11 @@
 @import "./design-system/popover.css";
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; }
+@property --preview-glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
 .cursor-preview {
   position: relative;
   box-sizing: border-box;
@@ -11,12 +16,94 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
   padding: var(--sem-space-lg);
   overflow: visible;
   border-radius: var(--sem-radius-shell-lg);
-  border: 1px solid var(--sem-color-border-strong);
-  background: color-mix(in srgb, var(--sem-color-bg-surface-raised) calc(var(--sem-glass-opacity) * 50%), transparent);
+  /* Glass, not frosted panel: the native NSGlassEffectView behind the webview
+     supplies the blur and lensing, so the CSS only adds the faint tint that
+     keeps text legible over a bright desktop. Tinting as heavily as an opaque
+     surface here is what made the box read as solid. */
+  border: 1px solid var(--sem-color-border-subtle);
+  background: color-mix(in srgb, var(--sem-color-bg-surface-raised) calc(var(--sem-glass-opacity) * 22%), transparent);
   -webkit-backdrop-filter: blur(var(--sem-glass-blur)) saturate(var(--sem-glass-saturation));
   backdrop-filter: blur(var(--sem-glass-blur)) saturate(var(--sem-glass-saturation));
   box-shadow: var(--sem-shadow-modal), var(--sem-shadow-control-raised);
   animation: none;
+}
+/* Activity glow. ::before is the crisp rim, ::after the bloom that spills past
+   it; both sweep from the same angle so they stay locked together. Masked to
+   the ring so neither ever tints the text. */
+.cursor-preview::before,
+.cursor-preview::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  /* A arc with a wide clear gap, so the sweep reads as travelling around the
+     box rather than as a static halo. */
+  background: conic-gradient(
+    from var(--preview-glow-angle),
+    transparent 0deg,
+    var(--sem-color-activity-glow-start) 45deg,
+    var(--sem-color-activity-glow-end) 110deg,
+    transparent 165deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  transition: opacity var(--sem-motion-duration-deliberate) var(--sem-motion-ease-standard);
+}
+.cursor-preview::before {
+  inset: -1px;
+  padding: 1.5px;
+}
+.cursor-preview::after {
+  inset: -4px;
+  padding: 5px;
+  filter: blur(7px);
+}
+.cursor-preview.is-live::before { opacity: 1; }
+.cursor-preview.is-live::after { opacity: 0.45; }
+.cursor-preview.is-live::before,
+.cursor-preview.is-live::after {
+  animation: preview-glow-sweep var(--sem-motion-duration-pulse) linear infinite;
+  animation-duration: calc(var(--sem-motion-duration-pulse) * 4);
+}
+
+/* Polish mark: a brush in the top corner that lights while a pass is rewriting
+   text. The rim says the session is live; this says the words are changing. */
+.cursor-preview {
+  --preview-brush-size: 17px;
+  /* The glyph leans toward the text — its bristles reach further left than its
+     box does — so the gap is set from how it reads, not from its bounds. */
+  --preview-brush-gap: var(--sem-space-lg);
+}
+.cursor-preview-polish-mark {
+  position: absolute;
+  top: var(--sem-space-sm);
+  inset-inline-end: var(--sem-space-sm);
+  width: var(--preview-brush-size);
+  height: var(--preview-brush-size);
+  color: var(--sem-color-activity-glow-end);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--sem-color-activity-glow-end) 70%, transparent));
+  opacity: 0;
+  transform: scale(0.82);
+  transition:
+    opacity calc(var(--sem-motion-duration-deliberate) * 2) var(--sem-motion-ease-standard),
+    transform calc(var(--sem-motion-duration-deliberate) * 2) var(--sem-motion-ease-standard);
+  pointer-events: none;
+}
+.cursor-preview.is-polishing .cursor-preview-polish-mark {
+  opacity: 1;
+  transform: none;
+  animation: preview-brush-pulse calc(var(--sem-motion-duration-pulse) * 2) var(--sem-motion-ease-standard) infinite;
+}
+@keyframes preview-brush-pulse {
+  0%, 100% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--sem-color-activity-glow-end) 70%, transparent)); }
+  50% { filter: drop-shadow(0 0 9px var(--sem-color-activity-glow-end)); }
+}
+@keyframes preview-glow-sweep {
+  to { --preview-glow-angle: 360deg; }
 }
 .cursor-preview-text {
   min-height: calc(var(--sem-font-size-heading) * var(--sem-font-line-relaxed));
@@ -34,6 +121,14 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
   scrollbar-color: var(--sem-color-text-subtle) transparent;
   padding-right: var(--sem-space-xs);
   box-sizing: border-box;
+  transition: padding-right var(--sem-motion-duration-deliberate) var(--sem-motion-ease-standard);
+}
+/* Clearance = how far the brush reaches past the text column (its offset plus
+   its width, less the box padding the text already sits inside), plus a gap. */
+.cursor-preview.is-live .cursor-preview-text {
+  padding-right: calc(
+    var(--sem-space-sm) + var(--preview-brush-size) - var(--sem-space-lg) + var(--preview-brush-gap)
+  );
 }
 .cursor-preview-text::-webkit-scrollbar { width: var(--sem-space-xs); }
 .cursor-preview-text::-webkit-scrollbar-track { background: transparent; }
@@ -67,7 +162,19 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
 @keyframes preview-deletion-fade { to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .cursor-preview-insertion, .cursor-preview-deletion { animation: none; }
+  /* The rim still has to say "live", so it stays lit — it just stops sweeping,
+     resolving to a static violet-to-magenta arc. The brush holds a steady glow
+     rather than pulsing. */
+  .cursor-preview.is-live::before,
+  .cursor-preview.is-live::after,
+  .cursor-preview.is-polishing .cursor-preview-polish-mark { animation: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .cursor-preview { background: var(--sem-color-bg-surface-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .cursor-preview {
+    background: var(--sem-color-bg-surface-raised);
+    border-color: var(--sem-color-border-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+    .cursor-preview.is-live::after { opacity: 0; }
 }

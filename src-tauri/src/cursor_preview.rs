@@ -232,14 +232,63 @@ thread_local! {
     static PANEL: std::cell::RefCell<Option<Retained<PreviewPanel>>> = const { std::cell::RefCell::new(None) };
 }
 
+/// The translucent layer behind the preview's web content.
+///
+/// macOS 26 renders Liquid Glass through `NSGlassEffectView`, which lenses and
+/// tints what is behind it rather than merely frosting it. The bindings predate
+/// the class, so it is looked up at runtime; on older systems — and if the
+/// lookup or init ever fails — the frosted popover material is still correct.
+#[cfg(target_os = "macos")]
+fn backdrop_view(
+    mtm: objc2::MainThreadMarker,
+    frame: objc2_foundation::NSRect,
+) -> Retained<objc2_app_kit::NSView> {
+    use objc2::rc::Allocated;
+    use objc2::runtime::AnyClass;
+    use objc2_app_kit::{
+        NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+        NSVisualEffectView,
+    };
+    const CORNER_RADIUS: f64 = 12.0;
+
+    if let Some(class) = AnyClass::get(c"NSGlassEffectView") {
+        let glass: Option<Retained<NSView>> = unsafe {
+            let allocated: Allocated<NSView> = objc2::msg_send![class, alloc];
+            objc2::msg_send![allocated, initWithFrame: frame]
+        };
+        if let Some(glass) = glass {
+            // Glass rounds itself; a masked layer on top would clip the lensing.
+            unsafe {
+                let _: () = objc2::msg_send![&*glass, setCornerRadius: CORNER_RADIUS];
+            }
+            return glass;
+        }
+    }
+
+    let material = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), frame);
+    material.setMaterial(NSVisualEffectMaterial::Popover);
+    material.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    material.setState(NSVisualEffectState::Active);
+    // Preserve some desktop visibility instead of stacking an opaque native
+    // material beneath the CSS tint.
+    material.setAlphaValue(0.8);
+    material.setWantsLayer(true);
+    if let Some(layer) = material.layer() {
+        unsafe {
+            let _: () = objc2::msg_send![&*layer, setCornerRadius: CORNER_RADIUS];
+        }
+        layer.setMasksToBounds(true);
+    }
+    Retained::into_super(material)
+}
+
 #[cfg(target_os = "macos")]
 fn native_panel(
     window: &tauri::WebviewWindow,
     mtm: objc2::MainThreadMarker,
 ) -> Option<Retained<PreviewPanel>> {
     use objc2_app_kit::{
-        NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSVisualEffectBlendingMode,
-        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+        NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSWindow,
         NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -276,30 +325,17 @@ fn native_panel(
         source.orderOut(None);
         source.setContentView(None);
         panel.setContentView(Some(&content));
-        let material = NSVisualEffectView::initWithFrame(
-            NSVisualEffectView::alloc(mtm),
+        let material = backdrop_view(
+            mtm,
             NSRect::new(
                 NSPoint::new(16.0, 16.0),
                 NSSize::new(frame.size.width - 32.0, frame.size.height - 32.0),
             ),
         );
-        material.setMaterial(NSVisualEffectMaterial::Popover);
-        material.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        material.setState(NSVisualEffectState::Active);
-        // Match the shared glass opacity: preserve some desktop visibility
-        // instead of stacking an opaque native material beneath the CSS tint.
-        material.setAlphaValue(0.8);
         material.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
-        material.setWantsLayer(true);
-        if let Some(layer) = material.layer() {
-            unsafe {
-                let _: () = objc2::msg_send![&*layer, setCornerRadius: 12.0_f64];
-            }
-            layer.setMasksToBounds(true);
-        }
         content.addSubview_positioned_relativeTo(&material, NSWindowOrderingMode::Below, None);
         *slot.borrow_mut() = Some(panel.clone());
         Some(panel)

@@ -76,6 +76,10 @@ pub type TranscriptionPreviewSender = mpsc::Sender<TranscriptPreview>;
 pub struct TranscriptPreview {
     pub index: usize,
     pub text: String,
+    /// Bytes of `text` that sit behind a silence-gap boundary. Chunk merging
+    /// only ever appends, so this prefix can no longer be revised by later
+    /// chunks and the polish stream may seal it permanently.
+    pub sealed_len: usize,
     pub final_preview: bool,
 }
 
@@ -691,7 +695,7 @@ fn run_chunked_session(
     if transcript.is_empty() {
         return Err("No speech was transcribed".to_string());
     }
-    emit_preview(&preview_tx, chunk_index, transcript.clone(), true);
+    emit_preview(&preview_tx, chunk_index, transcript.clone(), 0, true);
     Ok(transcript)
 }
 
@@ -729,7 +733,26 @@ fn emit_chunk_preview(
     let text = merge_chunk_results(&sorted);
     if !text.is_empty() {
         let index = sorted.last().map(|chunk| chunk.index).unwrap_or_default();
-        emit_preview(preview_tx, index, text, final_preview);
+        emit_preview(preview_tx, index, text, sealed_prefix_len(&sorted), final_preview);
+    }
+}
+
+/// How much of the merged text sits behind the most recent silence gap.
+///
+/// A chunk with `overlaps_previous == false` began after a gap cut, so the
+/// boundary before it landed in silence and the merge of everything earlier is
+/// already final. Because `merge_chunk_results` only ever appends to its
+/// accumulator, that merge is a byte prefix of the full text.
+fn sealed_prefix_len(sorted: &[ChunkResult]) -> usize {
+    let Some(boundary) = sorted.iter().rposition(|chunk| !chunk.overlaps_previous) else {
+        return 0;
+    };
+    let sealed = merge_chunk_results(&sorted[..boundary]);
+    let text = merge_chunk_results(sorted);
+    if text.starts_with(&sealed) {
+        sealed.len()
+    } else {
+        0
     }
 }
 
@@ -737,12 +760,14 @@ fn emit_preview(
     preview_tx: &Option<TranscriptionPreviewSender>,
     index: usize,
     text: String,
+    sealed_len: usize,
     final_preview: bool,
 ) {
     if let Some(preview_tx) = preview_tx {
         let _ = preview_tx.send(TranscriptPreview {
             index,
             text,
+            sealed_len,
             final_preview,
         });
     }
@@ -1287,7 +1312,8 @@ mod tests {
     use super::{
         contains_probable_speech, dispatch_final_chunk, dispatch_ready_chunks,
         is_non_speech_annotation, merge_chunk_results, merge_transcript_text,
-        resample_i16_to_16khz_f32, ChunkCutState, ChunkResult, ChunkTranscriber, SessionHandle,
+        resample_i16_to_16khz_f32, sealed_prefix_len, ChunkCutState, ChunkResult, ChunkTranscriber,
+        SessionHandle,
         WhisperChunkJob, CHUNK_OVERLAP_SECONDS, GAP_SILENCE_MS, MAX_PENDING_CHUNK_JOBS,
         MIN_GAP_CHUNK_SECONDS, NO_STREAMED_AUDIO,
     };
@@ -1494,6 +1520,33 @@ mod tests {
 
         // Cancelling must join the worker (and its chunk thread) without hanging.
         handle.cancel();
+    }
+
+    #[test]
+    fn the_seal_point_tracks_the_last_silence_gap_and_is_always_a_prefix() {
+        let chunk = |index: usize, text: &str, overlaps_previous: bool| ChunkResult {
+            index,
+            text: text.to_string(),
+            overlaps_previous,
+        };
+        // Two forced cuts then a gap cut: only what precedes the gap-cut chunk
+        // is final, because the merge can still revise across an overlap.
+        let chunks = [
+            chunk(0, "book it for", false),
+            chunk(1, "for thursday", true),
+            chunk(2, "no friday", false),
+        ];
+        let text = merge_chunk_results(&chunks);
+        let sealed = sealed_prefix_len(&chunks);
+        assert_eq!(&text[..sealed], "book it for thursday");
+        assert!(text.starts_with(&text[..sealed]));
+
+        // A lone opening chunk has no earlier boundary to seal against.
+        assert_eq!(sealed_prefix_len(&chunks[..1]), 0);
+
+        // Every chunk still overlapping means nothing has been sealed.
+        let overlapping = [chunk(0, "hello", true), chunk(1, "hello there", true)];
+        assert_eq!(sealed_prefix_len(&overlapping), 0);
     }
 
     #[test]

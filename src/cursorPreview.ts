@@ -13,6 +13,7 @@ type Snapshot = {
   text: string;
   polished: boolean;
   remote: boolean;
+  polishing: boolean;
 };
 type Edit = { kind: "insert" | "delete"; start: number; end: number; text: string; expires: number };
 const box = document.getElementById("cursorPreview")!;
@@ -53,10 +54,23 @@ void document.fonts.ready.then(fitPreview);
 
 function updateInteraction(active: boolean): void {
   if (!current || current.phase === "idle") return;
+  if (active === hovering) return;
+  hovering = active;
   void invoke("set_cursor_preview_interacting", { sessionId: current.sessionId, active }).catch(() => {});
 }
-box.addEventListener("pointerenter", () => { hovering = true; updateInteraction(true); });
-box.addEventListener("pointerleave", () => { hovering = false; updateInteraction(false); });
+box.addEventListener("pointerenter", () => updateInteraction(true));
+box.addEventListener("pointerleave", () => updateInteraction(false));
+box.addEventListener("pointercancel", () => updateInteraction(false));
+// Hovering holds the finished box open for reading, so a pointerleave that
+// never arrives — the panel resized out from under the pointer, or the webview
+// was hidden mid-hover — would strand it on screen for the rest of the session.
+// Trust :hover over the event stream, in both directions: it also re-asserts a
+// pointer already resting on the box when a new session clears the flag.
+setInterval(() => {
+  if (!current || current.phase === "idle" || box.hidden) return;
+  const over = box.matches(":hover");
+  if (over !== hovering) updateInteraction(over);
+}, 500);
 text.addEventListener("scroll", () => {
   following = text.scrollHeight - text.clientHeight - text.scrollTop <= parseFloat(getComputedStyle(text).lineHeight);
 });
@@ -138,11 +152,58 @@ function polish(value: string): void {
   cleanText = value;
 }
 
+// Passes land in bursts with short gaps between them. Following that signal
+// literally made the brush strobe, so once lit it stays lit through a gap this
+// long; only a real stop puts it out.
+const POLISH_DWELL_MS = 900;
+let polishHold: ReturnType<typeof setTimeout> | undefined;
+
+function setPolishMark(active: boolean, live: boolean): void {
+  clearTimeout(polishHold);
+  if (active) {
+    box.classList.add("is-polishing");
+    return;
+  }
+  // The end of the session is a real stop: settle immediately rather than
+  // leaving the brush glowing over finished text.
+  if (!live) {
+    box.classList.remove("is-polishing");
+    return;
+  }
+  polishHold = setTimeout(() => box.classList.remove("is-polishing"), POLISH_DWELL_MS);
+}
+
+function setActivity(snapshot: Snapshot): void {
+  // The sweeping rim tracks the session, not individual passes. Tying it to
+  // polish activity made it flicker and restart its rotation every few hundred
+  // milliseconds, so it never travelled far enough to read as motion. It runs
+  // unbroken from the first word to the committed transcript.
+  const live = snapshot.phase === "recording" || snapshot.phase === "finishing";
+  box.classList.toggle("is-live", live);
+  // The brush is the per-pass signal: it lights while text is being rewritten.
+  setPolishMark(live && snapshot.polishing, live);
+}
+
+// True when a snapshot carries no change other than polish activity, so the
+// diff highlights and scroll position can be left alone.
+function activityOnly(snapshot: Snapshot, previous: Snapshot): boolean {
+  return snapshot.sessionId === previous.sessionId
+    && snapshot.revision === previous.revision
+    && snapshot.phase === previous.phase
+    && snapshot.polished === previous.polished
+    && snapshot.text === previous.text;
+}
+
 function render(snapshot: Snapshot): void {
   if (current && (snapshot.sessionId < current.sessionId ||
     (snapshot.sessionId === current.sessionId && (order[snapshot.phase] < order[current.phase] ||
       (snapshot.phase === "recording" && (snapshot.revision < current.revision ||
         (snapshot.revision === current.revision && current.polished && !snapshot.polished))))))) return;
+  if (current && activityOnly(snapshot, current)) {
+    current = snapshot;
+    setActivity(snapshot);
+    return;
+  }
   const newSession = current?.sessionId !== snapshot.sessionId;
   if (newSession) {
     clearTimeout(cleanup);
@@ -151,9 +212,13 @@ function render(snapshot: Snapshot): void {
     lastRaw = "";
     following = true;
     lastSize = "";
+    // show() cleared the backend's hover flag; the watchdog re-asserts it if
+    // the pointer is in fact still over the box.
+    hovering = false;
   }
   current = snapshot;
   box.hidden = snapshot.phase === "idle";
+  setActivity(snapshot);
   if (snapshot.phase === "idle") {
     clearTimeout(cleanup);
     edits = [];
@@ -163,7 +228,6 @@ function render(snapshot: Snapshot): void {
     hovering = false;
     return;
   }
-  if (hovering) updateInteraction(true);
   if (snapshot.polished && cleanText) {
     polish(snapshot.text);
   } else if (!snapshot.polished && snapshot.phase !== "complete" && lastRaw && snapshot.text.startsWith(lastRaw)) {
