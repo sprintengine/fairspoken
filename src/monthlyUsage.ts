@@ -33,15 +33,17 @@ export function selectMonths(months: MonthlyBucket[], range: number): MonthlyBuc
 }
 
 export function mountMonthlyUsage(root: HTMLElement): (summary: MonthlyUsageSummary | null) => void {
-  root.classList.add("monthly-usage");
+  root.classList.add("monthly-usage", "settings-section");
   const header = document.createElement("div");
-  header.className = "monthly-usage-header";
+  header.className = "settings-section-header monthly-usage-header";
   const title = document.createElement("h2");
   title.textContent = "Words per month";
   const controls = document.createElement("div");
   controls.className = "monthly-usage-ranges";
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Monthly chart time range");
+  const card = document.createElement("div");
+  card.className = "settings-card";
   const total = document.createElement("p");
   total.className = "monthly-usage-total";
   total.setAttribute("aria-live", "polite");
@@ -64,7 +66,8 @@ export function mountMonthlyUsage(root: HTMLElement): (summary: MonthlyUsageSumm
     return { button, value };
   });
   header.append(title, controls);
-  root.replaceChildren(header, total, chart, note);
+  card.append(total, chart, note);
+  root.replaceChildren(header, card);
 
   function render(): void {
     buttons.forEach(({ button, value }) => button.setAttribute("aria-pressed", String(range === value)));

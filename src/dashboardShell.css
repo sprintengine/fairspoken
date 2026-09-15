@@ -33,17 +33,14 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
 .main { background: var(--sem-color-bg-surface); border: 1px solid var(--sem-color-border-subtle); border-radius: var(--sem-radius-shell-lg); overflow: hidden; }
 .topbar { padding: var(--sem-space-xl) var(--gutter); gap: var(--sem-space-lg); min-height: calc(var(--sem-size-control-lg) + var(--sem-space-xl)); }
 .content { padding: var(--sem-space-4xl) var(--gutter); }
-#screen-home, .profile-content { max-width: 1080px; margin: 0 auto; }
+#screen-home, #screen-models, .profile-content { max-width: 1080px; margin: 0 auto; }
+#screen-dictionary, #screen-activity { max-width: 760px; margin: 0 auto; }
 .hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--sem-space-xs) var(--sem-space-3xl); padding: var(--sem-space-xl) 0 var(--sem-space-4xl); margin-bottom: 0; }
 .hero .label, .hero .value, .hero .sub { grid-column: 1; margin: 0; }
 .hero .value { font-size: calc(var(--sem-font-size-title) * 3); letter-spacing: var(--sem-font-tracking-tight); line-height: var(--sem-font-line-tight); }
 .hero .hero-actions { grid-column: 2; grid-row: 1 / 4; display: flex; flex-direction: column; align-self: center; gap: var(--sem-space-sm); margin: 0; }
-.tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sem-space-3xl); padding: var(--sem-space-3xl) 0; border-block: 1px solid var(--sem-color-border-subtle); margin-bottom: var(--sem-space-4xl); }
-.tile, .tile:first-child { padding: 0; border: 0; min-width: 0; }
-.tile .t-value { margin-top: var(--sem-space-xs); }
-.tile .t-meta { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
-#homeStats .panel { margin-bottom: var(--sem-space-4xl); }
-.panel-head .hint { font-size: var(--sem-font-size-meta); }
+#homeStats .settings-section { margin-bottom: var(--sem-space-3xl); }
+.settings-card > .chart { padding: var(--sem-space-xl); }
 .chart .bar { background: var(--sem-color-bg-selected); }
 .chart .bar.today { background: var(--sem-color-text-muted); }
 .main #screen-models { background: transparent; padding: 0; }
@@ -93,7 +90,6 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
   .hero { display: flex; flex-direction: column; gap: var(--sem-space-sm); }
   .hero .hero-actions { align-self: flex-start; flex-direction: row; flex-wrap: wrap; margin-top: var(--sem-space-lg); }
   .hero .value { font-size: calc(var(--sem-font-size-title) * 2); }
-  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row { flex-wrap: wrap; gap: var(--sem-space-lg); }
   .row-control { max-width: 100%; }
   .settings-form { max-width: 100%; }
@@ -106,17 +102,20 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
 }
 
 /* Let Notes use the available work area instead of subtracting the old
-   sidebar shell's pixel heights from the viewport. */
+   sidebar shell's pixel heights from the viewport. Two list cards share the
+   pane: the library on the left, the open note on the right. */
 .content:has(> #screen-notes.active) { display: flex; flex-direction: column; }
 #screen-notes.active { flex: 1; min-height: 0; }
-.notes { height: 100%; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
-.note-list, .note-detail { min-height: 0; }
+.notes { height: 100%; min-height: 0; align-items: stretch; }
+.note-list, .note-detail { min-height: 0; height: 100%; }
+.note-list.settings-card { overflow-y: auto; }
+.note-detail.settings-card { padding: 0; overflow: hidden; }
 .nd-textarea:focus-visible { outline: var(--sem-focus-ring); outline-offset: calc(-1 * var(--sem-focus-ring-offset)); }
 .btn:disabled:hover { background: var(--sem-color-bg-surface); color: var(--sem-color-text-default); border-color: var(--sem-color-border-default); }
 .btn.btn-primary:disabled:hover { background: var(--sem-color-accent-primary); color: var(--sem-color-text-on-accent); border-color: transparent; }
 .btn.btn-ghost:disabled:hover { background: transparent; color: var(--sem-color-text-muted); border-color: transparent; }
 @media(max-width:760px) {
   .notes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 2fr); gap: var(--sem-space-xl); }
-  .note-list { border-right: 0; border-bottom: 1px solid var(--sem-color-border-subtle); }
+  .note-list { border-right: 0; }
   .note-detail { padding-left: 0; }
 }

@@ -15,9 +15,18 @@
 .settings-content { min-width: 0; min-height: 0; overflow: auto; padding: var(--sem-space-3xl) var(--sem-space-4xl); }
 .settings-content .settings-form { width: 100%; max-width: 760px; margin: 0 auto; }
 .settings-page[hidden] { display: none; }
-.settings-page .settings-section { margin: 0 0 var(--sem-space-3xl); }
-.settings-page .settings-section:last-child { margin-bottom: 0; }
-.settings-page .settings-section > h2 { margin: 0; padding: 0 var(--sem-space-xl) var(--sem-space-sm); color: var(--sem-color-text-primary); font-size: var(--sem-font-size-heading); font-weight: var(--sem-font-weight-emphasis); line-height: var(--sem-font-line-default); }
+/* The list card is the app's group surface, not a Settings-only chrome. Home,
+   Notes, Models and Profile reuse the same section label + card + hairline
+   rows so a catalogue of things does not invent a second product. */
+.settings-section { margin: 0 0 var(--sem-space-3xl); }
+.settings-section:last-child { margin-bottom: 0; }
+.settings-section > h2,
+.settings-section-header > h2 { margin: 0; color: var(--sem-color-text-primary); font-size: var(--sem-font-size-heading); font-weight: var(--sem-font-weight-emphasis); line-height: var(--sem-font-line-default); }
+.settings-section > h2 { padding: 0 var(--sem-space-xl) var(--sem-space-sm); }
+.settings-section-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sem-space-lg); padding: 0 var(--sem-space-xl) var(--sem-space-sm); }
+.settings-section-help { margin: 0; padding: 0 var(--sem-space-xl) var(--sem-space-lg); color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
+.settings-section-help:empty { display: none; padding: 0; }
+.settings-section > .settings-card + .settings-section-help { padding-top: var(--sem-space-lg); padding-bottom: 0; }
 .settings-card { overflow: visible; border: 1px solid var(--sem-color-border-default); border-radius: var(--sem-radius-shell-lg); background: var(--sem-color-bg-surface-raised); }
 .settings-card .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sem-space-3xl); padding: var(--sem-space-xl); min-height: calc(var(--sem-size-control-md) + 2 * var(--sem-space-sm)); border: 0; border-top: 1px solid var(--sem-color-border-subtle); }
 .settings-card > .row:first-child, .settings-card > :first-child > .row:first-child { border-top: 0; }
@@ -25,7 +34,11 @@
 .settings-card .row-text { max-width: none; min-width: 0; }
 .settings-card .row-label { color: var(--sem-color-text-primary); font-size: var(--sem-font-size-body); font-weight: var(--sem-font-weight-medium); line-height: var(--sem-font-line-default); }
 .settings-card .row-help { margin-top: var(--sem-space-2xs); max-width: 54ch; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
-.settings-card .row-control { justify-content: flex-end; gap: var(--sem-space-sm); min-width: 0; max-width: 100%; }
+.settings-card .row-control { display: flex; justify-content: flex-end; gap: var(--sem-space-sm); min-width: 0; max-width: 100%; }
+.settings-card .row--stacked { grid-template-columns: minmax(0, 1fr); gap: var(--sem-space-lg); }
+.settings-card .row--stacked .row-control { justify-content: flex-start; max-width: none; }
+.settings-card .row--stacked .setting-input { flex: 1; width: auto; min-width: 0; max-width: none; }
+.settings-card .row-control > .num { color: var(--sem-color-text-primary); font-weight: var(--sem-font-weight-medium); font-variant-numeric: tabular-nums; }
 .settings-card .setting-input, .settings-card .setting-select { max-width: 100%; }
 .settings-card .section-note { padding: var(--sem-space-lg) var(--sem-space-xl); margin: 0; border-top: 1px solid var(--sem-color-border-subtle); color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
 .settings-card .section-note[data-error="true"], .settings-card .status-text.error { color: var(--sem-color-status-danger); }
@@ -65,12 +78,11 @@
 /* Model preparation is a full-width status row within its owning card. */
 .settings-card > .model-state { padding: var(--sem-space-lg) var(--sem-space-xl); border-top: 1px solid var(--sem-color-border-subtle); gap: var(--sem-space-lg); }
 .settings-card > .model-state[data-state="error"] .status { color: var(--sem-color-status-danger); }
-.settings-page .settings-section > .section-note { margin: var(--sem-space-xl) 0 0; padding: 0; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
+.settings-section > .section-note { margin: var(--sem-space-xl) 0 0; padding: 0 var(--sem-space-xl); border: 0; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
 .settings-card .level { max-width: 100%; }
 .settings-card .mic-line { max-width: 100%; }
 .settings-card .seg { flex-wrap: wrap; }
-/* This composition is scoped to Settings: all other dashboard feature rows
-   retain their own existing layout. Preview internals never receive focus. */
+/* Preview internals never receive focus. */
 /* The preview frame itself supplies its shapes; optional host markup remains
    decorative and cannot introduce extra flex gaps inside the miniature. */
 .appearance-preview .preview-rail > i,
@@ -79,7 +91,6 @@
 
 .settings-card .model-identity { display: flex; align-items: center; gap: var(--sem-space-sm); }
 .settings-card .model-identity .publisher-icon { --ds-extension-icon-size: var(--sem-size-control-xs); flex: none; }
-.settings-page .settings-section > .section-note { border: 0; }
 
 .settings-save-status { margin-left: auto; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-default); text-align: right; max-width: 48ch; }
 .settings-save-status[data-error="true"] { color: var(--sem-color-status-danger); }

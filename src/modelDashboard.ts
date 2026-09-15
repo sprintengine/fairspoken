@@ -71,7 +71,7 @@ function render(): void {
     const parakeet = family === "parakeet";
     const selected = settings.transcriptionLocation === "local" && settings.model === m.model;
     const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? "NVIDIA" : "OpenAI", parakeet ? (m.model.endsWith("-v2") ? "NVIDIA · English · 2.51 GB download" : "NVIDIA · Recommended · 25 languages") : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
-    r.element.classList.add("model-family"); r.element.id = `family-${family}`;
+    r.element.id = `family-${family}`;
     const label = document.createElement("label"); label.className = "model-variant"; label.textContent = "Variant";
     const select = document.createElement("select"); select.id = `variant-${family}`; select.setAttribute("aria-label", `${parakeet ? "Parakeet" : "Whisper"} variant`);
     for (const option of options) {

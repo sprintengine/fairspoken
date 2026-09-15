@@ -57,19 +57,67 @@
                 <button class="btn btn-ghost btn-sm" data-open="voicetest" type="button">Test voice accuracy</button>
               </div>
             </div>
-            <div class="tiles">
-              <div class="tile"><div class="t-label">Words dictated</div><div class="t-value num" id="statTotalWords">0</div><div class="t-meta">lifetime</div></div>
-              <div class="tile"><div class="t-label">Spoken time</div><div class="t-value num" id="statSpokenTime">0 m</div><div class="t-meta">lifetime</div></div>
-              <div class="tile"><div class="t-label">This week</div><div class="t-value num" id="statThisWeek">0</div><div class="t-meta" id="statWeekDelta"></div></div>
-              <div class="tile"><div class="t-label">Day streak</div><div class="t-value num" id="statStreak">0</div><div class="t-meta" id="statBestStreak"></div></div>
-              <div class="tile"><div class="t-label">Speaking pace</div><div class="t-value num" id="statWpm">0</div><div class="t-meta">wpm avg</div></div>
-              <div class="tile"><div class="t-label">Money saved</div><div class="t-value num" id="statMoneySaved">$0</div><div class="t-meta" id="statMoneySavedMeta">vs cloud transcription</div></div>
-              <div class="tile" id="statZeroEditTile" hidden title="Dictations you never had to touch afterwards: no undo, no delete, no new correction, no immediate re-dictation within 5 minutes."><div class="t-label">Zero-edit dictations</div><div class="t-value num" id="statZeroEdit">–</div><div class="t-meta" id="statZeroEditMeta">last 30 days</div></div>
-            </div>
-            <div class="panel">
-              <div class="panel-head"><h2>This week</h2><div class="grow"></div><span class="hint">words per day</span></div>
-              <div class="chart" id="statChart"></div>
-            </div>
+            <section class="settings-section" aria-labelledby="usageTitle">
+              <h2 id="usageTitle">Usage</h2>
+              <div class="settings-card">
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Words dictated</div>
+                    <div class="row-help">Lifetime</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statTotalWords">0</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Spoken time</div>
+                    <div class="row-help">Lifetime</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statSpokenTime">0 m</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">This week</div>
+                    <div class="row-help" id="statWeekDelta"></div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statThisWeek">0</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Day streak</div>
+                    <div class="row-help" id="statBestStreak"></div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statStreak">0</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Speaking pace</div>
+                    <div class="row-help">Average words per minute</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statWpm">0</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Money saved</div>
+                    <div class="row-help" id="statMoneySavedMeta">vs cloud transcription</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statMoneySaved">$0</span></div>
+                </div>
+                <div class="row" id="statZeroEditTile" hidden>
+                  <div class="row-text">
+                    <div class="row-label">Zero-edit dictations</div>
+                    <div class="row-help" id="statZeroEditMeta">last 30 days</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="statZeroEdit">–</span></div>
+                </div>
+              </div>
+            </section>
+            <section class="settings-section" aria-labelledby="weekChartTitle">
+              <h2 id="weekChartTitle">This week</h2>
+              <p class="settings-section-help">Words per day</p>
+              <div class="settings-card">
+                <div class="chart" id="statChart"></div>
+              </div>
+            </section>
           </div>
           <section id="monthlyUsage" aria-label="Monthly dictation activity"></section>
         </section>
@@ -78,52 +126,74 @@
           <div class="profile-content">
             <div class="profile-heading"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><div><h2>Your profile</h2><p>On this device</p></div></div>
             <p class="profile-summary">Your settings, dictionary and dictation history are stored on this device.</p>
-            <div class="row"><div class="row-text"><div class="row-label">Appearance</div></div><div class="row-control"><button class="btn" type="button" data-route="settings" data-settings-target="appearance">Choose appearance</button></div></div>
-            <div class="row"><div class="row-text"><div class="row-label">Dictionary</div><div class="row-help">Your words, corrections and snippets.</div></div><button type="button" class="btn" data-route="dictionary">Open dictionary</button></div>
-            <div class="row"><div class="row-text"><div class="row-label">Preferences</div><div class="row-help">Microphone, shortcuts and privacy.</div></div><button type="button" class="btn" data-route="settings">Open settings</button></div>
+            <section class="settings-section" aria-label="Account">
+              <div class="settings-card">
+                <div class="row"><div class="row-text"><div class="row-label">Appearance</div></div><div class="row-control"><button class="btn" type="button" data-route="settings" data-settings-target="appearance">Choose appearance</button></div></div>
+                <div class="row"><div class="row-text"><div class="row-label">Dictionary</div><div class="row-help">Your words, corrections and snippets.</div></div><div class="row-control"><button type="button" class="btn" data-route="dictionary">Open dictionary</button></div></div>
+                <div class="row"><div class="row-text"><div class="row-label">Preferences</div><div class="row-help">Microphone, shortcuts and privacy.</div></div><div class="row-control"><button type="button" class="btn" data-route="settings">Open settings</button></div></div>
+              </div>
+            </section>
           </div>
         </section>
 
         <!-- ════ NOTES (library, driven by notes.ts) ════ -->
         <section class="screen" id="screen-notes">
           <div class="notes">
-            <div class="note-list" id="noteList" role="listbox" aria-label="Notes"></div>
-            <div class="note-detail" id="noteDetail"></div>
+            <div class="note-list settings-card" id="noteList" role="listbox" aria-label="Notes"></div>
+            <div class="note-detail settings-card" id="noteDetail"></div>
           </div>
         </section>
 
         <!-- ════ DICTIONARY (vocab + corrections + snippets, driven by dictionary.ts) ════ -->
         <section class="screen" id="screen-dictionary">
           <div class="dict-stack">
-            <div class="panel">
-              <div class="panel-head"><h2>Vocabulary</h2><div class="grow"></div><span class="hint">Names and terms to bias transcription</span></div>
-              <form class="dict-add" id="vocabAdd">
-                <input id="vocabInput" class="setting-input" type="text" placeholder="Add a word or name" aria-label="Add vocabulary word" autocomplete="off" />
-                <button class="btn" type="submit">Add</button>
-              </form>
-              <div class="chips" id="vocabChips"></div>
-            </div>
+            <section class="settings-section" aria-labelledby="vocabTitle">
+              <h2 id="vocabTitle">Vocabulary</h2>
+              <p class="settings-section-help">Names and terms to bias transcription</p>
+              <div class="settings-card">
+                <form class="row" id="vocabAdd">
+                  <div class="row-text">
+                    <label class="row-label" for="vocabInput">Add a word</label>
+                  </div>
+                  <div class="row-control">
+                    <input id="vocabInput" class="setting-input w-md" type="text" placeholder="Add a word or name" aria-label="Add vocabulary word" autocomplete="off" />
+                    <button class="btn" type="submit">Add</button>
+                  </div>
+                </form>
+                <div class="chips" id="vocabChips"></div>
+              </div>
+            </section>
 
-            <div class="panel">
-              <div class="panel-head"><h2>Corrections</h2><div class="grow"></div><button class="btn" id="addCorrection" type="button">Add</button></div>
-              <p class="dict-note">Replace a commonly mis-heard phrase with the right text.</p>
-              <div id="correctionRows"></div>
-            </div>
+            <section class="settings-section" aria-labelledby="correctionsTitle">
+              <div class="settings-section-header">
+                <h2 id="correctionsTitle">Corrections</h2>
+                <button class="btn" id="addCorrection" type="button">Add</button>
+              </div>
+              <p class="settings-section-help">Replace a commonly mis-heard phrase with the right text.</p>
+              <div class="settings-card" id="correctionRows"></div>
+            </section>
 
-            <div class="panel">
-              <div class="panel-head"><h2>Snippets</h2><div class="grow"></div><button class="btn" id="addSnippet" type="button">Add</button></div>
-              <p class="dict-note">Say a short trigger to expand it into longer text.</p>
-              <div id="snippetRows"></div>
-            </div>
+            <section class="settings-section" aria-labelledby="snippetsTitle">
+              <div class="settings-section-header">
+                <h2 id="snippetsTitle">Snippets</h2>
+                <button class="btn" id="addSnippet" type="button">Add</button>
+              </div>
+              <p class="settings-section-help">Say a short trigger to expand it into longer text.</p>
+              <div class="settings-card" id="snippetRows"></div>
+            </section>
           </div>
         </section>
 
         <!-- ════ ACTIVITY (warnings + errors, driven by activity.ts) ════ -->
         <section class="screen" id="screen-activity">
-          <div class="activity">
-            <div class="activity-head">
-              <p id="activitySummary">All clear</p>
-              <button class="btn btn-ghost" id="clearActivityButton" type="button">Clear</button>
+          <div class="settings-card">
+            <div class="row">
+              <div class="row-text">
+                <div class="row-label" id="activitySummary">All clear</div>
+              </div>
+              <div class="row-control">
+                <button class="btn btn-ghost" id="clearActivityButton" type="button">Clear</button>
+              </div>
             </div>
             <div class="activity-list" id="activityList" aria-live="polite" aria-label="Activity"></div>
           </div>
@@ -135,29 +205,42 @@
             <button class="ds-button ds-button--outline" id="refreshModels" type="button">Refresh status</button>
           </div>
           <p id="modelFeedback" class="model-feedback" role="status" aria-live="polite"></p>
-          <section class="ds-section" aria-labelledby="dictationModelsTitle">
-            <div class="ds-section-header"><h2 class="ds-section-title" id="dictationModelsTitle">Dictation</h2></div>
-            <div class="ds-section-body"><p class="models-description" id="dictationProvider"></p><div id="dictationModels"></div></div>
+          <section class="settings-section" aria-labelledby="dictationModelsTitle">
+            <h2 id="dictationModelsTitle">Dictation</h2>
+            <p class="settings-section-help" id="dictationProvider"></p>
+            <div class="settings-card" id="dictationModels"></div>
           </section>
-          <section class="ds-section" aria-labelledby="modelSearchTitle">
-            <div class="ds-section-header"><h2 class="ds-section-title" id="modelSearchTitle">Explore Hugging Face</h2></div>
-            <div class="ds-section-body">
-              <label class="model-search-label" for="modelSearch">Find models</label>
-              <div class="model-search-controls">
-                <input id="modelSearch" class="model-search-input" type="search" placeholder="Search speech models or publishers…" autocomplete="off" maxlength="120" aria-describedby="modelSearchStatus" />
-                <button id="searchModelsButton" class="ds-button ds-button--outline" type="button">Search</button>
+          <section class="settings-section" aria-labelledby="modelSearchTitle">
+            <h2 id="modelSearchTitle">Explore Hugging Face</h2>
+            <div class="settings-card">
+              <div class="row row--stacked">
+                <div class="row-text">
+                  <label class="row-label" for="modelSearch">Find models</label>
+                  <div class="row-help" id="modelSearchStatus" role="status" aria-live="polite">Search model names or publishers on Hugging Face.</div>
+                </div>
+                <div class="row-control">
+                  <input id="modelSearch" class="setting-input" type="search" placeholder="Search speech models or publishers…" autocomplete="off" maxlength="120" aria-describedby="modelSearchStatus" />
+                  <button id="searchModelsButton" class="ds-button ds-button--outline" type="button">Search</button>
+                </div>
               </div>
-              <p id="modelSearchStatus" class="models-description" role="status" aria-live="polite">Search model names or publishers on Hugging Face.</p>
               <div id="modelSearchResults" aria-busy="false"></div>
             </div>
           </section>
-          <section class="ds-section" aria-labelledby="polishModelsTitle">
-            <div class="ds-section-header"><h2 class="ds-section-title" id="polishModelsTitle">Text polish</h2><div id="polishProviderActions" class="models-actions"></div></div>
-            <div class="ds-section-body"><p class="models-description" id="polishProvider"></p><div id="polishModels"></div>
-              <p class="models-description">With local dictation, polish cleans up live previews, then makes a final pass before copying. Remote dictation receives the final pass when its transcript arrives. Cleanup models load as you dictate and unload after five minutes idle. Memory figures are estimates. Very long dictations keep the complete original text when they exceed the cleanup limit.</p>
+          <section class="settings-section" aria-labelledby="polishModelsTitle">
+            <h2 id="polishModelsTitle">Text polish</h2>
+            <p class="settings-section-help" id="polishProvider"></p>
+            <div class="settings-card" id="polishModelsCard">
+              <div class="row">
+                <div class="row-text">
+                  <div class="row-label">Cleanup</div>
+                  <div class="row-help">Turn polish off, or send cleanup to the cloud.</div>
+                </div>
+                <div class="row-control" id="polishProviderActions"></div>
+              </div>
+              <div id="polishModels"></div>
             </div>
+            <p class="section-note">With local dictation, polish cleans up live previews, then makes a final pass before copying. Remote dictation receives the final pass when its transcript arrives. Cleanup models load as you dictate and unload after five minutes idle. Memory figures are estimates. Very long dictations keep the complete original text when they exceed the cleanup limit.</p>
           </section>
-
         </section>
 
         <!-- ════ SETTINGS (driven by settings.ts) ════ -->
