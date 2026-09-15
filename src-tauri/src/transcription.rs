@@ -23,6 +23,9 @@ const MIN_GAP_CHUNK_SECONDS: usize = 2;
 /// further cuts and let the buffer coalesce into fewer, larger chunks instead
 /// of queueing unbounded PCM copies behind a slow engine.
 const MAX_PENDING_CHUNK_JOBS: usize = 2;
+/// Live polish rewrites at most this many non-empty ASR chunks; older text is
+/// frozen so model cost stays O(window) rather than O(dictation).
+const POLISH_WINDOW_CHUNKS: usize = 3;
 const SPEECH_PEAK_THRESHOLD: f32 = 0.010;
 const SPEECH_RMS_THRESHOLD: f32 = 0.0015;
 const SPEECH_WINDOW_MS: usize = 30;
@@ -76,9 +79,9 @@ pub type TranscriptionPreviewSender = mpsc::Sender<TranscriptPreview>;
 pub struct TranscriptPreview {
     pub index: usize,
     pub text: String,
-    /// Bytes of `text` that sit behind a silence-gap boundary. Chunk merging
-    /// only ever appends, so this prefix can no longer be revised by later
-    /// chunks and the polish stream may seal it permanently.
+    /// Bytes of `text` that polish may freeze. The max of the last silence-gap
+    /// prefix and everything except the last three non-empty chunks. Chunk
+    /// merging only ever appends, so this prefix can no longer be revised.
     pub sealed_len: usize,
     pub final_preview: bool,
 }
@@ -695,7 +698,13 @@ fn run_chunked_session(
     if transcript.is_empty() {
         return Err("No speech was transcribed".to_string());
     }
-    emit_preview(&preview_tx, chunk_index, transcript.clone(), 0, true);
+    emit_preview(
+        &preview_tx,
+        chunk_index,
+        transcript.clone(),
+        polish_frozen_len(&chunks),
+        true,
+    );
     Ok(transcript)
 }
 
@@ -733,7 +742,13 @@ fn emit_chunk_preview(
     let text = merge_chunk_results(&sorted);
     if !text.is_empty() {
         let index = sorted.last().map(|chunk| chunk.index).unwrap_or_default();
-        emit_preview(preview_tx, index, text, sealed_prefix_len(&sorted), final_preview);
+        emit_preview(
+            preview_tx,
+            index,
+            text,
+            polish_frozen_len(&sorted),
+            final_preview,
+        );
     }
 }
 
@@ -754,6 +769,46 @@ fn sealed_prefix_len(sorted: &[ChunkResult]) -> usize {
     } else {
         0
     }
+}
+
+/// How much of the merged text polish must not resend.
+///
+/// Gap freeze is the existing silence-boundary prefix. Window freeze keeps only
+/// the last `POLISH_WINDOW_CHUNKS` non-empty chunks volatile, so continuous
+/// speech without pauses stays bounded. Empty ASR results do not count toward
+/// the window. The freeze is the further of the two, and is always a prefix of
+/// the full merge when the append-only property holds.
+fn polish_frozen_len(sorted: &[ChunkResult]) -> usize {
+    let gap = sealed_prefix_len(sorted);
+    let nonempty = sorted
+        .iter()
+        .filter(|chunk| !chunk.text.trim().is_empty())
+        .count();
+    let window = if nonempty <= POLISH_WINDOW_CHUNKS {
+        0
+    } else {
+        let keep_from = nonempty - POLISH_WINDOW_CHUNKS;
+        let mut seen = 0;
+        let mut cut = 0;
+        for (index, chunk) in sorted.iter().enumerate() {
+            if chunk.text.trim().is_empty() {
+                continue;
+            }
+            if seen == keep_from {
+                cut = index;
+                break;
+            }
+            seen += 1;
+        }
+        let frozen = merge_chunk_results(&sorted[..cut]);
+        let text = merge_chunk_results(sorted);
+        if text.starts_with(&frozen) {
+            frozen.len()
+        } else {
+            0
+        }
+    };
+    gap.max(window)
 }
 
 fn emit_preview(
@@ -1311,11 +1366,10 @@ fn path_to_string(path: &Path) -> Result<String, String> {
 mod tests {
     use super::{
         contains_probable_speech, dispatch_final_chunk, dispatch_ready_chunks,
-        is_non_speech_annotation, merge_chunk_results, merge_transcript_text,
+        is_non_speech_annotation, merge_chunk_results, merge_transcript_text, polish_frozen_len,
         resample_i16_to_16khz_f32, sealed_prefix_len, ChunkCutState, ChunkResult, ChunkTranscriber,
-        SessionHandle,
-        WhisperChunkJob, CHUNK_OVERLAP_SECONDS, GAP_SILENCE_MS, MAX_PENDING_CHUNK_JOBS,
-        MIN_GAP_CHUNK_SECONDS, NO_STREAMED_AUDIO,
+        SessionHandle, WhisperChunkJob, CHUNK_OVERLAP_SECONDS, GAP_SILENCE_MS,
+        MAX_PENDING_CHUNK_JOBS, MIN_GAP_CHUNK_SECONDS, NO_STREAMED_AUDIO,
     };
     use crate::audio::AudioFrame;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1547,6 +1601,48 @@ mod tests {
         // Every chunk still overlapping means nothing has been sealed.
         let overlapping = [chunk(0, "hello", true), chunk(1, "hello there", true)];
         assert_eq!(sealed_prefix_len(&overlapping), 0);
+    }
+
+    #[test]
+    fn polish_freezes_everything_but_the_last_three_nonempty_chunks() {
+        let chunk = |index: usize, text: &str, overlaps_previous: bool| ChunkResult {
+            index,
+            text: text.to_string(),
+            overlaps_previous,
+        };
+        let three = [
+            chunk(0, "one", true),
+            chunk(1, "one two", true),
+            chunk(2, "two three", true),
+        ];
+        assert_eq!(
+            polish_frozen_len(&three),
+            0,
+            "a window of three stays volatile"
+        );
+
+        let four = [
+            chunk(0, "one", true),
+            chunk(1, "one two", true),
+            chunk(2, "two three", true),
+            chunk(3, "three four", true),
+        ];
+        let text = merge_chunk_results(&four);
+        let frozen = polish_frozen_len(&four);
+        assert_eq!(&text[..frozen], merge_chunk_results(&four[..1]));
+        assert!(text.starts_with(&text[..frozen]));
+
+        // Empty results do not spend a window slot, and a later gap freeze can
+        // lock more than the three-chunk window.
+        let mixed = [
+            chunk(0, "book it for thursday", false),
+            chunk(1, "", true),
+            chunk(2, "no friday", false),
+            chunk(3, "and tell sam", true),
+        ];
+        let text = merge_chunk_results(&mixed);
+        let frozen = polish_frozen_len(&mixed);
+        assert_eq!(&text[..frozen], "book it for thursday");
     }
 
     #[test]

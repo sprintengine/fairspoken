@@ -1,5 +1,6 @@
 @import "./design-system/tokens.css";
 @import "./design-system/popover.css";
+@import "./design-system/button.css";
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; }
 @property --preview-glow-angle {
@@ -97,6 +98,33 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
   opacity: 1;
   transform: none;
   animation: preview-brush-pulse calc(var(--sem-motion-duration-pulse) * 2) var(--sem-motion-ease-standard) infinite;
+}
+.cursor-preview-copy {
+  position: absolute;
+  top: var(--sem-space-sm);
+  inset-inline-end: var(--sem-space-sm);
+  z-index: 1;
+  color: var(--sem-color-text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.82);
+  transition:
+    opacity calc(var(--sem-motion-duration-deliberate) * 2) var(--sem-motion-ease-standard),
+    transform calc(var(--sem-motion-duration-deliberate) * 2) var(--sem-motion-ease-standard),
+    color var(--sem-motion-duration-fast) var(--sem-motion-ease-standard);
+}
+.cursor-preview:hover .cursor-preview-copy {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.cursor-preview:hover.is-polishing .cursor-preview-polish-mark {
+  opacity: 0;
+}
+.cursor-preview-text.is-editing {
+  user-select: text;
+  caret-color: var(--sem-color-text-primary);
+  outline: none;
 }
 @keyframes preview-brush-pulse {
   0%, 100% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--sem-color-activity-glow-end) 70%, transparent)); }

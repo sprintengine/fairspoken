@@ -12,6 +12,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
       let id = 0;
       const callbacks = new Map(), listeners = new Map();
       window.previewInteractions = [];
+      window.previewClaims = [];
+      window.previewCopies = [];
       window.previewSizes = [];
       window.previewEmit = payload => (listeners.get('cursor-preview-state') || []).forEach(handler => callbacks.get(handler)?.({ payload }));
       window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
@@ -20,8 +22,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
         transformCallback(callback) { callbacks.set(++id, callback); return id; }, unregisterCallback() {},
         async invoke(command, args = {}) {
           if (command === 'plugin:event|listen') { listeners.set(args.event, [...(listeners.get(args.event) || []), args.handler]); return ++id; }
-          if (command === 'get_cursor_preview_state') return { sessionId: 0, revision: 0, phase: 'idle', text: '', polished: false, remote: false };
+          if (command === 'get_cursor_preview_state') return { sessionId: 0, revision: 0, phase: 'idle', text: '', polished: false, remote: false, polishing: false };
           if (command === 'set_cursor_preview_interacting') window.previewInteractions.push(args);
+          if (command === 'set_cursor_preview_claimed') window.previewClaims.push(args);
+          if (command === 'copy_cursor_preview_text') window.previewCopies.push(args);
           if (command === 'set_cursor_preview_size') window.previewSizes.push(args);
         },
       };
@@ -31,7 +35,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     const canonical = () => page.locator('#previewText').evaluate(element => {
       const copy = element.cloneNode(true); copy.querySelectorAll('del').forEach(node => node.remove()); return copy.textContent;
     });
-    const base = { sessionId: 1, revision: 1, phase: 'recording', text: 'um hello sam please send teh draft', polished: false, remote: false };
+    const base = { sessionId: 1, revision: 1, phase: 'recording', text: 'um hello sam please send teh draft', polished: false, remote: false, polishing: false };
     await emit({ ...base, text: 'Hello' });
     await page.locator('#cursorPreview').waitFor();
     assert.equal(await page.evaluate(() => window.previewSizes.at(-1).height), 79, 'one line starts with a compact native window');
@@ -71,9 +75,24 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     assert(position < bottom, 'real wheel interaction scrolls the preview');
     await emit({ ...base, sessionId: 2, revision: 2, text: long + '\nOne more sentence.' });
     assert(Math.abs(await scroller.evaluate(e => e.scrollTop) - position) < 2, 'new text does not pull the reader to the bottom');
-    assert(await page.evaluate(() => window.previewInteractions.some(e => e.active)), 'hover pauses native dismissal');
+    assert(!(await page.evaluate(() => window.previewInteractions.some(e => e.active))), 'hover during recording does not pin dismissal');
+    await emit({ ...base, sessionId: 2, revision: 2, phase: 'complete', text: long, polished: true });
+    await page.waitForTimeout(80);
+    assert(!(await page.evaluate(() => window.previewInteractions.some(e => e.active))), 'pointer already over the box at complete is not a hold');
     await page.mouse.move(0, 0);
+    await page.locator('#cursorPreview').hover();
+    assert(await page.evaluate(() => window.previewInteractions.some(e => e.active)), 'a fresh hover after complete pauses dismissal');
+    const copy = page.locator('#previewCopy');
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('previewCopy')).opacity === '1');
+    await page.mouse.move(0, 0);
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('previewCopy')).opacity === '0');
     assert(await page.evaluate(() => window.previewInteractions.some(e => !e.active)), 'leaving releases dismissal hold');
+    await page.locator('#previewText').click();
+    assert(await page.evaluate(() => window.previewClaims.some(e => e.claimed)), 'click claims the preview for editing');
+    await page.locator('#previewText').pressSequentially(' extra');
+    await page.locator('#cursorPreview').hover();
+    await copy.click();
+    assert(await page.evaluate(() => window.previewCopies.some(e => String(e.text).includes('extra'))), 'copy sends the edited text');
     await emit({ ...base, sessionId: 3, text: 'um delete this' });
     assert.equal(await page.evaluate(() => window.previewSizes.at(-1).height), 79, 'a new short recording shrinks the preview');
     await emit({ ...base, sessionId: 3, text: 'Delete this.', polished: true });
@@ -91,6 +110,6 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     await emit({ ...base, sessionId: 5, text: 'Hello Sam, please send the draft.', polished: true });
     assert.equal(await page.locator('mark').first().evaluate(e => getComputedStyle(e).animationName), 'none');
     assert.deepEqual(errors, []);
-    console.log('Cursor preview: edit lifecycle, append/revision/session guards, literal text, wheel scrolling, reading position, hover hold and reduced motion passed.');
+    console.log('Cursor preview: edit lifecycle, append/revision/session guards, literal text, wheel scrolling, reading position, hover hold, claim/copy and reduced motion passed.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

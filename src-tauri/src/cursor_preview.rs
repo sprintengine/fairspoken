@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager};
 pub const WINDOW_LABEL: &str = "cursor-preview";
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static HOVER_SESSION: AtomicU64 = AtomicU64::new(0);
+static CLAIM_SESSION: AtomicU64 = AtomicU64::new(0);
 static CURRENT_SESSION: AtomicU64 = AtomicU64::new(0);
 // 21-point lines plus 24-point padding, borders and 32-point shadow margins.
 const MIN_HEIGHT: f64 = 79.0;
@@ -103,6 +104,42 @@ pub fn set_interacting(session: u64, active: bool) {
 pub fn is_interacting(session: u64) -> bool {
     session != 0 && HOVER_SESSION.load(Ordering::SeqCst) == session
 }
+
+pub fn set_claimed(app: &AppHandle, session: u64, claimed: bool) {
+    if claimed {
+        CLAIM_SESSION.store(session, Ordering::SeqCst);
+    } else {
+        let _ = CLAIM_SESSION.compare_exchange(session, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if CURRENT_SESSION.load(Ordering::SeqCst) != session {
+            return;
+        }
+        if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+            let _ = window.set_focusable(claimed);
+        }
+        #[cfg(target_os = "macos")]
+        PANEL.with(|slot| {
+            if let Some(panel) = slot.borrow().as_ref() {
+                if claimed {
+                    panel.makeKeyAndOrderFront(None);
+                } else {
+                    panel.orderFront(None);
+                }
+            }
+        });
+    });
+}
+
+pub fn is_claimed(session: u64) -> bool {
+    session != 0 && CLAIM_SESSION.load(Ordering::SeqCst) == session
+}
+
+fn claimed_now() -> bool {
+    let session = CURRENT_SESSION.load(Ordering::SeqCst);
+    session != 0 && CLAIM_SESSION.load(Ordering::SeqCst) == session
+}
 #[cfg(target_os = "macos")]
 static AX_LOOKUP_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -139,6 +176,7 @@ fn position(anchor: Rect, area: Rect, width: f64, height: f64) -> (f64, f64) {
 pub fn show(app: &AppHandle, session: u64) {
     CURRENT_SESSION.store(session, Ordering::SeqCst);
     HOVER_SESSION.store(0, Ordering::SeqCst);
+    CLAIM_SESSION.store(0, Ordering::SeqCst);
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     std::thread::spawn(move || {
@@ -191,6 +229,7 @@ pub fn show(app: &AppHandle, session: u64) {
 pub fn hide(app: &AppHandle) {
     CURRENT_SESSION.store(0, Ordering::SeqCst);
     HOVER_SESSION.store(0, Ordering::SeqCst);
+    CLAIM_SESSION.store(0, Ordering::SeqCst);
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let ui_app = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -205,6 +244,7 @@ pub fn hide(app: &AppHandle) {
             }
         });
         if let Some(window) = ui_app.get_webview_window(WINDOW_LABEL) {
+            let _ = window.set_focusable(false);
             let _ = window.hide();
         }
     });
@@ -222,7 +262,7 @@ define_class!(
     struct PreviewPanel;
     impl PreviewPanel {
         #[unsafe(method(canBecomeKeyWindow))]
-        fn can_become_key(&self) -> bool { false }
+        fn can_become_key(&self) -> bool { claimed_now() }
         #[unsafe(method(canBecomeMainWindow))]
         fn can_become_main(&self) -> bool { false }
     }
@@ -529,6 +569,14 @@ mod tests {
             ..layout
         };
         assert_eq!(below.frame(MIN_HEIGHT).y, below.frame(MAX_HEIGHT).y);
+    }
+    #[test]
+    fn claim_is_session_scoped() {
+        CLAIM_SESSION.store(9, Ordering::SeqCst);
+        assert!(is_claimed(9));
+        assert!(!is_claimed(8));
+        CLAIM_SESSION.store(0, Ordering::SeqCst);
+        assert!(!is_claimed(9));
     }
     #[test]
     fn caret_box_flips_and_clamps_on_negative_origin_monitor() {
