@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import "@fontsource/inter/latin-600.css"; // brand wordmark, matching Multicode's title strip
+import "@fontsource/inter/latin-600.css"; // brand wordmark, matching the title strip
 import "./dashboardShell";
 import "./homeStats";
 import "./notes";

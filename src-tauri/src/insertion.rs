@@ -1,5 +1,5 @@
-//! Insertion tier selection (the VoiceInk
-//! pattern): AX direct insertion → synthetic ⌘V → AppleScript keystroke.
+//! Insertion tier selection: AX direct insertion → synthetic ⌘V → AppleScript
+//! keystroke.
 //!
 //! The dangerous failure mode is DOUBLE insertion (tier 1 "fails", we fall
 //! through to ⌘V, but tier 1 had actually landed). Post-insert verification

@@ -11,9 +11,8 @@ const TYPING_WPM: f64 = 40.0;
 const WEEK_DAYS: u64 = 7;
 // What the recorded audio would have cost on a metered cloud transcription
 // API. $0.006/min is OpenAI's rate for both whisper-1 and gpt-4o-transcribe
-// (verified June 2026). a commercial dictation app is deliberately not the anchor here: it is
-// a flat $15/mo subscription with no per-minute price, so a per-minute
-// comparison against it would be invented math.
+// (verified June 2026). A flat monthly subscription has no per-minute price,
+// so it is not used as the comparison.
 const CLOUD_TRANSCRIPTION_USD_PER_MINUTE: f64 = 0.006;
 
 // ── Zero-edit metric ──────────────────────────────────────────────

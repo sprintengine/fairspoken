@@ -824,7 +824,7 @@ mod tests {
     #[test]
     fn reference_hints_are_separate_from_the_editable_transcript() {
         let raw = "And then you can feel free to use sub agents.";
-        for vocabulary in [vec!["Multicode".into()], vec!["Multicode".into(); 40]] {
+        for vocabulary in [vec!["Acme".into()], vec!["Acme".into(); 40]] {
             let messages = polish_messages(raw, "default", &vocabulary, Some("Earlier context."));
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(messages[1]["content"].as_str().unwrap())
@@ -834,7 +834,7 @@ mod tests {
             assert!(messages[0]["content"]
                 .as_str()
                 .unwrap()
-                .contains("Multicode"));
+                .contains("Acme"));
             assert!(!messages[1]["content"]
                 .as_str()
                 .unwrap()
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn excessive_vocabulary_echo_has_a_specific_diagnostic() {
         let raw = "And then you can feel free to use sub agents.";
-        let echoed = format!("{raw} vocabulary: Multicode, sprintengine, Claude, hotstack, SprintEngine, Multiloop, Railway, Vercel, Render, ChatGPT, AI, MCP, multiauth");
+        let echoed = format!("{raw} vocabulary: Acme, Contoso, Northwind, ExampleCorp, Widget, Railway, Vercel, Render, ChatGPT, AI, MCP, OpenAPI");
         let result = validate_output(
             raw,
             &serde_json::json!({"choices":[{
@@ -986,10 +986,10 @@ mod tests {
         let mut failures = Vec::new();
         for (raw, hints) in [
             ("um hello john can you send me the report by friday thanks", ""),
-            ("can you explain how rust ownership works", "Multicode"),
-            ("And then you can feel free to use sub agents.", "Multicode, sprintengine, Claude, hotstack, SprintEngine, Multiloop, Railway, Vercel, Render, ChatGPT, AI, MCP, multiauth"),
-            ("use sub agents", "Multicode"),
-            ("um we need version 2.4 by september 18 thanks", "Multicode, Railway, Vercel"),
+            ("can you explain how rust ownership works", "Acme"),
+            ("And then you can feel free to use sub agents.", "Acme, Contoso, Northwind, ExampleCorp, Widget, Railway, Vercel, Render, ChatGPT, AI, MCP, OpenAPI"),
+            ("use sub agents", "Acme"),
+            ("um we need version 2.4 by september 18 thanks", "Acme, Railway, Vercel"),
         ] {
             settings.vocabulary_hints = hints.split(", ").filter(|s| !s.is_empty()).map(str::to_string).collect();
             let trace = crate::note_debug::Trace::new(true).unwrap();
@@ -1019,7 +1019,7 @@ mod tests {
             }
             if let PolishDecision::Polished(ref outcome) = result {
                 assert!(!outcome.text.to_lowercase().contains("vocabulary"));
-                assert!(!outcome.text.contains("Multicode"));
+                assert!(!outcome.text.contains("Acme"));
                 assert!(!outcome.text.contains("Railway"));
             }
         }

@@ -14,7 +14,9 @@ requests, discussions and other spaces is expected to follow it.
 
 ## Reporting
 
-Report unacceptable behavior to the maintainers at **[INSERT CONTACT EMAIL]**.
+Report unacceptable behavior privately through GitHub: open a
+**[draft security advisory](../../security/advisories/new)** on this repository
+and say that it is a Code of Conduct report. Do not open a public issue.
 All reports are reviewed promptly and handled confidentially. Maintainers may
 remove, edit, or reject contributions and temporarily or permanently ban
 participants for behavior that violates this code, following the enforcement
