@@ -107,6 +107,11 @@ pub struct Settings {
     /// focused app (the clipboard copy still happens first).
     #[serde(default = "default_insert_at_cursor")]
     pub insert_at_cursor: bool,
+    /// macOS only: insert by writing the focused field's selected text via
+    /// Accessibility instead of pasting. Off by default — Electron apps,
+    /// terminals and web fields report success but ignore the write.
+    #[serde(default)]
+    pub accessibility_insert: bool,
     /// macOS only: hold the Fn/Globe key to record, release to transcribe.
     #[serde(default)]
     pub fn_push_to_talk: bool,
@@ -190,6 +195,7 @@ impl Default for Settings {
             recording_shortcut_mode: RecordingShortcutMode::Toggle,
             transcript_stack_shortcut: default_transcript_stack_shortcut(),
             insert_at_cursor: default_insert_at_cursor(),
+            accessibility_insert: false,
             fn_push_to_talk: false,
             polish_enabled: false,
             polish_provider: PolishProvider::Cloud,

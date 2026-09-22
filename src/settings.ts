@@ -49,6 +49,7 @@ interface Settings {
   recordingShortcutMode: RecordingShortcutMode;
   transcriptStackShortcut: string;
   insertAtCursor: boolean;
+  accessibilityInsert: boolean;
   fnPushToTalk: boolean;
   polishEnabled: boolean;
   polishProvider: "local" | "cloud";
@@ -105,6 +106,7 @@ const DEFAULTS: Settings = {
   recordingShortcutMode: "toggle",
   transcriptStackShortcut: "CommandOrControl+Shift+Digit2",
   insertAtCursor: isMacOS(),
+  accessibilityInsert: false,
   fnPushToTalk: false,
   polishEnabled: false,
   polishProvider: "cloud",
@@ -133,6 +135,7 @@ const shortcutStatus = required<HTMLElement>("shortcutStatus");
 const shortcutStatusDefault = shortcutStatus.textContent ?? "";
 const insertAtCursor = required<HTMLInputElement>("insertAtCursor");
 const insertAtCursorRow = required<HTMLElement>("insertAtCursorRow");
+const accessibilityInsert = required<HTMLInputElement>("accessibilityInsert");
 const fnPushToTalk = required<HTMLInputElement>("fnPushToTalk");
 const fnPushToTalkRow = required<HTMLElement>("fnPushToTalkRow");
 const useGpu = required<HTMLInputElement>("useGpu");
@@ -319,6 +322,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     recordingShortcutMode: settings.recordingShortcutMode === "push-to-talk" ? "push-to-talk" : "toggle",
     transcriptStackShortcut: normalizeShortcut(settings.transcriptStackShortcut ?? DEFAULTS.transcriptStackShortcut, DEFAULTS.transcriptStackShortcut),
     insertAtCursor: settings.insertAtCursor ?? DEFAULTS.insertAtCursor,
+    accessibilityInsert: settings.accessibilityInsert ?? DEFAULTS.accessibilityInsert,
     fnPushToTalk: settings.fnPushToTalk ?? DEFAULTS.fnPushToTalk,
     useGpu: settings.useGpu ?? DEFAULTS.useGpu,
   };
@@ -361,6 +365,7 @@ function applyToForm(settings: Settings): void {
   renderShortcutChip(recordingShortcutChip, settings.recordingShortcut);
   renderShortcutChip(transcriptStackShortcutChip, settings.transcriptStackShortcut);
   insertAtCursor.checked = settings.insertAtCursor;
+  accessibilityInsert.checked = settings.accessibilityInsert;
   fnPushToTalk.checked = settings.fnPushToTalk;
   useGpu.checked = settings.useGpu;
   polishEnabled.checked = settings.polishEnabled;
@@ -428,6 +433,7 @@ function readFromForm(): Settings {
     transcriptStackShortcut: transcriptStackShortcutChip.dataset.shortcut ?? DEFAULTS.transcriptStackShortcut,
     useGpu: useGpu.checked,
     insertAtCursor: insertAtCursor.checked,
+    accessibilityInsert: accessibilityInsert.checked,
     fnPushToTalk: fnPushToTalk.checked,
     polishEnabled: polishEnabled.checked,
     polishProvider: polishProviderSelect.value === "local" ? "local" : "cloud",
@@ -1018,6 +1024,7 @@ transcriptStackShortcutChip.addEventListener("click", () => {
 });
 useGpu.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 insertAtCursor.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+accessibilityInsert.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 fnPushToTalk.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 // Both delivery integrations are macOS-only (CGEvent paste and the Fn event

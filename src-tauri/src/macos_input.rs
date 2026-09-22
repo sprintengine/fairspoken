@@ -47,6 +47,39 @@ pub fn accessibility_trusted(prompt: bool) -> bool {
     }
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> u64;
+}
+
+/// Modifiers that, still physically held, would merge into a synthesized
+/// keystroke (⌘V + a held ⇧ is ⌘⇧V, which most apps do not treat as paste).
+const HELD_MODIFIERS: CGEventFlags = CGEventFlags::CGEventFlagCommand
+    .union(CGEventFlags::CGEventFlagShift)
+    .union(CGEventFlags::CGEventFlagAlternate)
+    .union(CGEventFlags::CGEventFlagControl)
+    .union(CGEventFlags::CGEventFlagSecondaryFn);
+
+/// Waits for the user to let go of every modifier before a synthesized
+/// keystroke. Push-to-talk stops when the chord's key lifts (the "1" of
+/// ⌘⇧1) while its modifiers may still be down, and a streamed transcript is
+/// ready within milliseconds of that — well before the fingers leave ⌘⇧.
+pub fn wait_for_modifier_release(timeout: Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let flags = CGEventFlags::from_bits_truncate(unsafe {
+            CGEventSourceFlagsState(CGEventSourceStateID::HIDSystemState)
+        });
+        if !flags.intersects(HELD_MODIFIERS) {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("modifier keys were still held, so the paste keystroke was not sent".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Pastes the current clipboard into the focused app by synthesizing ⌘V.
 /// The transcript is already on the clipboard, so this delivers it at the
 /// cursor without disturbing the copied-messages flow.

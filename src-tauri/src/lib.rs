@@ -1597,7 +1597,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(target_os = "macos")]
     {
         if will_insert_at_cursor && !cursor_preview::is_claimed(cursor_session) {
-            deliver_transcript_at_cursor(app, &clipboard_text);
+            deliver_transcript_at_cursor(app, &clipboard_text, settings.accessibility_insert);
         } else {
             emit_backend_event(
                 app,
@@ -1691,7 +1691,8 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 /// Delivers the freshly copied transcript into whichever app the user is
 /// dictating into, via the three-tier pattern (AX insert → ⌘V →
 /// AppleScript; see `insertion.rs` for why tiers are chosen by
-/// pre-condition and never verified-and-retried). Skipped when one of our
+/// pre-condition and never verified-and-retried). AX insert is only
+/// considered when the user opted into `accessibility_insert`. Skipped when one of our
 /// own windows is focused (the paste would land in Multivoice itself);
 /// every other failure is surfaced as a backend event because the user is
 /// otherwise left wondering why no text appeared.
@@ -1699,7 +1700,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 /// The transcript always stays on the clipboard afterwards — paste or no
 /// paste — so the user can paste the same dictation into multiple targets.
 #[cfg(target_os = "macos")]
-fn deliver_transcript_at_cursor(app: &AppHandle, text: &str) {
+fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_insert: bool) {
     use insertion::InsertionTier;
 
     let our_window_focused = app
@@ -1716,7 +1717,12 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str) {
     }
 
     let bundle_id = macos_input::frontmost_app().map(|frontmost| frontmost.bundle_id);
-    let element = with_ax_timeout(macos_ax::focused_element_info).flatten();
+    // Without a focused element the tier choice never picks AX insertion.
+    let element = if accessibility_insert {
+        with_ax_timeout(macos_ax::focused_element_info).flatten()
+    } else {
+        None
+    };
     let tier = insertion::choose_insertion_tier(bundle_id.as_deref(), element.as_ref());
 
     if tier == InsertionTier::AxInsert {
@@ -1754,6 +1760,17 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str) {
                 return;
             }
         }
+    }
+
+    // Both remaining tiers synthesize ⌘V, which a still-held shortcut
+    // modifier would turn into a different keystroke.
+    if let Err(err) = macos_input::wait_for_modifier_release(Duration::from_millis(1500)) {
+        emit_backend_event(
+            app,
+            "warning",
+            format!("Insert at cursor skipped: {err}; transcript is on the clipboard"),
+        );
+        return;
     }
 
     if tier == InsertionTier::AppleScript {
