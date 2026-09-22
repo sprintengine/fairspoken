@@ -37,7 +37,6 @@ interface Settings {
   interactionSounds: boolean;
   maxRecordingSeconds: number;
   noteRetentionMinutes: number;
-  whisperChunkSeconds: number;
   useGpu: boolean;
   audioDevice?: string;
   noiseSuppression?: boolean;
@@ -94,7 +93,6 @@ const DEFAULTS: Settings = {
   interactionSounds: true,
   maxRecordingSeconds: 120,
   noteRetentionMinutes: 0,
-  whisperChunkSeconds: 20,
   useGpu: true,
   audioDevice: "",
   noiseSuppression: true,
@@ -137,7 +135,6 @@ const insertAtCursor = required<HTMLInputElement>("insertAtCursor");
 const insertAtCursorRow = required<HTMLElement>("insertAtCursorRow");
 const fnPushToTalk = required<HTMLInputElement>("fnPushToTalk");
 const fnPushToTalkRow = required<HTMLElement>("fnPushToTalkRow");
-const whisperChunkSeconds = required<HTMLInputElement>("whisperChunkSeconds");
 const useGpu = required<HTMLInputElement>("useGpu");
 const useGpuRow = required<HTMLElement>("useGpuRow");
 const inputMeter = required<HTMLElement>("inputMeter");
@@ -304,14 +301,12 @@ function snapToChoice(value: number, choices: number[], fallback: number): numbe
 function normalizeSettings(settings: Partial<Settings>): Settings {
   const seconds = Number(settings.maxRecordingSeconds ?? DEFAULTS.maxRecordingSeconds);
   const retentionMinutes = Number(settings.noteRetentionMinutes ?? DEFAULTS.noteRetentionMinutes);
-  const chunkSeconds = Number(settings.whisperChunkSeconds ?? DEFAULTS.whisperChunkSeconds);
   return {
     ...DEFAULTS,
     ...settings,
     inputGain: Math.max(1, Math.min(6, Number(settings.inputGain ?? DEFAULTS.inputGain))),
     maxRecordingSeconds: snapToChoice(seconds, MAX_RECORDING_CHOICES, DEFAULTS.maxRecordingSeconds),
     noteRetentionMinutes: snapToChoice(retentionMinutes, NOTE_RETENTION_CHOICES, DEFAULTS.noteRetentionMinutes),
-    whisperChunkSeconds: Math.max(5, Math.min(60, Math.round(chunkSeconds || DEFAULTS.whisperChunkSeconds))),
     remoteUrl: (settings.remoteUrl ?? "").trim().replace(/\/+$/, ""),
     remoteTimeoutSeconds: Math.max(5, Math.min(300, Math.round(Number(settings.remoteTimeoutSeconds ?? DEFAULTS.remoteTimeoutSeconds)))),
     cloudAuthToken: (settings.cloudAuthToken ?? "").trim(),
@@ -344,7 +339,7 @@ function applyToForm(settings: Settings): void {
   const speechName = document.getElementById("selectedSpeechModel");
   if (speechName) speechName.textContent = `${settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
   const polishName = document.getElementById("selectedPolishModel");
-  if (polishName) polishName.textContent = settings.polishModel === "qwen3.5-0.8b" ? "Qwen3.5 · 0.8B" : settings.polishModel === "qwen3.5-2b" ? "Qwen3.5 · 2B" : settings.polishModel;
+  if (polishName) polishName.textContent = settings.polishModel === "qwen3.5-0.8b" ? "Qwen3.5 · 0.8B" : settings.polishModel === "qwen3.5-2b" ? "Qwen3.5 · 2B" : settings.polishModel === "qwen3.5-4b" ? "Qwen3.5 · 4B" : settings.polishModel;
   updateModelSize(settings.model);
   remoteUrl.value = settings.remoteUrl;
   remoteAuthToken.value = settings.remoteAuthToken;
@@ -367,7 +362,6 @@ function applyToForm(settings: Settings): void {
   renderShortcutChip(transcriptStackShortcutChip, settings.transcriptStackShortcut);
   insertAtCursor.checked = settings.insertAtCursor;
   fnPushToTalk.checked = settings.fnPushToTalk;
-  whisperChunkSeconds.value = String(settings.whisperChunkSeconds);
   useGpu.checked = settings.useGpu;
   polishEnabled.checked = settings.polishEnabled;
   contextAwareness.checked = settings.contextAwareness;
@@ -432,7 +426,6 @@ function readFromForm(): Settings {
     recordingShortcutMode: recordingModeSeg.get() as RecordingShortcutMode,
     recordingShortcut: recordingShortcutChip.dataset.shortcut ?? DEFAULTS.recordingShortcut,
     transcriptStackShortcut: transcriptStackShortcutChip.dataset.shortcut ?? DEFAULTS.transcriptStackShortcut,
-    whisperChunkSeconds: Number(whisperChunkSeconds.value),
     useGpu: useGpu.checked,
     insertAtCursor: insertAtCursor.checked,
     fnPushToTalk: fnPushToTalk.checked,
@@ -1023,8 +1016,6 @@ recordingShortcutChip.addEventListener("click", () => {
 transcriptStackShortcutChip.addEventListener("click", () => {
   beginShortcutCapture(transcriptStackShortcutChip, "Copied messages");
 });
-whisperChunkSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
-whisperChunkSeconds.addEventListener("input", () => void persistSettings().catch(reportAsyncError));
 useGpu.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 insertAtCursor.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 fnPushToTalk.addEventListener("change", () => void persistSettings().catch(reportAsyncError));

@@ -14,6 +14,20 @@ use whisper_rs::{
 
 const STREAM_CHANNEL_DEPTH: usize = 64;
 const CHUNK_OVERLAP_SECONDS: usize = 1;
+/// Milliseconds the speech model has spent computing in the current session.
+/// One dictation runs at a time, so a process-wide counter reset at session
+/// start is enough for the performance readout.
+static SPEECH_MODEL_BUSY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Speech-model compute time of the session in progress or just finished.
+pub fn speech_model_busy_ms() -> u64 {
+    SPEECH_MODEL_BUSY_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Longest chunk of uninterrupted speech while a live preview is showing.
+const PREVIEW_MAX_CHUNK_SECONDS: u16 = 5;
+/// Longest chunk of uninterrupted speech when nobody is watching a preview.
+const MAX_CHUNK_SECONDS: u16 = 15;
 /// Trailing silence that ends an utterance and cuts a chunk at the gap.
 const GAP_SILENCE_MS: usize = 500;
 /// Do not gap-cut before this much audio has accumulated, so brief pauses in
@@ -32,6 +46,25 @@ const SPEECH_WINDOW_MS: usize = 30;
 const SPEECH_WINDOW_PEAK_THRESHOLD: f32 = 0.020;
 const SPEECH_WINDOW_RMS_THRESHOLD: f32 = 0.004;
 const MIN_ACTIVE_SPEECH_MS: usize = 120;
+/// What speech models decode from a breath, a key click or room noise once the
+/// speaker has stopped: the closing lines of their training data.
+const PHANTOM_PHRASES: &[&str] = &[
+    "thank you",
+    "thank you very much",
+    "thank you so much",
+    "thanks for watching",
+    "thank you for watching",
+    "bye",
+    "bye bye",
+    "you",
+    "mm hmm",
+    "mhm",
+    "uh huh",
+    "hmm",
+];
+/// Saying the shortest of those aloud takes about this much voiced audio. A
+/// chunk with less that still "says" one did not hear it.
+const PHANTOM_MIN_SPEECH_MS: usize = 450;
 #[cfg(feature = "whisper")]
 const NO_SPEECH_PROBABILITY_THRESHOLD: f32 = 0.60;
 #[cfg(feature = "whisper")]
@@ -268,12 +301,15 @@ impl ActiveEngine {
         } else {
             None
         };
-        // Interactive dictation needs a preview during continuous speech too.
-        // Existing silence cuts still fire earlier; retain overlap/backpressure.
+        // Chunks cut at silence gaps; these are only the forced-cut ceilings
+        // for speech with no detectable pause. Interactive dictation needs a
+        // preview during continuous speech too, so its ceiling is short. Where
+        // text is *sealed* for polish is decided later, at sentence ends
+        // (`polish_stream`), not by either of these.
         let chunk_seconds = if preview_tx.is_some() {
-            settings.whisper_chunk_seconds.min(5)
+            PREVIEW_MAX_CHUNK_SECONDS
         } else {
-            settings.whisper_chunk_seconds
+            MAX_CHUNK_SECONDS
         };
         SessionHandle::start_traced(
             transcriber,
@@ -570,6 +606,7 @@ fn run_chunked_session(
     let worker = thread::Builder::new()
         .name("transcription-chunk-worker".to_string())
         .spawn(move || {
+            SPEECH_MODEL_BUSY_MS.store(0, std::sync::atomic::Ordering::Relaxed);
             for job in job_rx {
                 let started = std::time::Instant::now();
                 if let Some(trace) = &trace { trace.event("asr-chunk-start", serde_json::json!({"index":job.index,"samples":job.pcm_i16.len(),"sampleRate":job.sample_rate,"durationSeconds":job.pcm_i16.len() as f64 / job.sample_rate.max(1) as f64,"overlapsPrevious":job.overlaps_previous,"language":language,"initialPrompt":initial_prompt})); }
@@ -582,7 +619,11 @@ fn run_chunked_session(
                     )
                     .map(|text| ChunkResult {
                         index: job.index,
-                        text,
+                        text: if is_phantom_phrase(&text, &job) {
+                            String::new()
+                        } else {
+                            text
+                        },
                         overlaps_previous: job.overlaps_previous,
                     })
                     .or_else(|err| {
@@ -597,7 +638,11 @@ fn run_chunked_session(
                         }
                     });
 
-                if let Some(trace) = &trace { trace.event("asr-chunk-result", serde_json::json!({"index":job.index,"text":result.as_ref().ok().map(|r|&r.text),"error":result.as_ref().err(),"durationMs":started.elapsed().as_millis() as u64})); }
+                SPEECH_MODEL_BUSY_MS.fetch_add(
+                    started.elapsed().as_millis() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                if let Some(trace) = &trace { trace.event("asr-chunk-result", serde_json::json!({"index":job.index,"text":result.as_ref().ok().map(|r|&r.text),"activeSpeechMs":audio_activity_stats(&job.pcm_i16, job.sample_rate).active_speech_ms,"error":result.as_ref().err(),"durationMs":started.elapsed().as_millis() as u64})); }
                 let should_stop = result.is_err();
                 if chunk_result_tx.send(result).is_err() || should_stop {
                     break;
@@ -1267,6 +1312,27 @@ fn normalize_transcript_word(word: &str) -> String {
         .to_lowercase()
 }
 
+/// True when a chunk's whole transcript is a stock closing phrase and its audio
+/// holds too little voiced sound for anyone to have said it. Both must hold:
+/// the phrase alone is something people really dictate ("Thank you." closes
+/// many emails), and quiet audio alone is often real speech. Only a chunk that
+/// starts fresh after a silence gap qualifies — one that overlaps its
+/// predecessor carries real speech by construction.
+fn is_phantom_phrase(text: &str, job: &WhisperChunkJob) -> bool {
+    if job.overlaps_previous {
+        return false;
+    }
+    let spoken = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    PHANTOM_PHRASES.contains(&spoken.as_str())
+        && audio_activity_stats(&job.pcm_i16, job.sample_rate).active_speech_ms
+            < PHANTOM_MIN_SPEECH_MS
+}
+
 fn contains_probable_speech(samples: &[i16], sample_rate: u32) -> bool {
     let stats = audio_activity_stats(samples, sample_rate);
     if stats.peak < SPEECH_PEAK_THRESHOLD {
@@ -1366,7 +1432,7 @@ fn path_to_string(path: &Path) -> Result<String, String> {
 mod tests {
     use super::{
         contains_probable_speech, dispatch_final_chunk, dispatch_ready_chunks,
-        is_non_speech_annotation, merge_chunk_results, merge_transcript_text, polish_frozen_len,
+        is_non_speech_annotation, is_phantom_phrase, merge_chunk_results, merge_transcript_text, polish_frozen_len,
         resample_i16_to_16khz_f32, sealed_prefix_len, ChunkCutState, ChunkResult, ChunkTranscriber,
         SessionHandle, WhisperChunkJob, CHUNK_OVERLAP_SECONDS, GAP_SILENCE_MS,
         MAX_PENDING_CHUNK_JOBS, MIN_GAP_CHUNK_SECONDS, NO_STREAMED_AUDIO,
@@ -1748,6 +1814,32 @@ mod tests {
             cut.next_overlaps_previous,
             "next chunk repeats the retained overlap tail"
         );
+    }
+
+    #[test]
+    fn a_stock_phrase_over_near_silence_is_a_phantom_but_a_spoken_one_is_kept() {
+        let sample_rate = 16_000_u32;
+        let job = |pcm_i16: Vec<i16>, overlaps_previous: bool| WhisperChunkJob {
+            index: 3,
+            pcm_i16,
+            sample_rate,
+            overlaps_previous,
+        };
+        // A key click: 40 ms of loud samples in a second of silence.
+        let mut click = vec![0_i16; sample_rate as usize];
+        for sample in click.iter_mut().skip(8_000).take(640) {
+            *sample = 9_000;
+        }
+        // A second of sustained voiced-level audio.
+        let voiced: Vec<i16> = (0..sample_rate as usize)
+            .map(|i| if i % 2 == 0 { 4_000 } else { -4_000 })
+            .collect();
+
+        assert!(is_phantom_phrase("Thank you.", &job(click.clone(), false)));
+        assert!(is_phantom_phrase("Mm-hmm.", &job(click.clone(), false)));
+        assert!(!is_phantom_phrase("Thank you.", &job(voiced, false)));
+        assert!(!is_phantom_phrase("Thank you, Sam.", &job(click.clone(), false)));
+        assert!(!is_phantom_phrase("Thank you.", &job(click, true)));
     }
 
     #[test]

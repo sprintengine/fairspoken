@@ -111,6 +111,40 @@
                 </div>
               </div>
             </section>
+            <section class="settings-section" aria-labelledby="performanceTitle" id="performanceSection" hidden>
+              <h2 id="performanceTitle">Performance</h2>
+              <p class="settings-section-help" id="perfSummary">Your last dictation</p>
+              <div class="settings-card">
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Wait after release</div>
+                    <div class="row-help" id="perfTotalMeta">Until the text is ready to insert</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="perfTotal">–</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Finishing transcription</div>
+                    <div class="row-help" id="perfTranscribeMeta">The last audio after you let go</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="perfTranscribe">–</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Speech model</div>
+                    <div class="row-help" id="perfModelMeta">Work done while you were talking</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="perfModel">–</span></div>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Polish</div>
+                    <div class="row-help" id="perfPolishMeta">The pass at release</div>
+                  </div>
+                  <div class="row-control"><span class="num" id="perfPolish">–</span></div>
+                </div>
+              </div>
+            </section>
             <section class="settings-section" aria-labelledby="weekChartTitle">
               <h2 id="weekChartTitle">This week</h2>
               <p class="settings-section-help">Words per day</p>
@@ -205,26 +239,30 @@
             <button class="ds-button ds-button--outline" id="refreshModels" type="button">Refresh status</button>
           </div>
           <p id="modelFeedback" class="model-feedback" role="status" aria-live="polite"></p>
+          <section class="settings-section" aria-labelledby="modelSearchTitle">
+            <h2 id="modelSearchTitle">Find models</h2>
+            <div class="settings-card">
+              <div class="row row--stacked">
+                <div class="row-text">
+                  <label class="row-label" for="modelSearch">Search</label>
+                  <div class="row-help" id="modelSearchStatus" role="status" aria-live="polite">Search speech models on this device and Hugging Face.</div>
+                </div>
+                <div class="row-control">
+                  <span class="ds-field-box" id="modelSearchBox">
+                    <svg class="model-search-hint" viewBox="0 0 11 11" fill="none" aria-hidden="true"><circle cx="4.5" cy="4.5" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M7 7l2.5 2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                    <input id="modelSearch" class="ds-input ds-input--seamless" type="search" placeholder="Search models or publishers…" autocomplete="off" maxlength="120" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="modelSearchListbox" aria-label="Search speech models on this device and Hugging Face." aria-describedby="modelSearchStatus" />
+                    <button type="button" id="modelSearchClear" class="model-search-clear" hidden>Clear</button>
+                  </span>
+                </div>
+              </div>
+              <div id="modelSearchListbox" class="ds-popover model-search-popover" role="listbox" aria-label="Model search results" hidden></div>
+              <div id="modelSearchResults" aria-busy="false"></div>
+            </div>
+          </section>
           <section class="settings-section" aria-labelledby="dictationModelsTitle">
             <h2 id="dictationModelsTitle">Dictation</h2>
             <p class="settings-section-help" id="dictationProvider"></p>
             <div class="settings-card" id="dictationModels"></div>
-          </section>
-          <section class="settings-section" aria-labelledby="modelSearchTitle">
-            <h2 id="modelSearchTitle">Explore Hugging Face</h2>
-            <div class="settings-card">
-              <div class="row row--stacked">
-                <div class="row-text">
-                  <label class="row-label" for="modelSearch">Find models</label>
-                  <div class="row-help" id="modelSearchStatus" role="status" aria-live="polite">Search model names or publishers on Hugging Face.</div>
-                </div>
-                <div class="row-control">
-                  <input id="modelSearch" class="setting-input" type="search" placeholder="Search speech models or publishers…" autocomplete="off" maxlength="120" aria-describedby="modelSearchStatus" />
-                  <button id="searchModelsButton" class="ds-button ds-button--outline" type="button">Search</button>
-                </div>
-              </div>
-              <div id="modelSearchResults" aria-busy="false"></div>
-            </div>
           </section>
           <section class="settings-section" aria-labelledby="polishModelsTitle">
             <h2 id="polishModelsTitle">Text polish</h2>
@@ -479,16 +517,6 @@
                   </div>
                   <div class="row-control">
                     <input id="useGpu" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-<div class="row" id="whisperChunkField">
-                  <div class="row-text">
-                    <label class="row-label" for="whisperChunkSeconds">Chunk length</label>
-                    <div class="row-help">Seconds of audio per transcription pass.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="whisperChunkSeconds" class="setting-input num w-xs" type="number" min="5" max="60" step="5" />
-                    <span class="meta">seconds</span>
                   </div>
                 </div>
 </div></section>

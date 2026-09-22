@@ -22,6 +22,24 @@ pub struct TranscriptHistoryItem {
     /// the original is always recoverable ("Copy original" / pill Undo).
     #[serde(default)]
     pub raw_text: Option<String>,
+    /// Absent on dictations recorded before timings existed.
+    #[serde(default)]
+    pub timings: Option<DictationTimings>,
+}
+
+/// Where the wait between releasing the key and seeing text went.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationTimings {
+    /// Wall time from release until the final raw transcript was ready.
+    pub transcribe_ms: u64,
+    /// Time the speech model spent computing over the whole dictation, most of
+    /// it while the user was still talking.
+    pub speech_model_ms: u64,
+    /// Wall time of the polish pass at release; 0 when no pass ran.
+    pub polish_ms: u64,
+    /// Release to text ready for insertion.
+    pub total_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +50,7 @@ pub struct NewTranscriptHistoryItem {
     pub duration_seconds: f32,
     pub polished: bool,
     pub raw_text: Option<String>,
+    pub timings: Option<DictationTimings>,
 }
 
 pub struct TranscriptHistoryService {
@@ -76,6 +95,7 @@ impl TranscriptHistoryService {
             duration_seconds: item.duration_seconds,
             polished: item.polished,
             raw_text: item.raw_text.filter(|raw| !raw.trim().is_empty()),
+            timings: item.timings,
         };
         self.items.insert(0, stored.clone());
         self.items.truncate(MAX_TRANSCRIPTS);
@@ -211,6 +231,7 @@ mod tests {
             duration_seconds: 1.0,
             polished: false,
             raw_text: None,
+            timings: None,
         }
     }
 

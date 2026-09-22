@@ -45,3 +45,4 @@ CLAUDE.local.md
 Thumbs.db
 .idea/
 .vscode/
+__pycache__/

@@ -12,6 +12,14 @@
 //!   silence gap, or everything except the last three chunks, whichever is
 //!   further along.
 //!
+//! The ASR freeze point is where an audio chunk happened to end, which is
+//! often mid-sentence — and a model handed half a sentence capitalizes it,
+//! closes it with a period, and cannot resolve a correction or a list that
+//! continues in the next chunk. So the stream seals at the last *sentence* end
+//! behind the freeze point and carries the unfinished remainder in the tail
+//! (`sentence_seal_point`), bounded so a speaker who never finishes a sentence
+//! cannot grow the tail without limit.
+//!
 //! A job never slices a model result to match a chunk boundary — polish output
 //! does not line up with raw offsets. Newly frozen text is either promoted from
 //! an exact tail match, polished as its own seal pass, or adopted as raw when
@@ -21,6 +29,20 @@
 /// so it can continue a sentence rather than re-opening one. Bounded because
 /// it is prompt weight on every pass.
 const CONTEXT_CHARS: usize = 320;
+
+/// How much frozen text may wait unsealed for its sentence to end. Past this
+/// the freeze point is used as is: the tail is re-polished on every pass, so
+/// it has to stay short.
+const MAX_UNSEALED_BYTES: usize = 400;
+
+/// The most frozen text one seal pass will polish. More than this means the
+/// worker skipped several previews, and the backlog is adopted raw instead.
+const SEAL_PASS_MAX_BYTES: usize = 600;
+
+/// At release, frozen text the worker never reached is polished with the tail
+/// when together they stay under this; a larger backlog is adopted raw so the
+/// wait at release stays bounded.
+const FINAL_PASS_MAX_BYTES: usize = 600;
 
 #[derive(Debug, Default)]
 pub struct PolishStream {
@@ -114,6 +136,7 @@ impl PolishStream {
         }
         self.observe(session, clamp_boundary(raw, frozen_len));
         let frozen = clamp_boundary(raw, self.frozen_len.min(raw.len()));
+        let frozen = sentence_seal_point(raw, self.sealed_raw_len, frozen);
         if frozen > self.sealed_raw_len {
             let slice = raw[self.sealed_raw_len..frozen].trim();
             if slice.is_empty() {
@@ -124,11 +147,10 @@ impl PolishStream {
                 self.tail.clear();
                 self.tail_raw.clear();
             } else {
-                let volatile_len = raw.len() - frozen;
-                // The worker skipped several chunks: adopting the gap as raw
-                // keeps this pass bounded. A keep-up freeze is about one chunk
-                // and is smaller than the remaining window, so it is polished.
-                if slice.len() > volatile_len && volatile_len > 0 {
+                // The worker fell far behind: adopting the backlog as raw
+                // keeps this pass bounded. A keep-up seal is a sentence or
+                // two, well under the limit, so it is polished.
+                if slice.len() > SEAL_PASS_MAX_BYTES {
                     self.sealed = join(&self.sealed, slice);
                     self.sealed_raw_len = frozen;
                     self.tail.clear();
@@ -193,16 +215,20 @@ impl PolishStream {
         let frozen = clamp_boundary(raw, self.frozen_len.min(raw.len()));
         if frozen > self.sealed_raw_len {
             let slice = raw[self.sealed_raw_len..frozen].trim();
-            if !slice.is_empty() {
-                if slice == self.tail_raw {
+            let promoted = !slice.is_empty() && slice == self.tail_raw;
+            // Frozen text no pass reached is polished with the tail rather
+            // than adopted raw, as long as the release pass stays bounded.
+            let backlog = raw.len() - self.sealed_raw_len;
+            if promoted || slice.is_empty() || backlog > FINAL_PASS_MAX_BYTES {
+                if promoted {
                     self.sealed = join(&self.sealed, &self.tail);
                 } else {
                     self.sealed = join(&self.sealed, slice);
                 }
+                self.sealed_raw_len = frozen;
+                self.tail.clear();
+                self.tail_raw.clear();
             }
-            self.sealed_raw_len = frozen;
-            self.tail.clear();
-            self.tail_raw.clear();
         }
         Some(TailJob {
             raw: raw[self.sealed_raw_len..].trim().to_string(),
@@ -210,6 +236,52 @@ impl PolishStream {
             raw_len: raw.len(),
             seal: true,
         })
+    }
+}
+
+fn ends_sentence(ch: char) -> bool {
+    matches!(ch, '.' | '?' | '!' | '…' | '。' | '？' | '！')
+}
+
+/// Where to seal, given the ASR froze `raw[..frozen]`: the last sentence end
+/// in the newly frozen text. A sentence ends at closing punctuation that is
+/// followed by whitespace (so "2.4" and "settings.json" do not count) and
+/// then by something other than a lowercase letter — ASR drops stray periods
+/// mid-sentence ("into the system. yet."), and those are not ends.
+///
+/// With no sentence end yet, sealing waits (returns `sealed`) until
+/// `MAX_UNSEALED_BYTES` of frozen text has piled up. Text from an ASR that
+/// does not punctuate gives no evidence either way, so its freeze point is
+/// used as is.
+fn sentence_seal_point(raw: &str, sealed: usize, frozen: usize) -> usize {
+    if frozen <= sealed {
+        return frozen;
+    }
+    if !raw.chars().any(ends_sentence) {
+        return frozen;
+    }
+    let mut last_end = None;
+    for (offset, ch) in raw[sealed..frozen].char_indices() {
+        if !ends_sentence(ch) {
+            continue;
+        }
+        let end = sealed + offset + ch.len_utf8();
+        let mut rest = raw[end..].chars();
+        let wide = !ch.is_ascii() && ch != '…';
+        if !wide && rest.clone().next().is_some_and(|next| !next.is_whitespace()) {
+            continue;
+        }
+        if rest
+            .find(|next| !next.is_whitespace())
+            .is_none_or(|next| !next.is_lowercase())
+        {
+            last_end = Some(end);
+        }
+    }
+    match last_end {
+        Some(end) => end,
+        None if frozen - sealed > MAX_UNSEALED_BYTES => frozen,
+        None => sealed,
     }
 }
 
@@ -415,15 +487,95 @@ mod tests {
         let mut stream = PolishStream::default();
         stream.begin(5);
         stream.observe(5, 0);
-        let raw = "one two three four five six";
-        // A large freeze with a short remaining tail means the worker skipped.
-        let frozen = raw.len() - "six".len();
-        let job = stream.next_job(5, raw, frozen).expect("volatile only");
+        let backlog = "one two three four five ".repeat(30);
+        assert!(backlog.len() > SEAL_PASS_MAX_BYTES);
+        let raw = format!("{backlog}six");
+        // A freeze too large for one pass means the worker skipped.
+        let frozen = backlog.len();
+        let job = stream.next_job(5, &raw, frozen).expect("volatile only");
         assert!(!job.seal);
         assert_eq!(job.raw, "six");
-        assert_eq!(stream.composed(), "one two three four five");
+        assert_eq!(stream.composed(), backlog.trim());
         assert!(stream.apply(5, &job, "Six."));
-        assert_eq!(stream.composed(), "one two three four five Six.");
+        assert_eq!(stream.composed(), format!("{} Six.", backlog.trim()));
+    }
+
+    #[test]
+    fn punctuated_text_seals_at_the_last_sentence_end_behind_the_freeze() {
+        // The chunk ended mid-sentence, after a complete one.
+        let raw = "Whisperflow handles quotes. It also knows if the user is";
+        let frozen = raw.len();
+        assert_eq!(sentence_seal_point(raw, 0, frozen), "Whisperflow handles quotes.".len());
+
+        // A stray ASR period before a lowercase word, an ellipsis, a version
+        // number and a file name are not sentence ends.
+        for raw in [
+            "that we'll put into the system. yet I think we can",
+            "Let's get rid of... the ability for users to",
+            "we need version 2.4 of settings.json before the",
+        ] {
+            assert_eq!(sentence_seal_point(raw, 0, raw.len()), 0, "{raw}");
+        }
+
+        // A finished sentence at the very end of the text seals whole.
+        let raw = "Okay, this is great.";
+        assert_eq!(sentence_seal_point(raw, 0, raw.len()), raw.len());
+
+        // Only newly frozen text is searched.
+        let raw = "One. Two. and then three";
+        assert_eq!(sentence_seal_point(raw, "One. Two.".len(), raw.len()), "One. Two.".len());
+    }
+
+    #[test]
+    fn a_sentence_that_never_ends_is_sealed_once_it_is_long() {
+        let run_on = format!("Okay. {}", "and then we went on ".repeat(30));
+        let sealed = "Okay.".len();
+        assert!(run_on.len() - sealed > MAX_UNSEALED_BYTES);
+        assert_eq!(sentence_seal_point(&run_on, sealed, run_on.len()), run_on.len());
+        let short = "Okay. and then we went on";
+        assert_eq!(sentence_seal_point(short, sealed, short.len()), sealed);
+    }
+
+    #[test]
+    fn an_unfinished_sentence_stays_in_the_tail_across_a_freeze() {
+        let mut stream = PolishStream::default();
+        stream.begin(6);
+        let raw = "We should ship it. So we don't need to worry about the";
+        // The ASR froze everything at a pause mid-sentence.
+        let job = stream.next_job(6, raw, raw.len()).expect("seal the finished sentence");
+        assert!(job.seal);
+        assert_eq!(job.raw, "We should ship it.");
+        assert!(stream.apply(6, &job, "We should ship it."));
+        let job = stream.next_job(6, raw, raw.len()).expect("unfinished tail");
+        assert!(!job.seal);
+        assert_eq!(job.raw, "So we don't need to worry about the");
+        assert!(stream.apply(6, &job, "So we don't need to worry about the"));
+
+        // The sentence finishes in the next chunk and is polished whole.
+        let raw = "We should ship it. So we don't need to worry about the ads yet.";
+        let job = stream.next_job(6, raw, raw.len()).expect("seal the finished sentence");
+        assert!(job.seal);
+        assert_eq!(job.raw, "So we don't need to worry about the ads yet.");
+    }
+
+    #[test]
+    fn release_polishes_frozen_text_no_pass_reached_unless_the_backlog_is_large() {
+        let mut stream = PolishStream::default();
+        stream.begin(10);
+        let raw = "book it for thursday no friday and tell sam";
+        stream.observe(10, "book it for thursday".len());
+        let finish = stream.finish_job(10, raw).expect("commit");
+        assert_eq!(finish.raw, raw, "the unreached prefix rides along with the tail");
+        assert_eq!(stream.composed(), "");
+
+        let mut stream = PolishStream::default();
+        stream.begin(11);
+        let long = format!("{}and tell sam", "book it for thursday ".repeat(40));
+        let frozen = long.len() - "and tell sam".len();
+        stream.observe(11, frozen);
+        let finish = stream.finish_job(11, &long).expect("commit");
+        assert_eq!(finish.raw, "and tell sam");
+        assert_eq!(stream.composed(), long[..frozen].trim());
     }
 
     #[test]

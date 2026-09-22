@@ -27,6 +27,7 @@ mod remote_transcription;
 mod settings;
 mod sounds;
 mod speed_test;
+mod transcript_cleanup;
 mod transcript_history;
 mod transcription;
 mod usage_stats;
@@ -1002,7 +1003,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
     let trace = note_debug::Trace::new(services.debug_capture_enabled.load(Ordering::SeqCst));
     *services.debug_trace.lock().map_err(|e| e.to_string())? = trace.clone();
     if let Some(trace) = &trace {
-        trace.event("recording-settings", serde_json::json!({"speechModel":settings.model,"location":settings.transcription_location,"polishEnabled":settings.polish_enabled,"polishProvider":settings.polish_provider,"polishModel":settings.polish_model,"contextAwareness":settings.context_awareness,"dictionaryVocabulary":settings.vocabulary_hints,"chunkSeconds":settings.whisper_chunk_seconds,"note":"Accessibility collection is unchanged by debug capture. Configured authentication secrets and audio samples are not captured."}));
+        trace.event("recording-settings", serde_json::json!({"speechModel":settings.model,"location":settings.transcription_location,"polishEnabled":settings.polish_enabled,"polishProvider":settings.polish_provider,"polishModel":settings.polish_model,"contextAwareness":settings.context_awareness,"dictionaryVocabulary":settings.vocabulary_hints,"note":"Accessibility collection is unchanged by debug capture. Configured authentication secrets and audio samples are not captured."}));
     }
     // Context awareness Phase B: harvest on-screen terms into this session's
     // vocabulary hints (session-only, except optional dev metadata). Budgeted and
@@ -1357,7 +1358,9 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             settings.transcription_location, settings.model
         ),
     );
+    let released_at = std::time::Instant::now();
     let raw_transcription = finish_transcription_raw(app, services, &recording, &settings)?;
+    let transcribe_ms = released_at.elapsed().as_millis() as u64;
     let raw_transcript = raw_transcription.text;
     update_cursor_snapshot(app, |s| {
         s.full_text(cursor_session, &raw_transcript, false, false)
@@ -1420,9 +1423,10 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .as_ref()
         .map(|t| t.span("final", &polish_input, frontmost_app.as_ref()));
     if let Some(trace) = &trace {
-        trace.event("final-polish-scope", serde_json::json!({"mode":if tail_job.as_ref().is_some_and(|job| !job.raw.is_empty()) { "tail" } else if tail_job.is_some() { "already-sealed" } else { "whole-transcript" },"tailChars":polish_input.len(),"transcriptChars":raw_transcript.len(),"note":"Streaming polish freezes text behind the last silence gap or everything except the last three ASR chunks."}));
+        trace.event("final-polish-scope", serde_json::json!({"mode":if tail_job.as_ref().is_some_and(|job| !job.raw.is_empty()) { "tail" } else if tail_job.is_some() { "already-sealed" } else { "whole-transcript" },"tailChars":polish_input.len(),"transcriptChars":raw_transcript.len(),"note":"Streaming polish seals at the last sentence end behind the ASR freeze point (the last silence gap, or everything except the last three ASR chunks)."}));
     }
     set_polish_activity(app, cursor_session, true);
+    let polish_started = std::time::Instant::now();
     let decision = match &tail_job {
         Some(job) if job.raw.is_empty() => polish::PolishDecision::Disabled,
         Some(job) => run_polish_pass(
@@ -1452,6 +1456,10 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         ),
     };
     set_polish_activity(app, cursor_session, false);
+    let polish_ms = match &decision {
+        polish::PolishDecision::Disabled | polish::PolishDecision::Skipped(_) => 0,
+        _ => polish_started.elapsed().as_millis() as u64,
+    };
     if services
         .transcription_cancel_requested
         .load(Ordering::SeqCst)
@@ -1485,7 +1493,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         // prefix plus this tail. The dictation counts as polished when any
         // pass in the session actually rewrote something, not just this one.
         Some(job) => {
-            let text = pass_text(&decision, &job.raw);
+            let text = pass_text(&decision, job, true);
             services
                 .polish_stream
                 .lock()
@@ -1543,6 +1551,17 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             // corrections the AI never made).
             raw_text: polished
                 .then(|| apply_transcript_post_processing(&raw_transcript, &settings).text),
+            timings: Some(transcript_history::DictationTimings {
+                transcribe_ms,
+                // Only the local chunk worker keeps this counter.
+                speech_model_ms: if settings.transcription_location == TranscriptionLocation::Local {
+                    transcription::speech_model_busy_ms()
+                } else {
+                    0
+                },
+                polish_ms,
+                total_ms: released_at.elapsed().as_millis() as u64,
+            }),
         })?;
 
     #[cfg(target_os = "macos")]
@@ -2401,10 +2420,19 @@ fn run_polish_pass(
 /// a guardrail trip, a skip, a timeout — contributes the raw tail, so the
 /// composed transcript always covers every word and polish failure stays
 /// invisible to the dictation, exactly as the one-shot pass behaved.
-fn pass_text(decision: &polish::PolishDecision, raw: &str) -> String {
+///
+/// A tail is a fragment: it may continue the sealed text mid-sentence and,
+/// until release (`is_final`), may stop mid-sentence too. The model polishes
+/// it as if it were whole, so its edges are repaired here.
+fn pass_text(decision: &polish::PolishDecision, job: &polish_stream::TailJob, is_final: bool) -> String {
     match decision {
-        polish::PolishDecision::Polished(outcome) => outcome.text.clone(),
-        _ => raw.to_string(),
+        polish::PolishDecision::Polished(outcome) => transcript_cleanup::repair_fragment_edges(
+            &job.raw,
+            &outcome.text,
+            &job.context,
+            is_final,
+        ),
+        _ => job.raw.clone(),
     }
 }
 
@@ -2493,7 +2521,7 @@ fn start_transcript_preview_forwarder(
                         set_polish_activity(&app, generation, false);
                         break;
                     }
-                    let text = pass_text(&result, &job.raw);
+                    let text = pass_text(&result, &job, false);
                     let sealed = job.seal;
                     if let Ok(_gate) = services.preview_gate.lock() {
                         if services.preview_generation.load(Ordering::SeqCst) != generation {

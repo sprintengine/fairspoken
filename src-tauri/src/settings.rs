@@ -93,8 +93,6 @@ pub struct Settings {
     /// minutes; 0 keeps notes forever.
     #[serde(default)]
     pub note_retention_minutes: u32,
-    #[serde(default = "default_whisper_chunk_seconds")]
-    pub whisper_chunk_seconds: u16,
     /// Run Whisper inference on the GPU when a GPU backend is compiled in
     /// (Metal on macOS). Off forces CPU inference on the next model load.
     #[serde(default = "default_use_gpu")]
@@ -187,7 +185,6 @@ impl Default for Settings {
             interaction_sounds: true,
             max_recording_seconds: 120,
             note_retention_minutes: 0,
-            whisper_chunk_seconds: default_whisper_chunk_seconds(),
             use_gpu: default_use_gpu(),
             recording_shortcut: default_recording_shortcut(),
             recording_shortcut_mode: RecordingShortcutMode::Toggle,
@@ -325,7 +322,6 @@ fn normalize(settings: Settings) -> Settings {
     Settings {
         input_gain: settings.input_gain.clamp(1, 6),
         max_recording_seconds: settings.max_recording_seconds.clamp(10, 600),
-        whisper_chunk_seconds: settings.whisper_chunk_seconds.clamp(5, 60),
         remote_url: normalize_remote_url(&settings.remote_url),
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
         cloud_auth_token: settings.cloud_auth_token.trim().to_string(),
@@ -343,12 +339,6 @@ fn normalize(settings: Settings) -> Settings {
         ),
         ..settings
     }
-}
-
-// Since gap-based chunking landed, this is only the *forced* cut ceiling for
-// continuous speech with no detectable pause; most chunks cut earlier at gaps.
-fn default_whisper_chunk_seconds() -> u16 {
-    15
 }
 
 fn default_use_gpu() -> bool {

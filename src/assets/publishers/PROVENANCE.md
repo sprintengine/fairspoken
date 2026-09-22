@@ -26,6 +26,9 @@ Parakeet's model license.
 
 ## Fallback
 
-Unknown publishers and missing images use the same neutral layer glyph as the
-app's Models navigation. This is app iconography, not invented publisher branding.
-Visible publisher text remains the identity source for assistive technology.
+NVIDIA stays on the same neutral layer glyph as the app's Models navigation:
+there is no bundled NVIDIA mark, and a letter chip would still be invented
+branding. Every other unknown publisher uses the kit extension-icon monogram —
+one or two letters from the name — so Hub and catalog rows stay distinguishable
+without fetching remote artwork. Visible publisher text remains the identity
+source for assistive technology.

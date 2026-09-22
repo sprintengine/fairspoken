@@ -165,6 +165,16 @@ fn maybe_polish_impl(
     ) {
         Ok(response) => {
             let text = response.text.trim();
+            // Whatever the model, a dictionary term nobody said is invented.
+            if let Some(term) = crate::transcript_cleanup::ungrounded_vocabulary(
+                raw_transcript,
+                text,
+                &settings.vocabulary_hints,
+            ) {
+                return PolishDecision::Failed(format!(
+                    "polish inserted the dictionary term \"{term}\" that was not spoken"
+                ));
+            }
             if !response.changed || text.is_empty() || text == raw_transcript.trim() {
                 PolishDecision::Unchanged {
                     duration_ms: response.duration_ms,
@@ -217,7 +227,12 @@ fn polish_transcript(
             tone,
         }),
         surrounding_text,
-        vocabulary: settings.vocabulary_hints.clone(),
+        // Only the terms something in the transcript sounds like: the rest
+        // cannot help, tempt the model, and need not leave the device.
+        vocabulary: crate::transcript_cleanup::relevant_vocabulary(
+            raw_transcript,
+            &settings.vocabulary_hints,
+        ),
     };
 
     if let Some(span) = span {

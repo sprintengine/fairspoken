@@ -477,7 +477,7 @@ fn auth_headers(target: &RemoteTarget) -> Result<HeaderMap, String> {
 }
 
 // Every x-multivoice-* header is sent to both targets: the cloud Worker
-// ignores the self-host-only ones (backend/model/chunk-seconds) by contract.
+// ignores the self-host-only ones (backend/model) by contract.
 fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<HeaderMap, String> {
     let mut headers = auth_headers(target)?;
     headers.insert(
@@ -494,11 +494,6 @@ fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<H
         "x-multivoice-language",
         HeaderValue::from_str(&settings.language)
             .map_err(|err| format!("Invalid language header: {err}"))?,
-    );
-    headers.insert(
-        "x-multivoice-whisper-chunk-seconds",
-        HeaderValue::from_str(&settings.whisper_chunk_seconds.to_string())
-            .map_err(|err| format!("Invalid Whisper chunk seconds header: {err}"))?,
     );
     if !settings.vocabulary_hints.is_empty() {
         let hints = serde_json::to_string(&settings.vocabulary_hints)

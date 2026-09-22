@@ -156,7 +156,78 @@ function renderZeroEdit(summary: UsageStatsSummary): void {
       : "last 30 days";
 }
 
+interface DictationTimings {
+  transcribeMs: number;
+  speechModelMs: number;
+  polishMs: number;
+  totalMs: number;
+}
+
+interface HistoryEntry {
+  durationSeconds: number;
+  timings?: DictationTimings | null;
+}
+
+interface TimedDictation {
+  durationSeconds: number;
+  timings: DictationTimings;
+}
+
+function setText(id: string, text: string): void {
+  byId(id).textContent = text;
+}
+
+function formatMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Where the wait after releasing the key goes. The last dictation is the
+// headline; the median of the recent ones says whether it was typical.
+async function refreshPerformance(): Promise<void> {
+  const section = document.getElementById("performanceSection");
+  if (!section) return;
+  let timed: TimedDictation[] = [];
+  try {
+    const history = await invoke<HistoryEntry[]>("get_transcript_history");
+    timed = history.filter((item): item is TimedDictation => Boolean(item.timings));
+  } catch {
+    /* outside the app: keep the section hidden */
+  }
+  section.hidden = timed.length === 0;
+  if (timed.length === 0) return;
+
+  const last = timed[0];
+  const typical = (pick: (t: DictationTimings) => number, all = timed) =>
+    `typically ${formatMs(median(all.map((item) => pick(item.timings))))}`;
+  setText("perfSummary", `Your last dictation · ${last.durationSeconds.toFixed(1)} s of speech · medians over the last ${timed.length}`);
+  setText("perfTotal", formatMs(last.timings.totalMs));
+  setText("perfTotalMeta", `Until the text is ready to insert · ${typical((t) => t.totalMs)}`);
+  setText("perfTranscribe", formatMs(last.timings.transcribeMs));
+  setText("perfTranscribeMeta", `The last audio after you let go · ${typical((t) => t.transcribeMs)}`);
+
+  const local = timed.filter((item) => item.timings.speechModelMs > 0);
+  if (last.timings.speechModelMs > 0) {
+    const speed = (last.durationSeconds * 1000) / last.timings.speechModelMs;
+    setText("perfModel", formatMs(last.timings.speechModelMs));
+    setText("perfModelMeta", `While you were talking · ${speed.toFixed(0)}× faster than real time · ${typical((t) => t.speechModelMs, local)}`);
+  } else {
+    setText("perfModel", "–");
+    setText("perfModelMeta", "Transcribed remotely");
+  }
+
+  const polished = timed.filter((item) => item.timings.polishMs > 0);
+  setText("perfPolish", last.timings.polishMs > 0 ? formatMs(last.timings.polishMs) : "off");
+  setText("perfPolishMeta", polished.length > 0 ? `The pass at release · ${typical((t) => t.polishMs, polished)}` : "No polish pass ran");
+}
+
 async function refresh(): Promise<void> {
+  void refreshPerformance();
   let summary: UsageStatsSummary;
   try {
     summary = await invoke<UsageStatsSummary>("get_usage_stats");

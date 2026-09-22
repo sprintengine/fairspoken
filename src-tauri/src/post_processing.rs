@@ -17,7 +17,10 @@ pub fn apply_transcript_post_processing(
         };
     }
 
-    let mut text = transcript.to_string();
+    // The model-free cleanup goes first, whether or not a polish pass ran: it
+    // is the whole cleanup when polish is off, and a pass that tripped a guard
+    // contributes its raw tail.
+    let mut text = crate::transcript_cleanup::tidy(transcript, &settings.language);
     let mut corrections_applied = 0;
     for correction in &settings.transcript_corrections {
         if !correction.enabled {
@@ -158,6 +161,22 @@ mod tests {
 
         assert_eq!(result.text, "The application maps happen.");
         assert_eq!(result.corrections_applied, 1);
+    }
+
+    #[test]
+    fn strips_filler_noises_without_counting_them_as_corrections() {
+        let settings = Settings {
+            language: "en".to_string(),
+            ..Settings::default()
+        };
+
+        let result = apply_transcript_post_processing(
+            "Um, let's get rid of channels, at least for now. Mm-hmm.",
+            &settings,
+        );
+
+        assert_eq!(result.text, "Let's get rid of channels, at least for now.");
+        assert_eq!(result.corrections_applied, 0);
     }
 
     #[test]

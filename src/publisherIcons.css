@@ -4,6 +4,7 @@
   --ds-extension-icon-size: var(--sem-size-control-lg);
   color: var(--sem-color-text-muted);
 }
+.publisher-icon--sm { --ds-extension-icon-size: var(--sem-icon-size-lg); }
 /* An upstream avatar brings its own plate and clear space. Preserve both;
    never tint or filter a publisher's artwork to follow the app theme. */
 .publisher-icon--plated .ds-extension-icon-art { width: 100%; height: 100%; }
