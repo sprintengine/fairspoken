@@ -34,7 +34,7 @@ pub struct RemoteTranscriptionResponse {
 
 /// The remote endpoint a session talks to, resolved from the transcription
 /// location: `RemoteHost` uses the user's own URL and token; `Cloud` uses the
-/// MultiVoice Cloud URL (compile-time constant, `MULTIVOICE_CLOUD_URL` env
+/// Fairspoken Cloud URL (compile-time constant, `MULTIVOICE_CLOUD_URL` env
 /// override for dev builds) and the multiauth token. The wire protocol is
 /// identical, so everything downstream of resolution is shared.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +47,7 @@ pub struct RemoteTarget {
 impl RemoteTarget {
     fn display_name(&self) -> &'static str {
         if self.is_cloud {
-            "MultiVoice Cloud"
+            "Fairspoken Cloud"
         } else {
             "Remote transcription host"
         }
@@ -172,11 +172,26 @@ pub fn start_remote_streaming_session(
     let finish_timeout = remote_connect_timeout(settings);
     let settings = settings.clone();
     let (audio_tx, audio_rx) = mpsc::sync_channel::<AudioFrame>(STREAM_CHANNEL_DEPTH);
+    // The capture callback drops frames when its bounded channel is full, and
+    // a slow network write would fill it in ~130 ms. The relay moves frames
+    // into an unbounded queue straight away, so a stalled link delays audio
+    // instead of losing it.
+    let (upload_tx, upload_rx) = mpsc::channel::<AudioFrame>();
+    thread::Builder::new()
+        .name("remote-streaming-relay".to_string())
+        .spawn(move || {
+            for frame in audio_rx {
+                if upload_tx.send(frame).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|err| format!("Failed to start remote streaming relay: {err}"))?;
     let (result_tx, result_rx) = mpsc::channel::<Result<RemoteTranscriptionResponse, String>>();
     let worker = thread::Builder::new()
         .name("remote-streaming-transcription".to_string())
         .spawn(move || {
-            let result = transcribe_remote_stream(audio_rx, &settings);
+            let result = transcribe_remote_stream(upload_rx, &settings);
             let _ = result_tx.send(result);
         })
         .map_err(|err| format!("Failed to start remote streaming worker: {err}"))?;
@@ -549,12 +564,38 @@ fn host_allows_plain_http(host: &str) -> bool {
         return true;
     }
 
-    host.parse::<IpAddr>().is_ok_and(|ip| match ip {
+    let Ok(ip) = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    else {
+        return host_is_private_name(host);
+    };
+    match ip {
         IpAddr::V4(ip) => {
-            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.octets()[0] == 169
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.octets()[0] == 169
+                || is_tailscale_cgnat(ip)
         }
         IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
-    })
+    }
+}
+
+/// Tailscale assigns node addresses from the 100.64.0.0/10 CGNAT range, and
+/// tailnet traffic is already WireGuard-encrypted end to end.
+fn is_tailscale_cgnat(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    a == 100 && (64..=127).contains(&b)
+}
+
+/// Names that can only resolve inside a private network: Tailscale MagicDNS
+/// (`box` or `box.tailnet-name.ts.net`) and mDNS (`box.local`).
+fn host_is_private_name(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    !host.is_empty()
+        && (!host.contains('.') || host.ends_with(".ts.net") || host.ends_with(".local"))
 }
 
 #[cfg(test)]
@@ -631,6 +672,18 @@ mod tests {
     }
 
     #[test]
+    fn remote_url_allows_http_for_tailnet_hosts() {
+        assert!(validate_remote_base_url("http://100.101.102.103:48173").is_ok());
+        assert!(validate_remote_base_url("http://studio-box:48173").is_ok());
+        assert!(validate_remote_base_url("http://studio-box.tail1234.ts.net:48173").is_ok());
+        assert!(validate_remote_base_url("http://studio-box.local:48173").is_ok());
+        assert!(validate_remote_base_url("http://[fd7a:115c:a1e0::1]:48173").is_ok());
+        // 100.0.0.0/8 outside the CGNAT /10 is public address space.
+        assert!(validate_remote_base_url("http://100.128.0.1:48173").is_err());
+        assert!(validate_remote_base_url("http://evil.ts.net.example.com:48173").is_err());
+    }
+
+    #[test]
     fn resolve_remote_target_maps_each_location() {
         let remote_host = Settings {
             transcription_location: TranscriptionLocation::RemoteHost,
@@ -656,7 +709,7 @@ mod tests {
         assert!(target.is_cloud);
         assert_eq!(target.auth_token, "cloud-jwt");
         assert_ne!(target.base_url.host_str(), Some("host.example.com"));
-        assert_eq!(target.display_name(), "MultiVoice Cloud");
+        assert_eq!(target.display_name(), "Fairspoken Cloud");
 
         let local = Settings::default();
         assert!(resolve_remote_target(&local).is_err());
@@ -683,7 +736,7 @@ mod tests {
         assert!(exhausted.contains("switch to Local"));
 
         let backend_down = format_remote_error(&target, 502, "502 Bad Gateway", None);
-        assert!(backend_down.contains("MultiVoice Cloud"));
+        assert!(backend_down.contains("Fairspoken Cloud"));
     }
 
     #[test]

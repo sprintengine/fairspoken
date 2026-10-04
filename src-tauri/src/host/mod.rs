@@ -1,4 +1,6 @@
+mod catalog;
 mod config;
+mod events;
 
 use crate::audio::{AudioFrame, Recording};
 use crate::models::{ModelService, SttModel};
@@ -7,12 +9,16 @@ use crate::remote_transcription::{
 };
 use crate::settings::Settings;
 use crate::transcription::TranscriptionService;
+use catalog::{model_snapshots, ModelSnapshot};
 use config::{
     apply_config_update, default_host_config_path, load_persisted_config, overlay_persisted_config,
-    persist_live_config, DEFAULT_HOST_MODEL, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig,
+    persist_live_config, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig, DEFAULT_HOST_MODEL,
 };
 #[cfg(test)]
 use config::{parse_bool, parse_worker_models, PersistedHostConfig};
+use events::{
+    sse_frame, EventHub, FrameWriter, HostEvent, HostEventKind, SseWriter, HEARTBEAT_INTERVAL,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
@@ -24,7 +30,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use tiny_http::{HTTPVersion, Header, Method, Request, Response, Server, StatusCode};
 
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DASHBOARD_HTML: &str = include_str!("dashboard.html");
@@ -50,7 +56,7 @@ pub fn run_transcription_host() -> Result<(), String> {
     }
     let server = Server::http(&addr)
         .map_err(|err| format!("Failed to start transcription host on {addr}: {err}"))?;
-    println!("multivoice transcription host listening on http://{addr}");
+    println!("Fairspoken transcription host listening on http://{addr}");
 
     let models = ModelService::default();
     let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
@@ -122,17 +128,15 @@ fn handle_request(
             )
         }
         (&Method::Get, "/v1/stats") => {
-            let metrics = metrics
-                .lock()
-                .map_err(|_| "Host metrics lock failed".to_string())?;
-            let snapshot = metrics.snapshot(bind_addr, &runtime.live, &runtime.models);
-            respond_json(
-                request,
-                StatusCode(200),
-                serde_json::to_string(&snapshot)
-                    .map_err(|err| format!("Failed to serialize stats response: {err}"))?,
-            )
+            let body = {
+                let metrics = metrics
+                    .lock()
+                    .map_err(|_| "Host metrics lock failed".to_string())?;
+                stats_json(&metrics, bind_addr, &runtime)?
+            };
+            respond_json(request, StatusCode(200), body)
         }
+        (&Method::Get, "/v1/events") => spawn_event_stream(request, runtime, bind_addr),
         (&Method::Post, "/v1/config") => handle_config_update(request, runtime),
         (&Method::Post, "/v1/models/download") => handle_model_download(request, runtime),
         (&Method::Post, "/v1/transcriptions") => {
@@ -147,6 +151,57 @@ fn handle_request(
             r#"{"error":"not_found"}"#.to_string(),
         ),
     }
+}
+
+fn stats_json(
+    metrics: &HostMetrics,
+    bind_addr: &str,
+    runtime: &HostRuntime,
+) -> Result<String, String> {
+    serde_json::to_string(&metrics.snapshot(bind_addr, &runtime.live, &runtime.models))
+        .map_err(|err| format!("Failed to serialize stats response: {err}"))
+}
+
+/// Streams live host activity to a dashboard as Server-Sent Events: a
+/// `snapshot` frame (the `/v1/stats` body), then one frame per metrics change.
+/// The connection gets its own thread so a long-lived stream never holds up
+/// the accept loop.
+fn spawn_event_stream(
+    request: Request,
+    runtime: Arc<HostRuntime>,
+    bind_addr: &str,
+) -> Result<(), String> {
+    // Subscribe and snapshot under one metrics lock: every mutation publishes
+    // while holding it, so no event falls between the snapshot and the feed.
+    let subscribed = {
+        let metrics = runtime
+            .metrics
+            .lock()
+            .map_err(|_| "Host metrics lock failed".to_string())?;
+        match metrics.events.subscribe() {
+            Ok(subscription) => Ok((subscription, stats_json(&metrics, bind_addr, &runtime)?)),
+            Err(message) => Err(message),
+        }
+    };
+    let (subscription, snapshot) = match subscribed {
+        Ok(subscribed) => subscribed,
+        Err(message) => return respond_error(request, StatusCode(503), &message),
+    };
+    let chunked = *request.http_version() != HTTPVersion(1, 0);
+    thread::Builder::new()
+        .name("transcription-host-events".to_string())
+        .spawn(move || {
+            let streamed =
+                SseWriter::start(request.into_writer(), chunked).and_then(|mut writer| {
+                    writer.write_frame(sse_frame("snapshot", &snapshot).as_bytes())?;
+                    subscription.pump(&mut writer, HEARTBEAT_INTERVAL)
+                });
+            // A closed tab surfaces as a write error — the normal way a
+            // stream ends — and dropping the subscription frees its slot.
+            drop(streamed);
+        })
+        .map(|_| ())
+        .map_err(|err| format!("Failed to start event stream worker: {err}"))
 }
 
 fn request_path(url: &str) -> &str {
@@ -236,21 +291,50 @@ fn handle_stream_transcription(
         Ok(settings) => settings,
         Err(err) => return respond_error(request, StatusCode(400), &err),
     };
-    let stream_guard = match runtime.try_begin_stream(client.clone()) {
+    let mut stream_guard = match runtime.try_begin_stream(client.clone()) {
         Ok(guard) => guard,
         Err(message) => return respond_error(request, StatusCode(429), &message),
     };
-    let recording = match read_stream_recording(&mut request, runtime.max_recording_seconds()) {
-        Ok(recording) => recording,
+    // Queue the job before reading the body so a worker starts decoding while
+    // the client is still speaking.
+    let (frame_tx, frame_rx) = mpsc::channel::<StreamInput>();
+    let result_rx = match runtime.enqueue(
+        JobAudio::Stream(frame_rx),
+        settings,
+        "stream",
+        client.clone(),
+        0.0,
+    ) {
+        Ok(result_rx) => result_rx,
+        Err(HostRuntimeError::QueueFull(message)) => {
+            return respond_error(request, StatusCode(429), &message)
+        }
+        Err(HostRuntimeError::WorkerFailed(message)) => {
+            return respond_error(request, StatusCode(500), &message)
+        }
+    };
+    let received = forward_stream_frames(
+        &mut request.as_reader(),
+        runtime.max_recording_seconds(),
+        |frame| {
+            // A worker that already failed has dropped its receiver; keep
+            // draining the body so the client still gets the worker's error.
+            let _ = frame_tx.send(StreamInput::Frame(frame));
+        },
+    );
+    let duration_seconds = match received {
+        Ok(received) => received.duration_seconds(),
         Err(err) => {
+            let _ = frame_tx.send(StreamInput::Abort);
             runtime.record_rejection(client.as_deref());
             return respond_error(request, stream_recording_error_status(&err), &err);
         }
     };
+    drop(frame_tx);
+    stream_guard.audio_seconds = duration_seconds;
     drop(stream_guard);
 
-    let duration_seconds = recording.stats().duration_seconds;
-    let outcome = match runtime.transcribe(recording, settings, "stream", client) {
+    let outcome = match runtime.await_result(result_rx) {
         Ok(outcome) => outcome,
         Err(HostRuntimeError::QueueFull(message)) => {
             return respond_error(request, StatusCode(429), &message)
@@ -366,7 +450,7 @@ fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Res
                 "A model download is already in progress",
             );
         }
-        metrics.model_download = Some(ModelDownloadState {
+        metrics.set_model_download(ModelDownloadState {
             model: model.model_id().to_string(),
             stage: "starting".to_string(),
             percentage: 0,
@@ -382,7 +466,7 @@ fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Res
             let progress_metrics = Arc::clone(&metrics);
             let result = models.prepare_with_progress(model, move |progress| {
                 if let Ok(mut metrics) = progress_metrics.lock() {
-                    metrics.model_download = Some(ModelDownloadState {
+                    metrics.set_model_download(ModelDownloadState {
                         model: model.model_id().to_string(),
                         stage: progress.stage.to_string(),
                         percentage: progress.percentage,
@@ -392,7 +476,7 @@ fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Res
             });
             if let Err(err) = result {
                 if let Ok(mut metrics) = metrics.lock() {
-                    metrics.model_download = Some(ModelDownloadState {
+                    metrics.set_model_download(ModelDownloadState {
                         model: model.model_id().to_string(),
                         stage: "error".to_string(),
                         percentage: 0,
@@ -405,7 +489,7 @@ fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Res
         // Clear the in-progress marker so the failure doesn't wedge every
         // future download behind a permanent 409.
         if let Ok(mut metrics) = runtime.metrics.lock() {
-            metrics.model_download = Some(ModelDownloadState {
+            metrics.set_model_download(ModelDownloadState {
                 model: model.model_id().to_string(),
                 stage: "error".to_string(),
                 percentage: 0,
@@ -428,7 +512,21 @@ fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Res
 }
 
 fn client_ip(request: &Request) -> Option<String> {
-    request.remote_addr().map(|addr| addr.ip().to_string())
+    let peer = request.remote_addr()?.ip();
+    // Behind `tailscale serve` every request arrives from loopback, so the
+    // proxy's forwarding headers are the only way to tell tailnet devices
+    // apart. They are only trusted from loopback, where a local proxy set them.
+    if peer.is_loopback() {
+        let forwarded = header_value(request, "x-forwarded-for")
+            .or_else(|| header_value(request, "tailscale-user-login"))
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(client) = forwarded {
+            return Some(client.to_string());
+        }
+    }
+    Some(peer.to_string())
 }
 
 struct HostRuntime {
@@ -443,11 +541,26 @@ struct HostRuntime {
 struct TranscriptionJob {
     id: u64,
     settings: Settings,
-    recording: Recording,
+    audio: JobAudio,
     source: &'static str,
     client: Option<String>,
     result_tx: mpsc::Sender<Result<TranscriptionOutcome, String>>,
     accepted_at: Instant,
+}
+
+/// Audio for a job: a complete recording (batch uploads), or frames still
+/// arriving from a client that is speaking, which the worker transcribes in
+/// chunks as they land so only the tail is left to decode at release.
+enum JobAudio {
+    Recording(Recording),
+    Stream(Receiver<StreamInput>),
+}
+
+enum StreamInput {
+    Frame(AudioFrame),
+    /// The upload failed part-way; the request handler already answered the
+    /// client, so the worker drops the session without recording a failure.
+    Abort,
 }
 
 /// What a worker hands back for a completed job. The model is the worker's
@@ -456,6 +569,7 @@ struct TranscriptionJob {
 #[derive(Debug)]
 struct TranscriptionOutcome {
     text: String,
+    backend: String,
     model: String,
 }
 
@@ -468,12 +582,15 @@ enum HostRuntimeError {
 struct ActiveStreamGuard {
     metrics: Arc<Mutex<HostMetrics>>,
     stream_id: u64,
+    /// Audio received, reported when the stream finishes; stays 0 for an
+    /// upload that failed part-way.
+    audio_seconds: f32,
 }
 
 impl Drop for ActiveStreamGuard {
     fn drop(&mut self) {
         if let Ok(mut metrics) = self.metrics.lock() {
-            metrics.finish_stream(self.stream_id);
+            metrics.finish_stream(self.stream_id, self.audio_seconds);
         }
     }
 }
@@ -535,6 +652,7 @@ impl HostRuntime {
         Ok(ActiveStreamGuard {
             metrics: Arc::clone(&self.metrics),
             stream_id,
+            audio_seconds: 0.0,
         })
     }
 
@@ -563,13 +681,10 @@ impl HostRuntime {
     fn transcribe(
         &self,
         recording: Recording,
-        mut settings: Settings,
+        settings: Settings,
         source: &'static str,
         client: Option<String>,
     ) -> Result<TranscriptionOutcome, HostRuntimeError> {
-        // GPU use is an operator decision for the whole host, not a
-        // per-request client choice.
-        settings.use_gpu = self.live.use_gpu();
         let duration_seconds = recording.stats().duration_seconds;
         if let Err(err) = self.validate_recording_duration(duration_seconds) {
             self.metrics
@@ -579,12 +694,33 @@ impl HostRuntime {
             return Err(HostRuntimeError::QueueFull(err));
         }
 
+        let result_rx = self.enqueue(
+            JobAudio::Recording(recording),
+            settings,
+            source,
+            client,
+            duration_seconds,
+        )?;
+        self.await_result(result_rx)
+    }
+
+    fn enqueue(
+        &self,
+        audio: JobAudio,
+        mut settings: Settings,
+        source: &'static str,
+        client: Option<String>,
+        duration_seconds: f32,
+    ) -> Result<Receiver<Result<TranscriptionOutcome, String>>, HostRuntimeError> {
+        // GPU use is an operator decision for the whole host, not a
+        // per-request client choice.
+        settings.use_gpu = self.live.use_gpu();
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let (result_tx, result_rx) = mpsc::channel::<Result<TranscriptionOutcome, String>>();
         let job = TranscriptionJob {
             id: job_id,
-            settings: settings.clone(),
-            recording,
+            settings,
+            audio,
             source,
             client: client.clone(),
             result_tx,
@@ -607,24 +743,28 @@ impl HostRuntime {
         match self.job_tx.try_send(job) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
+                let message = "Transcription queue is full".to_string();
                 if let Ok(mut metrics) = self.metrics.lock() {
-                    metrics.dequeue_job(job_id);
+                    metrics.drop_queued_job(job_id, &message);
                     metrics.reject_job(client.as_deref());
                 }
-                return Err(HostRuntimeError::QueueFull(
-                    "Transcription queue is full".to_string(),
-                ));
+                return Err(HostRuntimeError::QueueFull(message));
             }
             Err(TrySendError::Disconnected(_)) => {
+                let message = "Transcription worker queue is unavailable".to_string();
                 if let Ok(mut metrics) = self.metrics.lock() {
-                    metrics.dequeue_job(job_id);
+                    metrics.drop_queued_job(job_id, &message);
                 }
-                return Err(HostRuntimeError::WorkerFailed(
-                    "Transcription worker queue is unavailable".to_string(),
-                ));
+                return Err(HostRuntimeError::WorkerFailed(message));
             }
         }
+        Ok(result_rx)
+    }
 
+    fn await_result(
+        &self,
+        result_rx: Receiver<Result<TranscriptionOutcome, String>>,
+    ) -> Result<TranscriptionOutcome, HostRuntimeError> {
         result_rx
             .recv()
             .map_err(|_| {
@@ -671,6 +811,7 @@ fn run_host_worker(
                 if let Ok(mut metrics) = metrics.lock() {
                     metrics.worker_model_unavailable(
                         worker_index,
+                        assigned_model.model_id().to_string(),
                         format!(
                             "Model {} is not installed on this host",
                             assigned_model.model_id()
@@ -681,7 +822,8 @@ fn run_host_worker(
                 let mtime = models.installed_mtime(assigned_model);
                 if last_failed != Some((target.0, target.1, mtime)) {
                     if let Ok(mut metrics) = metrics.lock() {
-                        metrics.worker_preloading(worker_index);
+                        metrics
+                            .worker_preloading(worker_index, assigned_model.model_id().to_string());
                     }
                     let settings = Settings {
                         model: assigned_model,
@@ -702,7 +844,11 @@ fn run_host_worker(
                         Err(err) => {
                             last_failed = Some((target.0, target.1, mtime));
                             if let Ok(mut metrics) = metrics.lock() {
-                                metrics.worker_model_unavailable(worker_index, err);
+                                metrics.worker_model_unavailable(
+                                    worker_index,
+                                    assigned_model.model_id().to_string(),
+                                    err,
+                                );
                             }
                         }
                     }
@@ -726,8 +872,12 @@ fn run_host_worker(
         };
 
         let queue_wait = job.accepted_at.elapsed();
-        let duration_seconds = job.recording.stats().duration_seconds;
-        let backend = BACKEND_ID.to_string();
+        // A live stream's length is only known once the client stops sending.
+        let mut duration_seconds = match &job.audio {
+            JobAudio::Recording(recording) => recording.stats().duration_seconds,
+            JobAudio::Stream(_) => 0.0,
+        };
+        let backend = job_backend(assigned_model).to_string();
         // The worker's assigned model serves every job it takes; the client's
         // requested model (if any header survived) is deliberately ignored.
         let model = assigned_model.model_id().to_string();
@@ -742,10 +892,10 @@ fn run_host_worker(
         if let Ok(mut metrics) = metrics.lock() {
             metrics.start_job(
                 worker_index,
-                job.id,
                 queue_wait,
                 needs_load,
                 RunningJobInfo {
+                    id: job.id,
                     model: model.clone(),
                     source,
                     client: client.clone(),
@@ -755,32 +905,54 @@ fn run_host_worker(
             );
         }
 
-        let started = Instant::now();
+        let mut started = Instant::now();
         let model_ready = std::cell::Cell::new(false);
-        let result = transcribe_recording(
-            &mut transcription,
-            &models,
-            &settings,
-            job.recording,
-            || {
-                model_ready.set(true);
-                if let Ok(mut metrics) = metrics.lock() {
-                    metrics.worker_model_ready(worker_index, model.clone());
-                }
-            },
-        );
+        let on_model_ready = || {
+            model_ready.set(true);
+            if let Ok(mut metrics) = metrics.lock() {
+                metrics.worker_model_ready(worker_index, model.clone());
+            }
+        };
+        let result = match job.audio {
+            JobAudio::Recording(recording) => transcribe_recording(
+                &mut transcription,
+                &models,
+                &settings,
+                recording,
+                on_model_ready,
+            ),
+            JobAudio::Stream(frames) => transcribe_stream(
+                &mut transcription,
+                &models,
+                &settings,
+                frames,
+                on_model_ready,
+            )
+            .map(|streamed| {
+                duration_seconds = streamed.duration_seconds;
+                // Report the wait after the client stopped sending, not the
+                // time spent listening to it speak.
+                started = streamed.upload_finished_at;
+                streamed.text
+            }),
+        };
         let processing_time = started.elapsed();
         if model_ready.get() {
             loaded = Some(target);
         }
 
         match &result {
+            Err(err) if err == STREAM_ABORTED => {
+                if let Ok(mut metrics) = metrics.lock() {
+                    metrics.abandon_job(worker_index);
+                }
+            }
             Ok(_) => {
                 if let Ok(mut metrics) = metrics.lock() {
                     metrics.complete_job(
                         worker_index,
                         duration_seconds,
-                        backend,
+                        backend.clone(),
                         model.clone(),
                         source,
                         client.as_deref(),
@@ -798,6 +970,7 @@ fn run_host_worker(
 
         let outcome = result.map(|text| TranscriptionOutcome {
             text,
+            backend: backend.clone(),
             model: model.clone(),
         });
         if job.result_tx.send(outcome).is_err() {
@@ -816,9 +989,20 @@ fn transcription_response(
     RemoteTranscriptionResponse {
         text: outcome.text,
         duration_seconds,
-        backend: BACKEND_ID.to_string(),
+        backend: outcome.backend,
         model: outcome.model,
         server_version: Some(SERVER_VERSION.to_string()),
+    }
+}
+
+/// The engine that ran a job. Jobs used to all report the protocol's default
+/// `parakeet` id, which mislabelled Whisper work in the dashboard and in
+/// clients' transcript history.
+fn job_backend(model: SttModel) -> &'static str {
+    if model.is_whisper() {
+        "whisper"
+    } else {
+        BACKEND_ID
     }
 }
 
@@ -827,18 +1011,28 @@ fn respond_error(request: Request, status: StatusCode, message: &str) -> Result<
     respond_json(request, status, body)
 }
 
-fn read_stream_recording(
-    request: &mut Request,
-    max_recording_seconds: u16,
-) -> Result<Recording, String> {
-    read_stream_recording_from_reader(&mut request.as_reader(), max_recording_seconds)
+/// How much audio a stream upload delivered.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ReceivedStream {
+    samples: usize,
+    sample_rate: u32,
 }
 
-fn read_stream_recording_from_reader(
+impl ReceivedStream {
+    fn duration_seconds(self) -> f32 {
+        self.samples as f32 / self.sample_rate as f32
+    }
+}
+
+/// Reads stream frames until the client closes the upload, handing each one
+/// on as it arrives. Rejects a sample-rate change, an over-long recording and
+/// an upload with no audio at all.
+fn forward_stream_frames(
     reader: &mut impl Read,
     max_recording_seconds: u16,
-) -> Result<Recording, String> {
-    let mut pcm_i16 = Vec::new();
+    mut on_frame: impl FnMut(AudioFrame),
+) -> Result<ReceivedStream, String> {
+    let mut samples = 0usize;
     let mut recording_sample_rate = None;
 
     while let Some(frame) = read_stream_frame(reader)? {
@@ -857,24 +1051,22 @@ fn read_stream_recording_from_reader(
             }
         };
         let max_samples = sample_rate as usize * usize::from(max_recording_seconds);
-        if pcm_i16.len().saturating_add(frame.pcm_i16.len()) > max_samples {
+        samples = samples.saturating_add(frame.pcm_i16.len());
+        if samples > max_samples {
             return Err(format!(
                 "Recording exceeds host maximum of {max_recording_seconds} seconds"
             ));
         }
-        pcm_i16.extend_from_slice(&frame.pcm_i16);
+        on_frame(frame);
     }
 
-    let sample_rate = recording_sample_rate.unwrap_or(16_000);
-    if pcm_i16.is_empty() {
-        return Err("No audio samples were captured".to_string());
+    match recording_sample_rate {
+        Some(sample_rate) if samples > 0 => Ok(ReceivedStream {
+            samples,
+            sample_rate,
+        }),
+        _ => Err("No audio samples were captured".to_string()),
     }
-
-    Ok(Recording {
-        pcm_i16,
-        sample_rate,
-        dropped_stream_frames: 0,
-    })
 }
 
 fn read_limited_body(reader: &mut impl Read, max_bytes: u64) -> Result<Vec<u8>, String> {
@@ -901,6 +1093,61 @@ fn stream_recording_error_status(message: &str) -> StatusCode {
     } else {
         StatusCode(413)
     }
+}
+
+const STREAM_ABORTED: &str = "Stream upload aborted";
+
+struct StreamedTranscript {
+    text: String,
+    duration_seconds: f32,
+    upload_finished_at: Instant,
+}
+
+/// Feeds frames into a chunked session while the client is still speaking,
+/// keeping a copy of the full recording so a session that loses frames can
+/// fall back to transcribing it whole.
+fn transcribe_stream(
+    transcription: &mut TranscriptionService,
+    models: &ModelService,
+    settings: &Settings,
+    frames: Receiver<StreamInput>,
+    on_model_ready: impl FnOnce(),
+) -> Result<StreamedTranscript, String> {
+    let mut sink = transcription
+        .start_session_traced(settings, models, None, None)?
+        .audio_tx;
+    on_model_ready();
+    let mut recording = Recording {
+        pcm_i16: Vec::new(),
+        sample_rate: 16_000,
+        dropped_stream_frames: 0,
+    };
+    while let Ok(input) = frames.recv() {
+        let frame = match input {
+            StreamInput::Frame(frame) => frame,
+            StreamInput::Abort => {
+                transcription.cancel_session();
+                return Err(STREAM_ABORTED.to_string());
+            }
+        };
+        recording.sample_rate = frame.sample_rate;
+        recording.pcm_i16.extend_from_slice(&frame.pcm_i16);
+        if sink.as_ref().is_some_and(|tx| tx.send(frame).is_err()) {
+            // The session stopped taking audio; finish_session transcribes
+            // the full recording instead.
+            sink = None;
+            recording.dropped_stream_frames += 1;
+        }
+    }
+    let upload_finished_at = Instant::now();
+    drop(sink);
+    let duration_seconds = recording.stats().duration_seconds;
+    let text = transcription.finish_session(&recording, settings, models)?;
+    Ok(StreamedTranscript {
+        text,
+        duration_seconds,
+        upload_finished_at,
+    })
 }
 
 fn transcribe_recording(
@@ -960,18 +1207,25 @@ fn authorized(request: &Request, token: Option<&str>) -> bool {
     let Some(token) = token.filter(|value| !value.trim().is_empty()) else {
         return true;
     };
-    let bearer = format!("Bearer {token}");
     if header_value(request, "authorization")
-        .map(|value| value == bearer)
-        .unwrap_or(false)
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), token.as_bytes()))
     {
         return true;
     }
-    // Allow the dashboard's GET polling to authenticate via ?token=… so the host
-    // operator can bookmark a single URL in the browser.
-    query_param(request.url(), "token")
-        .map(|value| value == token)
-        .unwrap_or(false)
+    // Allow GETs to authenticate via ?token=… so the host operator can
+    // bookmark a single URL in the browser. Mutating routes need the header,
+    // which keeps the token out of proxy and access logs for writes.
+    request.method() == &Method::Get
+        && query_param(request.url(), "token")
+            .is_some_and(|value| constant_time_eq(value.as_bytes(), token.as_bytes()))
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn query_param(url: &str, name: &str) -> Option<String> {
@@ -1077,6 +1331,8 @@ struct WorkerStatus {
     job: Option<RunningJobInfo>,
     completed_jobs: u64,
     last_error: Option<String>,
+    /// Last state/model pair sent as a `worker_state` event.
+    published: Option<(WorkerState, Option<String>)>,
 }
 
 impl WorkerStatus {
@@ -1087,11 +1343,13 @@ impl WorkerStatus {
             job: None,
             completed_jobs: 0,
             last_error: None,
+            published: None,
         }
     }
 }
 
 struct RunningJobInfo {
+    id: u64,
     model: String,
     source: &'static str,
     client: Option<String>,
@@ -1164,6 +1422,7 @@ struct HostMetrics {
     recent: VecDeque<TranscriptionRecord>,
     clients: HashMap<String, ClientStats>,
     model_download: Option<ModelDownloadState>,
+    events: Arc<EventHub>,
 }
 
 /// Progress of an operator-initiated model download, published through
@@ -1206,7 +1465,74 @@ impl HostMetrics {
             recent: VecDeque::with_capacity(RECENT_CAPACITY),
             clients: HashMap::new(),
             model_download: None,
+            events: Arc::new(EventHub::default()),
         }
+    }
+
+    fn publish(&self, kind: HostEventKind) {
+        self.events.publish(HostEvent {
+            at: now_epoch_ms(),
+            kind,
+        });
+    }
+
+    /// Publishes a worker's state when it differs from the last one sent, so
+    /// the idle poll re-reporting a missing model doesn't flood subscribers.
+    /// `model` is what the worker holds or is working towards.
+    fn publish_worker_state(&mut self, worker_index: usize, model: Option<String>) {
+        let Some(worker) = self.workers.get_mut(worker_index) else {
+            return;
+        };
+        let current = (worker.state, model);
+        if worker.published.as_ref() == Some(&current) {
+            return;
+        }
+        worker.published = Some(current.clone());
+        self.publish(HostEventKind::WorkerState {
+            worker: worker_index,
+            state: current.0.as_str(),
+            model: current.1,
+        });
+    }
+
+    /// Frees a worker after its job ended, publishing the job's terminal
+    /// event (built from the job it held) before the worker's idle state.
+    fn release_worker(
+        &mut self,
+        worker_index: usize,
+        terminal_event: impl FnOnce(RunningJobInfo) -> HostEventKind,
+    ) {
+        let Some(worker) = self.workers.get_mut(worker_index) else {
+            return;
+        };
+        worker.state = WorkerState::Idle;
+        let job = worker.job.take();
+        let model = worker.loaded_model.clone();
+        if let Some(job) = job {
+            self.publish(terminal_event(job));
+        }
+        self.publish_worker_state(worker_index, model);
+    }
+
+    fn set_model_download(&mut self, state: ModelDownloadState) {
+        // Multi-file downloads report the same overall percentage several
+        // times; only changes are worth an event.
+        let unchanged = self.model_download.as_ref().is_some_and(|current| {
+            current.model == state.model
+                && current.stage == state.stage
+                && current.percentage == state.percentage
+                && current.error == state.error
+        });
+        if unchanged {
+            return;
+        }
+        self.publish(HostEventKind::ModelDownload {
+            model: state.model.clone(),
+            stage: state.stage.clone(),
+            percentage: state.percentage,
+            error: state.error.clone(),
+        });
+        self.model_download = Some(state);
     }
 
     fn active_stream_count(&self) -> u32 {
@@ -1220,6 +1546,10 @@ impl HostMetrics {
     fn begin_stream(&mut self, client: Option<String>) -> u64 {
         self.next_stream_id = self.next_stream_id.saturating_add(1);
         let id = self.next_stream_id;
+        self.publish(HostEventKind::StreamStarted {
+            stream_id: id,
+            client: client.clone(),
+        });
         self.active_streams.push(ActiveStreamInfo {
             id,
             client,
@@ -1228,11 +1558,30 @@ impl HostMetrics {
         id
     }
 
-    fn finish_stream(&mut self, stream_id: u64) {
-        self.active_streams.retain(|stream| stream.id != stream_id);
+    fn finish_stream(&mut self, stream_id: u64, audio_seconds: f32) {
+        let Some(position) = self
+            .active_streams
+            .iter()
+            .position(|stream| stream.id == stream_id)
+        else {
+            return;
+        };
+        let stream = self.active_streams.remove(position);
+        self.publish(HostEventKind::StreamFinished {
+            stream_id,
+            client: stream.client,
+            audio_seconds,
+        });
     }
 
     fn enqueue_job(&mut self, job: QueuedJobInfo) {
+        self.publish(HostEventKind::JobQueued {
+            job_id: job.id,
+            client: job.client.clone(),
+            source: job.source,
+            model: job.model.clone(),
+            audio_seconds: job.audio_seconds,
+        });
         self.queued.push_back(job);
     }
 
@@ -1240,19 +1589,42 @@ impl HostMetrics {
         self.queued.retain(|job| job.id != job_id);
     }
 
+    /// Removes a job that never reached a worker (the queue was full or gone).
+    fn drop_queued_job(&mut self, job_id: u64, error: &str) {
+        let client = self
+            .queued
+            .iter()
+            .find(|job| job.id == job_id)
+            .and_then(|job| job.client.clone());
+        self.dequeue_job(job_id);
+        self.publish(HostEventKind::JobFailed {
+            job_id,
+            worker: None,
+            client,
+            error: error.to_string(),
+        });
+    }
+
     fn start_job(
         &mut self,
         worker_index: usize,
-        job_id: u64,
         queue_wait: Duration,
         needs_load: bool,
         job: RunningJobInfo,
     ) {
-        self.dequeue_job(job_id);
+        self.dequeue_job(job.id);
         self.started_jobs = self.started_jobs.saturating_add(1);
         self.total_queue_wait_ms = self
             .total_queue_wait_ms
             .saturating_add(queue_wait.as_millis());
+        self.publish(HostEventKind::JobStarted {
+            job_id: job.id,
+            worker: worker_index,
+            model: job.model.clone(),
+            client: job.client.clone(),
+            queue_wait_ms: queue_wait.as_millis() as u64,
+        });
+        let model = job.model.clone();
         if let Some(worker) = self.workers.get_mut(worker_index) {
             worker.state = if needs_load {
                 WorkerState::Loading
@@ -1261,37 +1633,42 @@ impl HostMetrics {
             };
             worker.job = Some(job);
         }
+        self.publish_worker_state(worker_index, Some(model));
     }
 
     fn worker_model_ready(&mut self, worker_index: usize, model: String) {
         if let Some(worker) = self.workers.get_mut(worker_index) {
-            worker.loaded_model = Some(model);
+            worker.loaded_model = Some(model.clone());
             worker.state = WorkerState::Transcribing;
         }
+        self.publish_worker_state(worker_index, Some(model));
     }
 
     /// Marks a worker as loading its assigned model outside a job (the warm
     /// preload at startup or after a runtime model change).
-    fn worker_preloading(&mut self, worker_index: usize) {
+    fn worker_preloading(&mut self, worker_index: usize, model: String) {
         if let Some(worker) = self.workers.get_mut(worker_index) {
             worker.state = WorkerState::Loading;
         }
+        self.publish_worker_state(worker_index, Some(model));
     }
 
     fn worker_preload_ready(&mut self, worker_index: usize, model: String) {
         if let Some(worker) = self.workers.get_mut(worker_index) {
             worker.state = WorkerState::Idle;
-            worker.loaded_model = Some(model);
+            worker.loaded_model = Some(model.clone());
             worker.last_error = None;
         }
+        self.publish_worker_state(worker_index, Some(model));
     }
 
-    fn worker_model_unavailable(&mut self, worker_index: usize, message: String) {
+    fn worker_model_unavailable(&mut self, worker_index: usize, model: String, message: String) {
         if let Some(worker) = self.workers.get_mut(worker_index) {
             worker.state = WorkerState::ModelUnavailable;
             worker.loaded_model = None;
             worker.last_error = Some(message);
         }
+        self.publish_worker_state(worker_index, Some(model));
     }
 
     fn reject_job(&mut self, client: Option<&str>) {
@@ -1331,13 +1708,29 @@ impl HostMetrics {
         Some(stats)
     }
 
+    /// Frees a worker whose job ended because the client's upload failed. The
+    /// request handler already counted that as a rejection; subscribers still
+    /// see the job end, so every `job_queued` gets exactly one terminal event.
+    fn abandon_job(&mut self, worker_index: usize) {
+        self.release_worker(worker_index, |job| HostEventKind::JobFailed {
+            job_id: job.id,
+            worker: Some(worker_index),
+            client: job.client,
+            error: STREAM_ABORTED.to_string(),
+        });
+    }
+
     fn fail_job(&mut self, worker_index: usize, client: Option<&str>, error: &str) {
         self.failed_jobs = self.failed_jobs.saturating_add(1);
         if let Some(worker) = self.workers.get_mut(worker_index) {
-            worker.state = WorkerState::Idle;
-            worker.job = None;
             worker.last_error = Some(error.to_string());
         }
+        self.release_worker(worker_index, |job| HostEventKind::JobFailed {
+            job_id: job.id,
+            worker: Some(worker_index),
+            client: job.client,
+            error: error.to_string(),
+        });
         if let Some(stats) = self.touch_client(client) {
             stats.failed = stats.failed.saturating_add(1);
         }
@@ -1363,11 +1756,17 @@ impl HostMetrics {
         self.next_record_id = self.next_record_id.saturating_add(1);
 
         if let Some(worker) = self.workers.get_mut(worker_index) {
-            worker.state = WorkerState::Idle;
-            worker.job = None;
             worker.completed_jobs = worker.completed_jobs.saturating_add(1);
             worker.last_error = None;
         }
+        self.release_worker(worker_index, |job| HostEventKind::JobCompleted {
+            job_id: job.id,
+            worker: worker_index,
+            model: model.clone(),
+            client: job.client,
+            audio_seconds: duration_seconds,
+            processing_ms: processing_time.as_millis() as u64,
+        });
         if let Some(stats) = self.touch_client(client) {
             stats.completed = stats.completed.saturating_add(1);
             stats.total_audio_seconds += duration_seconds as f64;
@@ -1417,6 +1816,7 @@ impl HostMetrics {
                     completed_jobs: worker.completed_jobs,
                     last_error: worker.last_error.clone(),
                     job: worker.job.as_ref().map(|job| RunningJobSnapshot {
+                        id: job.id,
                         model: job.model.clone(),
                         source: job.source,
                         client: job.client.clone(),
@@ -1444,6 +1844,7 @@ impl HostMetrics {
             .active_streams
             .iter()
             .map(|stream| StreamSnapshot {
+                id: stream.id,
                 client: stream.client.clone(),
                 elapsed_ms: stream.started_at.elapsed().as_millis() as u64,
             })
@@ -1481,6 +1882,7 @@ impl HostMetrics {
             max_recording_seconds: live.max_recording_seconds(),
             use_gpu: live.use_gpu(),
             model: live.model_summary(),
+            models: model_snapshots(models, &assigned_models),
             model_download: self.model_download.clone(),
             rejected_jobs: self.rejected_jobs,
             failed_jobs: self.failed_jobs,
@@ -1535,6 +1937,7 @@ struct WorkerSnapshot {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RunningJobSnapshot {
+    id: u64,
     model: String,
     source: &'static str,
     client: Option<String>,
@@ -1556,6 +1959,7 @@ struct QueuedJobSnapshot {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StreamSnapshot {
+    id: u64,
     client: Option<String>,
     elapsed_ms: u64,
 }
@@ -1590,6 +1994,9 @@ struct StatsSnapshot<'a> {
     use_gpu: bool,
     /// The served model: one id when uniform across workers, else "mixed".
     model: String,
+    /// Every model this build can serve, installed or not, with the workers
+    /// assigned to each.
+    models: Vec<ModelSnapshot>,
     model_download: Option<ModelDownloadState>,
     rejected_jobs: u64,
     failed_jobs: u64,
@@ -1607,15 +2014,15 @@ struct StatsSnapshot<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        max_batch_body_bytes, parse_worker_models, read_limited_body,
-        read_stream_recording_from_reader, request_path, HostLiveConfig, HostMetrics, HostRuntime,
+        constant_time_eq, forward_stream_frames, max_batch_body_bytes, parse_worker_models,
+        read_limited_body, request_path, HostLiveConfig, HostMetrics, HostRuntime,
         HostRuntimeConfig, HostRuntimeError, ModelDownloadState, QueuedJobInfo, RunningJobInfo,
         TranscriptionOutcome, MAX_TRACKED_CLIENTS,
     };
     use crate::audio::Recording;
-    use crate::models::{ModelService, SttModel};
     #[cfg(feature = "whisper")]
     use crate::models::WhisperModel;
+    use crate::models::{ModelService, SttModel};
     use crate::settings::Settings;
     use std::io::Cursor;
     use std::sync::atomic::AtomicU64;
@@ -1629,6 +2036,14 @@ mod tests {
         assert_eq!(request_path("/?token=secret"), "/");
         assert_eq!(request_path("/v1/stats?token=secret"), "/v1/stats");
         assert_eq!(request_path("/v1/health"), "/v1/health");
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_identical_tokens() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secret2"));
+        assert!(!constant_time_eq(b"", b"secret"));
     }
 
     fn test_config() -> HostRuntimeConfig {
@@ -1663,6 +2078,7 @@ mod tests {
     fn test_outcome(text: &str) -> TranscriptionOutcome {
         TranscriptionOutcome {
             text: text.to_string(),
+            backend: "whisper".to_string(),
             model: "base".to_string(),
         }
     }
@@ -1678,8 +2094,9 @@ mod tests {
         }
     }
 
-    fn test_running_job(client: Option<&str>) -> RunningJobInfo {
+    fn test_running_job(id: u64, client: Option<&str>) -> RunningJobInfo {
         RunningJobInfo {
+            id,
             model: "large-v3-turbo".to_string(),
             source: "stream",
             client: client.map(str::to_string),
@@ -1826,6 +2243,7 @@ mod tests {
         job.result_tx
             .send(Ok(TranscriptionOutcome {
                 text: "transcript".to_string(),
+                backend: "whisper".to_string(),
                 model: "large-v3-turbo".to_string(),
             }))
             .expect("send result");
@@ -1922,7 +2340,7 @@ mod tests {
         write_test_stream_frame(16_000, &[1, 2, 3], &mut encoded);
         write_test_stream_frame(48_000, &[4, 5, 6], &mut encoded);
 
-        let err = read_stream_recording_from_reader(&mut encoded.as_slice(), 10)
+        let err = forward_stream_frames(&mut encoded.as_slice(), 10, |_| {})
             .expect_err("mixed sample rates reject");
 
         assert!(err.contains("sample rate changed"));
@@ -1934,11 +2352,39 @@ mod tests {
         write_test_stream_frame(16_000, &[1, 2, 3], &mut encoded);
         write_test_stream_frame(16_000, &[4, 5, 6], &mut encoded);
 
-        let recording =
-            read_stream_recording_from_reader(&mut encoded.as_slice(), 10).expect("recording");
+        let mut pcm_i16 = Vec::new();
+        let received = forward_stream_frames(&mut encoded.as_slice(), 10, |frame| {
+            assert_eq!(frame.sample_rate, 16_000);
+            pcm_i16.extend_from_slice(&frame.pcm_i16);
+        })
+        .expect("recording");
 
-        assert_eq!(recording.sample_rate, 16_000);
-        assert_eq!(recording.pcm_i16, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(received.sample_rate, 16_000);
+        assert_eq!(received.samples, 6);
+        assert_eq!(pcm_i16, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn stream_upload_without_audio_is_rejected() {
+        let mut encoded = Vec::new();
+        write_test_stream_frame(16_000, &[], &mut encoded);
+
+        let err = forward_stream_frames(&mut encoded.as_slice(), 10, |_| {})
+            .expect_err("empty upload rejects");
+
+        assert_eq!(err, "No audio samples were captured");
+    }
+
+    #[test]
+    fn stream_upload_over_host_maximum_is_rejected() {
+        let mut encoded = Vec::new();
+        write_test_stream_frame(4, &[0; 4], &mut encoded);
+        write_test_stream_frame(4, &[0; 4], &mut encoded);
+
+        let err = forward_stream_frames(&mut encoded.as_slice(), 1, |_| {})
+            .expect_err("over-long upload rejects");
+
+        assert!(err.contains("exceeds host maximum"));
     }
 
     #[test]
@@ -1960,10 +2406,9 @@ mod tests {
         metrics.enqueue_job(test_queued_job(1, Some("192.168.1.31")));
         metrics.start_job(
             0,
-            1,
             Duration::from_millis(30),
             true,
-            test_running_job(Some("192.168.1.31")),
+            test_running_job(1, Some("192.168.1.31")),
         );
         metrics.worker_model_ready(0, "parakeet-tdt-0.6b-v3".to_string());
         metrics.complete_job(
@@ -2029,10 +2474,9 @@ mod tests {
         metrics.enqueue_job(test_queued_job(1, None));
         metrics.start_job(
             0,
-            1,
             Duration::from_millis(5),
             false,
-            test_running_job(None),
+            test_running_job(1, None),
         );
         metrics.fail_job(0, None, "Whisper context failed");
 
@@ -2052,7 +2496,7 @@ mod tests {
         let mut metrics = HostMetrics::new(&config);
 
         metrics.enqueue_job(test_queued_job(1, None));
-        metrics.start_job(0, 1, Duration::from_millis(5), true, test_running_job(None));
+        metrics.start_job(0, Duration::from_millis(5), true, test_running_job(1, None));
         assert!(matches!(
             metrics.workers[0].state,
             super::WorkerState::Loading
@@ -2342,11 +2786,7 @@ mod tests {
                 max_recording_seconds: 1,
                 use_gpu: false,
                 // Written when the host ran three workers; now it runs two.
-                worker_models: vec![
-                    SttModel::Parakeet,
-                    SttModel::Parakeet,
-                    SttModel::Parakeet,
-                ],
+                worker_models: vec![SttModel::Parakeet, SttModel::Parakeet, SttModel::Parakeet],
             },
         );
         assert_eq!(config.max_active_streams, 32);
@@ -2383,7 +2823,11 @@ mod tests {
         let config = test_config();
         let mut metrics = HostMetrics::new(&config);
 
-        metrics.worker_model_unavailable(0, "Model base is not installed on this host".into());
+        metrics.worker_model_unavailable(
+            0,
+            "base".to_string(),
+            "Model base is not installed on this host".into(),
+        );
         assert!(matches!(
             metrics.workers[0].state,
             super::WorkerState::ModelUnavailable
@@ -2395,7 +2839,7 @@ mod tests {
             .unwrap()
             .contains("not installed"));
 
-        metrics.worker_preloading(0);
+        metrics.worker_preloading(0, "base".to_string());
         assert!(matches!(
             metrics.workers[0].state,
             super::WorkerState::Loading
@@ -2453,5 +2897,255 @@ mod tests {
         let stats = metrics.clients.get("192.168.1.20").expect("client stats");
         assert_eq!(stats.requests, 1);
         assert_eq!(stats.rejected, 1);
+    }
+
+    fn drain_event_names(subscription: &super::events::EventSubscription) -> Vec<String> {
+        std::iter::from_fn(|| subscription.try_next())
+            .map(|frame| {
+                assert!(
+                    !frame.contains("\"text\""),
+                    "events never carry transcripts"
+                );
+                frame
+                    .lines()
+                    .next()
+                    .and_then(|line| line.strip_prefix("event: "))
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn metrics_mutations_publish_one_lifecycle_per_job() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+        let subscription = metrics.events.subscribe().expect("subscribe");
+
+        let stream_id = metrics.begin_stream(Some("192.168.1.31".to_string()));
+        metrics.enqueue_job(test_queued_job(1, Some("192.168.1.31")));
+        metrics.start_job(
+            0,
+            Duration::from_millis(4),
+            true,
+            test_running_job(1, Some("192.168.1.31")),
+        );
+        metrics.worker_model_ready(0, "large-v3-turbo".to_string());
+        metrics.finish_stream(stream_id, 2.5);
+        metrics.complete_job(
+            0,
+            2.5,
+            "whisper".to_string(),
+            "large-v3-turbo".to_string(),
+            "stream",
+            Some("192.168.1.31"),
+            Duration::from_millis(4),
+            Duration::from_millis(80),
+        );
+
+        assert_eq!(
+            drain_event_names(&subscription),
+            [
+                "stream_started",
+                "job_queued",
+                "job_started",
+                "worker_state",
+                "worker_state",
+                "stream_finished",
+                "job_completed",
+                "worker_state",
+            ]
+        );
+        assert_eq!(metrics.recent[0].backend, "whisper");
+
+        // A job the queue turned away still ends, with no worker.
+        metrics.enqueue_job(test_queued_job(2, None));
+        metrics.drop_queued_job(2, "Transcription queue is full");
+        let frames: Vec<_> = std::iter::from_fn(|| subscription.try_next()).collect();
+        assert_eq!(frames.len(), 2);
+        assert!(frames[1].starts_with("event: job_failed\n"));
+        assert!(frames[1].contains("\"jobId\":2,\"worker\":null,"));
+        assert!(metrics.queued.is_empty());
+    }
+
+    #[test]
+    fn worker_state_events_are_deduplicated_across_idle_polls() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+        let subscription = metrics.events.subscribe().expect("subscribe");
+
+        for _ in 0..5 {
+            metrics.worker_model_unavailable(0, "base".to_string(), "missing".to_string());
+        }
+        metrics.worker_preloading(0, "base".to_string());
+        metrics.worker_preload_ready(0, "base".to_string());
+
+        let frames: Vec<_> = std::iter::from_fn(|| subscription.try_next()).collect();
+        assert_eq!(frames.len(), 3);
+        assert!(frames[0].contains("\"state\":\"model-unavailable\",\"model\":\"base\""));
+        assert!(frames[1].contains("\"state\":\"loading\""));
+        assert!(frames[2].contains("\"state\":\"idle\""));
+    }
+
+    #[test]
+    fn abandoned_and_failed_jobs_publish_job_failed() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+        metrics.start_job(0, Duration::ZERO, false, test_running_job(3, None));
+        let subscription = metrics.events.subscribe().expect("subscribe");
+
+        metrics.abandon_job(0);
+        metrics.start_job(0, Duration::ZERO, false, test_running_job(4, None));
+        metrics.fail_job(0, None, "Whisper context failed");
+
+        let frames: Vec<_> = std::iter::from_fn(|| subscription.try_next()).collect();
+        let failures: Vec<_> = frames
+            .iter()
+            .filter(|frame| frame.starts_with("event: job_failed\n"))
+            .collect();
+        assert_eq!(failures.len(), 2);
+        assert!(failures[0].contains("\"jobId\":3,\"worker\":0,"));
+        assert!(failures[0].contains(super::STREAM_ABORTED));
+        assert!(failures[1].contains("\"error\":\"Whisper context failed\""));
+        assert_eq!(metrics.failed_jobs, 1);
+    }
+
+    #[test]
+    fn model_download_events_skip_repeated_progress() {
+        let config = test_config();
+        let mut metrics = HostMetrics::new(&config);
+        let subscription = metrics.events.subscribe().expect("subscribe");
+        let progress = |percentage| ModelDownloadState {
+            model: "base".to_string(),
+            stage: "downloading".to_string(),
+            percentage,
+            error: None,
+        };
+
+        metrics.set_model_download(progress(10));
+        metrics.set_model_download(progress(10));
+        metrics.set_model_download(progress(11));
+
+        let frames: Vec<_> = std::iter::from_fn(|| subscription.try_next()).collect();
+        assert_eq!(frames.len(), 2);
+        assert!(frames[1].contains("\"stage\":\"downloading\",\"percentage\":11"));
+        assert_eq!(metrics.model_download.as_ref().unwrap().percentage, 11);
+    }
+
+    #[test]
+    fn stats_snapshot_lists_servable_models_with_worker_assignments() {
+        let config = HostRuntimeConfig {
+            worker_count: 2,
+            worker_models: vec![SttModel::Parakeet, SttModel::ParakeetUltra],
+            ..test_config()
+        };
+        let live = HostLiveConfig::new(&config);
+        let models = ModelService::default();
+        let metrics = HostMetrics::new(&config);
+
+        let json = serde_json::to_value(metrics.snapshot("127.0.0.1:48173", &live, &models))
+            .expect("serialize snapshot");
+        let listed = json["models"].as_array().expect("models array");
+        assert!(listed.len() >= 3);
+        let by_id = |id: &str| {
+            listed
+                .iter()
+                .find(|model| model["id"] == id)
+                .unwrap_or_else(|| panic!("{id} listed"))
+        };
+        let ultra = by_id("parakeet-ultra");
+        assert_eq!(ultra["name"], "Parakeet Ultra 0.6B");
+        assert_eq!(ultra["publisher"], "Moondream");
+        assert_eq!(ultra["assignedWorkers"], serde_json::json!([1]));
+        assert!(ultra["sizeBytes"].as_u64().unwrap() > 0);
+        assert!(ultra["installed"].is_boolean());
+        assert_eq!(
+            by_id("parakeet-tdt-0.6b-v3")["assignedWorkers"],
+            serde_json::json!([0])
+        );
+        assert_eq!(
+            by_id("parakeet-tdt-0.6b-v2")["assignedWorkers"],
+            serde_json::json!([])
+        );
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn jobs_report_the_engine_that_ran_them() {
+        assert_eq!(super::job_backend(SttModel::Parakeet), "parakeet");
+        assert_eq!(super::job_backend(SttModel::ParakeetUltra), "parakeet");
+        assert_eq!(
+            super::job_backend(SttModel::Whisper(WhisperModel::LargeV3Turbo)),
+            "whisper"
+        );
+    }
+
+    #[test]
+    fn event_stream_flushes_each_event_over_a_real_connection() {
+        use std::io::{BufRead, BufReader, Write};
+
+        let config = test_config();
+        let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
+        let (job_tx, _job_rx) = mpsc::sync_channel(1);
+        let runtime = Arc::new(test_runtime(config, job_tx, Arc::clone(&metrics)));
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("ip address");
+        let accept_metrics = Arc::clone(&metrics);
+        thread::spawn(move || {
+            let request = server.recv().expect("request");
+            super::handle_request(
+                request,
+                Some("secret"),
+                runtime,
+                accept_metrics,
+                "127.0.0.1:0",
+            )
+            .expect("handled");
+            // Keep the listener (and the connection it owns) alive while the
+            // stream thread runs.
+            thread::sleep(Duration::from_secs(5));
+        });
+
+        let mut socket = std::net::TcpStream::connect(addr).expect("connect");
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("timeout");
+        socket
+            .write_all(b"GET /v1/events?token=secret HTTP/1.1\r\nHost: test\r\n\r\n")
+            .expect("send request");
+        let mut reader = BufReader::new(socket);
+        let mut read_line = || {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("line before timeout");
+            line
+        };
+
+        assert_eq!(read_line(), "HTTP/1.1 200 OK\r\n");
+        let mut head = Vec::new();
+        loop {
+            let line = read_line();
+            if line == "\r\n" {
+                break;
+            }
+            head.push(line.to_ascii_lowercase());
+        }
+        assert!(head.contains(&"content-type: text/event-stream\r\n".to_string()));
+        assert!(head.contains(&"cache-control: no-cache\r\n".to_string()));
+        assert!(head.contains(&"transfer-encoding: chunked\r\n".to_string()));
+
+        let _snapshot_size = read_line();
+        assert_eq!(read_line(), "event: snapshot\n");
+        assert!(read_line().starts_with("data: {\"serverVersion\""));
+        assert_eq!(read_line(), "\n");
+        assert_eq!(read_line(), "\r\n");
+
+        // A single small event arrives on its own, well under the timeout.
+        metrics
+            .lock()
+            .expect("metrics")
+            .begin_stream(Some("10.0.0.2".to_string()));
+        let _event_size = read_line();
+        assert_eq!(read_line(), "event: stream_started\n");
+        assert!(read_line().contains("\"streamId\":1,\"client\":\"10.0.0.2\""));
     }
 }

@@ -2,1140 +2,2050 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Multivoice host</title>
+<title>Fairspoken host</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<script>
+  // Resolve the theme before first paint so a dark-preferring operator never
+  // sees a light flash. "system" follows prefers-color-scheme live.
+  (() => {
+    const pref = localStorage.getItem("mv-host-theme") || "system";
+    const dark = pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.dataset.themePref = pref;
+  })();
+</script>
 <style>
-  /* Multivoice host — the operator's console for a standalone transcription
-     server. Aligned to the client home window (src/home.css): one product
-     accent, the 6px-dot status idiom (no glow), two radii, three weights, a
-     fixed display/stat/body/meta/micro scale. Structure is carried by spacing
-     + headings + a single hairline — never by stacked cards. The live
-     pipeline reads top-down the way audio flows: receiving → queue → workers. */
+  /* Fairspoken host — the operator console for a standalone transcription
+     server, styled as a companion to the native Liquid Glass app: layered
+     translucent surfaces over a soft field, one calm teal for activity, green
+     for completion, indigo for model loading, amber for a missing model and
+     red reserved strictly for errors. */
   :root {
-    --bg:            #0d0d0f;
-    --bg-elevated:   #151517;
-    --bg-row-hover:  #1b1b1f;
-
-    --border:        rgba(255,255,255,0.07);
-    --border-strong: rgba(255,255,255,0.11);
-
-    --text:          #ededee;
-    --text-secondary:#9a9aa2;
-    --text-muted:    #62626b;
-
-    --accent:        #ff1a3d;
-    --accent-quiet:  rgba(255,26,61,0.10);
-    --accent-border: rgba(255,26,61,0.45);
-    --dot-good:      #30d158;
-    --dot-idle:      #62626b;
-    --warning:       #ffa600;
-
-    --fs-stat:       20px;
-    --fs-title:      15px;
-    --fs-body:       13px;
-    --fs-meta:       12px;
-    --fs-micro:      11px;
-
-    --r:             8px;
-    --r-sm:          6px;
-    --gutter:        24px;
-
+    color-scheme: light;
+    --field-a: #e4eef0;
+    --field-b: #f4f6f2;
+    --blob-a: rgba(92, 195, 195, 0.28);
+    --blob-b: rgba(120, 150, 230, 0.16);
+    --text: #10262b;
+    --text-2: #4a5f64;
+    --text-3: #7a8d91;
+    --accent: #0b6874;
+    --accent-strong: #08525c;
+    --accent-soft: rgba(11, 104, 116, 0.09);
+    --accent-ring: rgba(11, 104, 116, 0.22);
+    --flow: #148c9b;
+    --done: #1d7a4b;
+    --done-soft: rgba(29, 122, 75, 0.12);
+    --load: #5755d0;
+    --load-soft: rgba(87, 85, 208, 0.12);
+    --warn: #9a5a06;
+    --warn-soft: rgba(176, 110, 10, 0.12);
+    --err: #c2334c;
+    --err-soft: rgba(194, 51, 76, 0.10);
+    --idle: #91a3a6;
+    --glass: rgba(255, 255, 255, 0.62);
+    --glass-strong: rgba(255, 255, 255, 0.82);
+    --glass-chrome: rgba(248, 251, 251, 0.62);
+    --glass-edge: rgba(255, 255, 255, 0.9);
+    --hairline: rgba(16, 38, 43, 0.08);
+    --hairline-strong: rgba(16, 38, 43, 0.14);
+    --link: rgba(16, 38, 43, 0.10);
+    --shadow: 0 1px 1px rgba(16, 38, 43, 0.04), 0 10px 32px -14px rgba(16, 38, 43, 0.20);
+    --shadow-lift: 0 1px 2px rgba(16, 38, 43, 0.06), 0 18px 44px -18px rgba(16, 38, 43, 0.30);
+    --r-card: 18px;
+    --r-control: 10px;
+    --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-    --font-brand: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --field-a: #071013;
+    --field-b: #0c181b;
+    --blob-a: rgba(92, 195, 195, 0.17);
+    --blob-b: rgba(110, 120, 240, 0.14);
+    --text: #e6eff0;
+    --text-2: #a3b5b8;
+    --text-3: #6c8185;
+    --accent: #5cc3c3;
+    --accent-strong: #84dad8;
+    --accent-soft: rgba(92, 195, 195, 0.11);
+    --accent-ring: rgba(92, 195, 195, 0.30);
+    --flow: #72dede;
+    --done: #63d39a;
+    --done-soft: rgba(99, 211, 154, 0.13);
+    --load: #a4a5ff;
+    --load-soft: rgba(164, 165, 255, 0.14);
+    --warn: #e8b35c;
+    --warn-soft: rgba(232, 179, 92, 0.13);
+    --err: #ff6f83;
+    --err-soft: rgba(255, 111, 131, 0.13);
+    --idle: #4f6468;
+    --glass: rgba(18, 31, 35, 0.58);
+    --glass-strong: rgba(20, 35, 39, 0.82);
+    --glass-chrome: rgba(10, 20, 23, 0.55);
+    --glass-edge: rgba(255, 255, 255, 0.07);
+    --hairline: rgba(230, 240, 240, 0.07);
+    --hairline-strong: rgba(230, 240, 240, 0.12);
+    --link: rgba(230, 240, 240, 0.09);
+    --shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 34px -16px rgba(0, 0, 0, 0.75);
+    --shadow-lift: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 20px 48px -18px rgba(0, 0, 0, 0.85);
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { min-height: 100%; }
+  html { background: var(--field-b); }
   body {
-    background: var(--bg);
+    min-height: 100vh;
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    font-size: var(--fs-body);
-    line-height: 1.42;
+    font: 13px/1.45 var(--font);
     -webkit-font-smoothing: antialiased;
-    font-variant-numeric: tabular-nums slashed-zero;
+    font-variant-numeric: tabular-nums;
+    background:
+      radial-gradient(1100px 620px at 12% -8%, var(--blob-a), transparent 62%),
+      radial-gradient(900px 600px at 92% 8%, var(--blob-b), transparent 60%),
+      radial-gradient(800px 700px at 60% 110%, var(--blob-a), transparent 65%),
+      linear-gradient(160deg, var(--field-a), var(--field-b));
+    background-attachment: fixed;
+    transition: background-color 300ms var(--ease);
   }
-  .num  { font-variant-numeric: tabular-nums slashed-zero; }
-  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums slashed-zero; }
-  button { font: inherit; color: inherit; }
+  button, input, select { font: inherit; color: inherit; }
+  .mono { font-family: var(--mono); font-size: 0.94em; }
+  .muted { color: var(--text-3); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
-  /* ── Topbar — wordmark left, connection status right. ── */
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(28px) saturate(170%);
+    backdrop-filter: blur(28px) saturate(170%);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--shadow);
+  }
+
+  /* ── Top bar ── */
   .topbar {
-    display: flex; align-items: center; gap: 12px;
-    height: 48px; padding: 0 var(--gutter);
-    background: var(--bg-elevated);
-    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 14px;
+    height: 58px; padding: 0 28px;
+    background: var(--glass-chrome);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    border-bottom: 1px solid var(--hairline);
   }
-  .brand {
-    display: flex; align-items: baseline; gap: 8px;
-    font-family: var(--font-brand);
+  .brand { display: flex; align-items: center; gap: 10px; flex: none; white-space: nowrap; }
+  .logo {
+    width: 28px; height: 28px; border-radius: 8px; flex: none;
+    display: grid; place-items: center;
+    background: linear-gradient(150deg, var(--accent), var(--accent-strong));
+    box-shadow: 0 4px 12px -4px var(--accent-ring);
   }
-  .brand-name { font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.02em; color: var(--text); }
-  .brand-host { font-size: var(--fs-meta); font-weight: 500; color: var(--text-muted); }
+  :root[data-theme="dark"] .logo { background: linear-gradient(150deg, #2a8f93, #145c62); }
+  .brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.015em; }
+  .brand-sub { font-size: 13px; color: var(--text-3); font-weight: 500; }
+  .host-chip {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: inline-block; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-2);
+    background: var(--accent-soft);
+  }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; white-space: nowrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 30px; padding: 0 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 550; color: var(--text-2);
+    background: var(--glass-strong); border: 1px solid var(--hairline);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); flex: none; }
+  .conn[data-state="live"] .dot { background: var(--done); box-shadow: 0 0 0 3px var(--done-soft); }
+  .conn[data-state="polling"] .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .conn[data-state="offline"] .dot { background: var(--warn); }
+  .conn[data-state="unauthorized"] .dot { background: var(--err); }
+  .conn[data-state="demo"] .dot { background: var(--load); box-shadow: 0 0 0 3px var(--load-soft); }
+  .icon-btn {
+    width: 30px; height: 30px; border-radius: 999px; cursor: pointer;
+    display: grid; place-items: center;
+    background: var(--glass-strong); border: 1px solid var(--hairline);
+    color: var(--text-2); transition: background 140ms var(--ease);
+  }
+  .icon-btn:hover { background: var(--accent-soft); color: var(--text); }
+  .icon-btn svg { width: 15px; height: 15px; }
 
-  .conn { margin-left: auto; display: flex; align-items: center; gap: 7px; }
-  .conn-dot {
-    width: 6px; height: 6px; border-radius: 50%; flex: none;
-    background: var(--dot-idle);
-    transition: background 160ms ease;
-  }
-  .conn-label { font-size: var(--fs-meta); color: var(--text-secondary); }
-  .conn[data-state="live"]         .conn-dot { background: var(--dot-good); }
-  .conn[data-state="offline"]      .conn-dot { background: var(--warning); }
-  .conn[data-state="unauthorized"] .conn-dot { background: var(--accent); }
+  /* ── Page ── */
+  .page { max-width: 1280px; margin: 0 auto; padding: 26px 28px 72px; display: grid; gap: 18px; }
+  body:not([data-conn="live"]):not([data-conn="polling"]):not([data-conn="demo"]) .live { opacity: 0.55; }
 
-  /* ── Page column ── */
-  .page {
-    max-width: 880px; margin: 0 auto;
-    padding: 22px var(--gutter) 64px;
+  .notice {
+    display: none; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; border-radius: 14px; font-size: 13px;
+    background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
   }
-  /* Data sections dim until the host is confirmed reachable so stale or
-     never-fetched numbers can't pass as current truth; the topbar carries
-     the recovery state. */
-  body:not([data-conn="live"]) .live { opacity: 0.55; }
+  .notice[data-visible="true"] { display: flex; }
+  .notice[data-tone="error"] { background: var(--err-soft); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+  .notice code { font-family: var(--mono); font-size: 12px; }
 
-  /* Identity line — which host you're looking at (source of truth). */
-  .ident {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    color: var(--text-secondary); font-size: var(--fs-meta);
-    padding-bottom: 10px;
-  }
-  .ident code { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text); }
-  .ident .sep { color: var(--text-muted); }
-  .ident #uptime { color: var(--text); }
+  /* ── KPI tiles ── */
+  .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+  .kpi { border-radius: var(--r-card); padding: 16px 18px 15px; position: relative; overflow: hidden; }
+  .kpi-label { font-size: 12px; font-weight: 550; color: var(--text-2); display: flex; align-items: center; gap: 7px; }
+  .kpi-label .dot { width: 6px; height: 6px; }
+  .kpi-value { font-size: 30px; font-weight: 650; letter-spacing: -0.03em; margin-top: 6px; line-height: 1.05; white-space: nowrap; }
+  .kpi-value .unit { font-size: 15px; font-weight: 550; color: var(--text-3); letter-spacing: -0.01em; margin-left: 2px; }
+  .kpi-meta { font-size: 12px; color: var(--text-3); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi.bump .kpi-value { animation: bump 600ms var(--ease); }
+  @keyframes bump { 0% { transform: translateY(0); } 30% { transform: translateY(-2px); color: var(--accent); } 100% { transform: none; } }
 
-  /* ── Configuration — one summary line; editing is a disclosure. ── */
-  .config {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    font-size: var(--fs-meta); color: var(--text-secondary);
-    padding-bottom: 24px;
+  /* ── Cards ── */
+  .card { border-radius: var(--r-card); padding: 18px 20px 20px; min-width: 0; }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; min-height: 28px; }
+  .card-head h2 { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .card-head .count { font-size: 12px; color: var(--text-3); font-weight: 500; }
+  .card-head .grow { flex: 1; }
+
+  /* ── Constellation ── */
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .stage { position: relative; width: 100%; height: 520px; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .stage canvas.front { pointer-events: none; z-index: 3; }
+  .nodes { position: absolute; inset: 0; z-index: 2; }
+  .col-label {
+    position: absolute; top: 0; transform: translateX(-50%);
+    font-size: 10.5px; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-3);
   }
-  .config .val { font-family: var(--mono); color: var(--text); }
-  .config .sep { color: var(--text-muted); }
-  .config .fixed { color: var(--text-muted); }
-  .config .fixed .val { color: var(--text-secondary); }
+  .node { position: absolute; transition: transform 500ms var(--ease), opacity 300ms var(--ease); will-change: transform; }
+
+  .cnode {
+    width: 196px; height: 46px; padding: 0 12px 0 7px;
+    display: flex; align-items: center; gap: 9px;
+    border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--glass-edge);
+    box-shadow: var(--shadow);
+  }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 10px; flex: none;
+    display: grid; place-items: center;
+    font-size: 11.5px; font-weight: 650; color: var(--accent-strong);
+    background: var(--accent-soft);
+    transition: box-shadow 300ms var(--ease);
+  }
+  .cnode[data-live="true"] .avatar { color: #fff; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-ring); }
+  :root[data-theme="dark"] .cnode[data-live="true"] .avatar { color: #062226; }
+  .cnode[data-recent="false"] { opacity: 0.62; }
+  .ctext { min-width: 0; flex: 1; }
+  .cname { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .csub { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cnode[data-live="true"] .csub { color: var(--accent); }
+
+  .qnode {
+    width: 84px; border-radius: 22px;
+    background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: var(--shadow);
+    -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+    display: flex; flex-direction: column; align-items: center; padding-top: 10px;
+  }
+  .qcount { font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
+  .qcap { font-size: 10.5px; color: var(--text-3); }
+
+  .wnode { width: 120px; display: flex; flex-direction: column; align-items: center; gap: 15px; }
+  .wcore {
+    width: 62px; height: 62px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--glass-strong); border: 1.5px solid var(--hairline-strong);
+    box-shadow: var(--shadow);
+    font-size: 14px; font-weight: 650; letter-spacing: -0.01em; color: var(--text-2);
+    transition: border-color 300ms var(--ease), box-shadow 300ms var(--ease), color 300ms var(--ease);
+  }
+  .wnode[data-state="transcribing"] .wcore { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft), 0 0 28px -4px var(--accent-ring); }
+  .wnode[data-state="loading"] .wcore { border-color: var(--load); color: var(--load); box-shadow: 0 0 0 5px var(--load-soft); animation: breathe 1.6s ease-in-out infinite; }
+  .wnode[data-state="model-unavailable"] .wcore { border-style: dashed; border-color: var(--warn); color: var(--warn); }
+  @keyframes breathe { 50% { box-shadow: 0 0 0 9px var(--load-soft); } }
+  .wlabel { text-align: center; line-height: 1.25; }
+  .wstate { font-size: 11.5px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
+  .wnode[data-state="transcribing"] .wstate { color: var(--accent); }
+  .wnode[data-state="loading"] .wstate { color: var(--load); }
+  .wnode[data-state="model-unavailable"] .wstate { color: var(--warn); }
+  .wsub { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+
+  .mnode {
+    width: 274px; height: 44px; padding: 0 12px;
+    display: flex; align-items: center; gap: 10px;
+    border-radius: 13px; background: var(--glass-strong); border: 1px solid var(--glass-edge); box-shadow: var(--shadow);
+  }
+  .mnode .mdot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--idle); }
+  .mnode[data-serving="true"] { border-color: var(--accent-ring); }
+  .mnode[data-serving="true"] .mdot { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .mnode[data-installed="true"][data-serving="false"] .mdot { background: var(--done); }
+  .mnode[data-installed="false"] {
+    height: 30px; background: transparent; box-shadow: none;
+    border: 1px dashed var(--hairline-strong);
+  }
+  .mnode[data-installed="false"] .mdot { background: transparent; border: 1.5px solid var(--idle); width: 8px; height: 8px; }
+  .mnode[data-missing="true"] { border: 1px dashed var(--warn); background: var(--warn-soft); height: 44px; }
+  .mnode[data-missing="true"] .mdot { border-color: var(--warn); }
+  .mtext { min-width: 0; flex: 1; }
+  .mname { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mnode[data-installed="false"] .mname { font-size: 11.5px; font-weight: 500; color: var(--text-3); letter-spacing: -0.005em; }
+  .msub { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mnode { overflow: hidden; }
+  .msize { font-size: 10.5px; color: var(--text-3); white-space: nowrap; margin-left: auto; padding-left: 6px; }
+  .mnode[data-downloading="true"] { border: 1px solid var(--accent-ring); background: var(--glass-strong); height: 44px; }
+  .mnode[data-downloading="true"] .mdot {
+    width: 14px; height: 14px; border: none; margin: 0 -2px;
+    background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--hairline-strong) 0);
+    -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px); mask: radial-gradient(circle, transparent 3.5px, #000 4px);
+  }
+
+  /* ── Panels ── */
+  .grid-2 { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 18px; align-items: start; }
+  .kv-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid var(--hairline); }
+  .kv-row:first-child { border-top: none; }
+  .kv .k { color: var(--text-2); white-space: nowrap; }
+  .kv .v { text-align: right; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kv .v small { font-weight: 450; color: var(--text-3); font-size: 11.5px; margin-left: 6px; }
 
   .btn {
-    appearance: none; cursor: pointer;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-sm);
-    color: var(--text);
-    font-size: var(--fs-meta);
-    padding: 3px 10px;
-    transition: background 120ms ease;
+    appearance: none; cursor: pointer; white-space: nowrap;
+    height: 28px; padding: 0 12px; border-radius: var(--r-control);
+    font-size: 12.5px; font-weight: 550;
+    background: var(--glass-strong); border: 1px solid var(--hairline-strong); color: var(--text);
+    transition: background 140ms var(--ease), border-color 140ms var(--ease);
   }
-  .btn:hover { background: var(--bg-row-hover); }
-  .btn:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+  .btn:hover { background: var(--accent-soft); border-color: var(--accent-ring); }
+  .btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
   .btn[disabled] { opacity: 0.5; cursor: default; }
-  .btn-edit { margin-left: 4px; }
+  .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  :root[data-theme="dark"] .btn.primary { color: #062226; }
+  .btn.primary:hover { background: var(--accent-strong); }
 
-  .config-edit { display: none; padding: 0 0 24px; }
-  .config-edit[data-open="true"] {
-    display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  .form { display: none; gap: 14px; margin-top: 4px; }
+  .form[data-open="true"] { display: grid; }
+  .form-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
+  .form-row label { color: var(--text-2); }
+  .form input[type="number"], .form select {
+    height: 30px; padding: 0 10px; border-radius: 9px;
+    background: var(--glass-strong); border: 1px solid var(--hairline-strong);
   }
-  .field { display: flex; flex-direction: column; gap: 4px; }
-  .field label { font-size: var(--fs-micro); color: var(--text-secondary); }
-  .field input[type="number"] {
-    width: 88px; padding: 4px 8px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-sm);
-    color: var(--text);
-    font-family: var(--mono); font-size: var(--fs-meta);
-  }
-  .field select {
-    padding: 4px 8px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-sm);
-    color: var(--text);
-    font-family: var(--mono); font-size: var(--fs-meta);
-  }
-  .field input:focus-visible, .field select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
-  .field-gpu { flex-direction: row; align-items: center; gap: 7px; padding-bottom: 5px; }
-  .field-gpu input { accent-color: var(--accent); }
-  .config-actions { display: flex; gap: 8px; padding-bottom: 1px; }
-  .config-error { width: 100%; color: var(--accent); font-size: var(--fs-meta); }
-  .config-error:empty { display: none; }
+  .form input[type="number"] { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
+  .form select { max-width: 250px; }
+  .form input:focus-visible, .form select:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .switch { appearance: none; width: 38px; height: 22px; border-radius: 999px; background: var(--hairline-strong); position: relative; cursor: pointer; transition: background 160ms var(--ease); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform 160ms var(--ease); }
+  .switch:checked { background: var(--accent); }
+  .switch:checked::after { transform: translateX(16px); }
+  .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .form-error { color: var(--err); font-size: 12px; }
+  .form-error:empty { display: none; }
 
-  /* ── Live pipeline — label column left, flow content right. ── */
-  .panel-head { display: flex; align-items: baseline; gap: 12px; padding-bottom: 6px; }
-  .panel-head h2 { font-size: var(--fs-body); font-weight: 600; color: var(--text); }
-  .panel-head .grow { flex: 1; }
-  .panel-head .count { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-muted); }
+  .mlist { display: flex; flex-direction: column; }
+  .mrow { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 44px; padding: 7px 0; border-top: 1px solid var(--hairline); }
+  .mrow .btn { height: 26px; padding: 0 11px; font-size: 12px; }
+  .mrow:first-child { border-top: none; }
+  .mrow .mdot { width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 1.5px solid var(--idle); }
+  .mrow[data-installed="true"] .mdot { background: var(--done); border-color: var(--done); }
+  .mrow[data-serving="true"] .mdot { background: var(--accent); border-color: var(--accent); }
+  .mrow-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mrow-name small { font-weight: 450; color: var(--text-3); margin-left: 6px; font-size: 11.5px; }
+  .mrow-size { color: var(--text-3); font-size: 12px; white-space: nowrap; text-align: right; min-width: 58px; }
+  .mrow-status { font-size: 12px; color: var(--text-2); white-space: nowrap; min-width: 112px; text-align: right; }
+  .mrow[data-serving="true"] .mrow-status { color: var(--accent); font-weight: 550; }
+  .mrow-progress { grid-column: 2 / -1; height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; margin-top: -2px; }
+  .mrow-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 400ms var(--ease); }
+  .mrow-error { grid-column: 2 / -1; color: var(--err); font-size: 12px; }
 
-  .lane {
-    display: grid; grid-template-columns: 104px minmax(0, 1fr);
-    gap: 14px; align-items: start;
-    padding: 10px 0;
-    border-top: 1px solid var(--border);
-  }
-  .lane-label { font-size: var(--fs-meta); color: var(--text-secondary); padding-top: 3px; }
-  .lane-label .count { font-family: var(--mono); color: var(--text); }
-  .lane-body { display: flex; flex-wrap: wrap; gap: 8px; min-height: 24px; align-items: center; }
-  .lane-empty { color: var(--text-muted); font-size: var(--fs-micro); }
+  .lifetime { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .life { padding: 2px 18px; border-left: 1px solid var(--hairline); min-width: 0; }
+  .life:first-child { border-left: none; padding-left: 0; }
+  .life-label { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+  .life-value { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; margin-top: 3px; white-space: nowrap; }
+  .life-meta { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+  .life[data-alert="true"] .life-value { color: var(--err); }
 
-  .chip {
-    display: inline-flex; align-items: baseline; gap: 6px;
-    padding: 3px 9px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    font-family: var(--mono); font-size: var(--fs-micro);
-    color: var(--text);
-  }
-  .chip .dim { color: var(--text-muted); }
-  .chip .t { color: var(--text-secondary); }
+  .table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text-3); padding: 0 10px 8px; white-space: nowrap; letter-spacing: 0.01em; }
+  td { padding: 9px 10px; border-top: 1px solid var(--hairline); white-space: nowrap; vertical-align: middle; }
+  th:first-child, td:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  th.n, td.n { text-align: right; }
+  td.n { font-variant-numeric: tabular-nums; color: var(--text-2); }
+  td.n[data-alert="true"] { color: var(--err); font-weight: 600; }
+  td .who { display: flex; align-items: center; gap: 9px; }
+  td .who .avatar { width: 24px; height: 24px; border-radius: 7px; font-size: 10px; }
+  td .who b { font-weight: 600; }
+  td .who small { color: var(--text-3); font-size: 11px; margin-left: 4px; }
+  .tag { display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border-radius: 6px; font-size: 10.5px; font-weight: 600; color: var(--text-2); background: var(--hairline); margin-left: 7px; }
+  .tag.live { color: var(--accent); background: var(--accent-soft); }
+  .tag.whisper { color: var(--load); background: var(--load-soft); }
+  .tag.parakeet { color: var(--done); background: var(--done-soft); }
+  tr.fresh td { animation: fresh 1.6s var(--ease) 1; }
+  @keyframes fresh { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
+  .placeholder { color: var(--text-3); padding: 10px 0 2px; }
 
-  .workers {
-    display: grid; gap: 14px;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    width: 100%;
-  }
-  /* Model tiles. The model's display name is the face and the border is the
-     state: gray at rest, lit in the accent while transcribing, warning while
-     loading, dashed accent when the model file is missing. Clicking a tile
-     expands per-worker detail. */
-  .worker {
-    cursor: pointer;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 4px;
-    min-height: 116px;
-    padding: 20px 16px;
-    background: transparent;
-    border: 1.5px solid rgba(255,255,255,0.32);
-    border-radius: 14px;
-    text-align: center;
-    transition: border-color 160ms ease;
-  }
-  .worker:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
-  .worker[data-state="loading"]           { border-color: var(--warning); }
-  .worker[data-state="transcribing"]      { border-color: var(--accent); }
-  .worker[data-state="model-unavailable"] { border-style: dashed; border-color: var(--accent-border); }
-  .worker-model-name {
-    font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.01em;
-    color: var(--text-secondary);
-    transition: color 160ms ease;
-  }
-  .worker[data-state="transcribing"] .worker-model-name { color: var(--accent); }
-  .worker-status {
-    font-size: var(--fs-micro); color: var(--text-secondary);
-    min-height: 15px;
-  }
-  .worker[data-state="model-unavailable"] .worker-status { color: var(--warning); }
-  .worker-detail {
-    width: 100%; margin-top: 10px; padding-top: 10px;
-    border-top: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 4px;
-    cursor: auto; text-align: left;
-  }
-  .worker-detail[hidden] { display: none; }
-  .worker-detail .drow { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-micro); }
-  .worker-detail .dl { color: var(--text-muted); flex: none; }
-  .worker-detail .dv { font-family: var(--mono); color: var(--text-secondary); text-align: right; overflow-wrap: anywhere; }
+  .foot { display: flex; justify-content: center; gap: 8px; color: var(--text-3); font-size: 11.5px; padding-top: 4px; }
 
-  /* ── Lifetime stat strip — flat columns split by vertical hairlines. ── */
-  .stats {
-    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
-    margin: 30px 0;
+  @media (max-width: 1000px) {
+    .brand-sub { display: none; }
   }
-  .stat { padding: 0 18px; border-left: 1px solid var(--border); }
-  .stat:first-child { padding-left: 0; border-left: none; }
-  .stat-label { color: var(--text-secondary); font-size: var(--fs-meta); }
-  .stat-value { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.01em; margin-top: 4px; }
-  .stat-value .unit { font-size: var(--fs-body); font-weight: 500; color: var(--text-muted); margin-left: 1px; }
-  .stat-meta { color: var(--text-muted); font-size: var(--fs-micro); margin-top: 4px; }
-
+  @media (max-width: 1100px) {
+    .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-2 { grid-template-columns: minmax(0, 1fr); }
+    .lifetime { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 14px; }
+    .life:nth-child(3n+1) { border-left: none; padding-left: 0; }
+  }
   @media (max-width: 640px) {
-    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
-    .stat:nth-child(odd) { padding-left: 0; border-left: none; }
+    .page { padding: 18px 14px 48px; }
+    .topbar { padding: 0 14px; }
+    .host-chip, .brand-sub { display: none; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
-
-  /* ── Tables — hairline-separated rows, no card. ── */
-  .rows { display: flex; flex-direction: column; }
-  .placeholder { padding: 14px 0 4px; color: var(--text-muted); font-size: var(--fs-meta); }
-
-  .clients-row, .clients-headrow {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 118px 52px 52px 52px 52px 84px;
-    gap: 12px; align-items: baseline;
-    padding: 8px 0; border-top: 1px solid var(--border);
-  }
-  .clients-headrow { border-top: none; padding-bottom: 2px; }
-  .clients-headrow span { font-size: var(--fs-micro); color: var(--text-muted); }
-  .clients-headrow .n, .clients-row .n { text-align: right; }
-  .clients-row .addr { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text); }
-  .clients-row .model { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .clients-row .n { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text-secondary); }
-  .clients-row .n[data-active="true"] { color: var(--accent); }
-  .clients-row .seen { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-muted); text-align: right; }
-
-  .section { margin-top: 30px; }
-
-  .row {
-    display: grid;
-    grid-template-columns: 64px 46px 104px minmax(0, 1fr) 150px;
-    align-items: baseline; gap: 12px;
-    padding: 9px 0; border-top: 1px solid var(--border);
-  }
-  .row:first-child { border-top: none; }
-  .row.fresh { animation: fresh 1.2s ease-out 1; }
-  @keyframes fresh { 0% { background: var(--accent-quiet); } 100% { background: transparent; } }
-
-  .row-time     { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); }
-  .row-source   { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-muted); }
-  .row-client   { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row-model    { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row-model .sep { color: var(--text-muted); margin: 0 4px; }
-  .row-duration { font-family: var(--mono); font-size: var(--fs-meta); color: var(--text-secondary); text-align: right; white-space: nowrap; }
-
-  /* Inline notice — recovery copy for states that need an operator action. */
-  .notice {
-    display: none; margin-top: 18px;
-    padding: 11px 13px; border-radius: var(--r-sm);
-    background: var(--accent-quiet); border: 1px solid rgba(255,26,61,0.18);
-    color: var(--text); font-size: var(--fs-meta);
-  }
-  .notice[data-visible="true"] { display: block; }
-  .notice code { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-secondary); }
-  .notice-model { margin: 0 0 24px; }
-  .notice-model[data-visible="true"] { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .notice-model .mono { color: var(--text); }
-
   @media (prefers-reduced-motion: reduce) {
-    .row.fresh { animation: none; }
-    .worker, .worker-model-name, .conn-dot { transition: none; }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
   }
 </style>
 </head>
 <body data-conn="connecting">
   <header class="topbar">
-    <span class="brand">
-      <span class="brand-name">multivoice</span>
-      <span class="brand-host">host</span>
-    </span>
-    <span class="conn" id="conn" data-state="connecting">
-      <span class="conn-dot" aria-hidden="true"></span>
-      <span class="conn-label" id="connLabel" role="status" aria-live="polite">Connecting…</span>
-    </span>
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="#fff"><rect x="1.5" y="5" width="2" height="6" rx="1"/><rect x="5" y="2.5" width="2" height="11" rx="1"/><rect x="8.5" y="4" width="2" height="8" rx="1"/><rect x="12" y="6" width="2" height="4" rx="1"/></svg>
+      </span>
+      <span class="brand-name">Fairspoken</span>
+      <span class="brand-sub">Transcription host</span>
+    </div>
+    <span class="host-chip" id="hostChip" title="Bind address and version">—</span>
+    <div class="top-right">
+      <span class="pill conn" id="conn" data-state="connecting"><span class="dot"></span><span id="connLabel" role="status" aria-live="polite">Connecting…</span></span>
+      <button class="icon-btn" id="themeBtn" type="button" aria-label="Theme"></button>
+    </div>
   </header>
 
   <main class="page">
-    <section class="ident" aria-label="Host identity">
-      <code id="bindAddr">—</code>
-      <span class="sep">·</span>
-      <span id="version">—</span>
-      <span class="sep">·</span>
-      <span>up <span id="uptime">—</span></span>
+    <div class="notice" id="notice" role="status" aria-live="polite"></div>
+
+    <section class="kpis live" aria-label="Live counters">
+      <div class="kpi glass" id="kpiFlight"><div class="kpi-label"><span class="dot" style="background:var(--accent)"></span>In flight</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
+      <div class="kpi glass" id="kpiQueue"><div class="kpi-label">Queue depth</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
+      <div class="kpi glass" id="kpiLatency"><div class="kpi-label">Median latency</div><div class="kpi-value">—</div><div class="kpi-meta">release to text</div></div>
+      <div class="kpi glass" id="kpiThroughput"><div class="kpi-label">Throughput</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
+      <div class="kpi glass" id="kpiWorkers"><div class="kpi-label">Workers busy</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
     </section>
 
-    <section class="config" aria-label="Host configuration" id="configSummary">
-      <span class="fixed" title="Set at startup via environment; restart the host to change.">workers <span class="val" id="cfgWorkers">—</span></span>
-      <span class="sep">·</span>
-      <span class="fixed" title="Set at startup via environment; restart the host to change.">queue <span class="val" id="cfgQueue">—</span></span>
-      <span class="sep">·</span>
-      <span>max streams <span class="val" id="cfgStreams">—</span></span>
-      <span class="sep">·</span>
-      <span>max recording <span class="val" id="cfgRecording">—</span></span>
-      <span class="sep">·</span>
-      <span>GPU <span class="val" id="cfgGpu">—</span></span>
-      <span class="sep">·</span>
-      <span>model <span class="val" id="cfgModel">—</span></span>
-      <button class="btn btn-edit" id="editConfig" aria-expanded="false" aria-controls="configEdit" disabled>Edit</button>
-    </section>
-
-    <section class="config-edit" id="configEdit" aria-label="Edit host configuration">
-      <div class="field">
-        <label for="inStreams">Max active streams</label>
-        <input id="inStreams" type="number" min="1" max="32" step="1">
-      </div>
-      <div class="field">
-        <label for="inRecording">Max recording (seconds)</label>
-        <input id="inRecording" type="number" min="10" max="600" step="10">
-      </div>
-      <!-- One select per worker; the served model is host configuration,
-           assigned per worker when the host runs more than one. -->
-      <div id="modelInputs" style="display: contents;"></div>
-      <div class="field field-gpu">
-        <input id="inGpu" type="checkbox">
-        <label for="inGpu">Use GPU</label>
-      </div>
-      <div class="config-actions">
-        <button class="btn" id="applyConfig">Apply</button>
-        <button class="btn" id="cancelConfig">Cancel</button>
-      </div>
-      <p class="config-error" id="configError" role="alert"></p>
-    </section>
-
-    <!-- Recovery surface for a configured-but-missing model: names the model
-         and offers the download right here instead of requiring the desktop
-         app or a manual file copy on the host machine. -->
-    <div class="notice notice-model" id="modelNotice" role="status" aria-live="polite"></div>
-
-    <section class="live" aria-label="Live pipeline">
-      <div class="panel-head">
-        <h2>Live pipeline</h2>
-      </div>
-      <div class="lane">
-        <div class="lane-label">Receiving <span class="count num" id="streamCount">0</span></div>
-        <div class="lane-body" id="streamLane" role="list" aria-label="Clients currently streaming audio">
-          <span class="lane-empty" id="streamEmpty">Waiting for host…</span>
-        </div>
-      </div>
-      <div class="lane">
-        <div class="lane-label">Queue <span class="count num" id="queueCount">0/—</span></div>
-        <div class="lane-body" id="queueLane" role="list" aria-label="Jobs waiting for a worker">
-          <span class="lane-empty" id="queueEmpty">Waiting for host…</span>
-        </div>
-      </div>
-      <div class="lane">
-        <div class="lane-label">Workers <span class="count num" id="busyCount">0/—</span></div>
-        <div class="lane-body">
-          <div class="workers" id="workers"></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="stats" aria-label="Lifetime metrics">
-      <div class="stat">
-        <div class="stat-label">Transcriptions</div>
-        <div class="stat-value" id="totalValue">0</div>
-        <div class="stat-meta">lifetime</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Audio processed</div>
-        <div class="stat-value" id="audioValue">0<span class="unit">s</span></div>
-        <div class="stat-meta">lifetime</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Avg queue wait</div>
-        <div class="stat-value" id="avgQueueValue">0<span class="unit">ms</span></div>
-        <div class="stat-meta">per started job</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Avg processing</div>
-        <div class="stat-value" id="avgProcValue">0<span class="unit">ms</span></div>
-        <div class="stat-meta">per transcription</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Rejected</div>
-        <div class="stat-value" id="rejectedValue">0</div>
-        <div class="stat-meta">capacity and size limits</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Failed</div>
-        <div class="stat-value" id="failedValue">0</div>
-        <div class="stat-meta">worker errors</div>
-      </div>
-    </section>
-
-    <section class="live section" aria-label="Clients">
-      <div class="panel-head">
-        <h2>Clients</h2>
+    <section class="card glass live" aria-labelledby="constellationTitle">
+      <div class="card-head">
+        <h2 id="constellationTitle">Live constellation</h2>
         <span class="grow"></span>
-        <span class="count" id="clientCount">0</span>
+        <div class="legend" aria-hidden="true">
+          <span><i style="background:var(--flow)"></i>Request</span>
+          <span><i style="background:var(--done)"></i>Completed</span>
+          <span><i style="background:var(--load)"></i>Loading</span>
+          <span><i style="border:1.5px dashed var(--warn)"></i>Model missing</span>
+          <span><i style="background:var(--err)"></i>Error</span>
+        </div>
       </div>
-      <div class="rows" id="clientList">
-        <p class="placeholder" id="clientPlaceholder">No clients yet.</p>
+      <div class="stage" id="stage">
+        <canvas class="back" id="backCanvas" aria-hidden="true"></canvas>
+        <div class="nodes" id="nodes"></div>
+        <canvas class="front" id="frontCanvas" aria-hidden="true"></canvas>
+      </div>
+      <p class="sr-only" id="stageSummary" aria-live="polite"></p>
+    </section>
+
+    <section class="grid-2">
+      <div class="card glass live" aria-labelledby="configTitle">
+        <div class="card-head">
+          <h2 id="configTitle">Configuration</h2>
+          <span class="grow"></span>
+          <button class="btn" id="editConfig" type="button" aria-expanded="false" aria-controls="configForm" disabled>Edit</button>
+        </div>
+        <div class="kv" id="configView"></div>
+        <form class="form" id="configForm" data-open="false" novalidate>
+          <div class="form-row"><label for="inStreams">Max active streams</label><input id="inStreams" type="number" min="1" max="32" step="1"></div>
+          <div class="form-row"><label for="inRecording">Max recording (seconds)</label><input id="inRecording" type="number" min="10" max="600" step="10"></div>
+          <div class="form-row"><label for="inGpu">Use GPU</label><input id="inGpu" class="switch" type="checkbox"></div>
+          <div id="modelInputs" style="display: contents"></div>
+          <p class="form-error" id="configError" role="alert"></p>
+          <div class="form-actions">
+            <button class="btn" id="cancelConfig" type="button">Cancel</button>
+            <button class="btn primary" id="applyConfig" type="submit">Apply</button>
+          </div>
+        </form>
+      </div>
+      <div class="card glass live" aria-labelledby="modelsTitle">
+        <div class="card-head">
+          <h2 id="modelsTitle">Models</h2>
+          <span class="count" id="modelsCount"></span>
+        </div>
+        <div class="mlist" id="modelList"><p class="placeholder">Waiting for host…</p></div>
       </div>
     </section>
 
-    <section class="section" aria-label="Recent transcriptions">
-      <div class="panel-head">
-        <h2>Recent transcriptions</h2>
-        <span class="grow"></span>
-        <span class="count" id="recentCount">0</span>
-      </div>
-      <div class="rows" id="recentList" role="list">
-        <p class="placeholder" id="placeholder">Connecting to host…</p>
+    <section class="card glass live" aria-label="Since start">
+      <div class="lifetime">
+        <div class="life"><div class="life-label">Transcriptions</div><div class="life-value" id="lifeTotal">0</div><div class="life-meta">since start</div></div>
+        <div class="life"><div class="life-label">Audio processed</div><div class="life-value" id="lifeAudio">0s</div><div class="life-meta">since start</div></div>
+        <div class="life"><div class="life-label">Avg queue wait</div><div class="life-value" id="lifeQueue">0 ms</div><div class="life-meta">per started job</div></div>
+        <div class="life"><div class="life-label">Avg processing</div><div class="life-value" id="lifeProc">0 ms</div><div class="life-meta">per transcription</div></div>
+        <div class="life" id="lifeRejectedBox"><div class="life-label">Rejected</div><div class="life-value" id="lifeRejected">0</div><div class="life-meta">over limits</div></div>
+        <div class="life" id="lifeFailedBox"><div class="life-label">Failed</div><div class="life-value" id="lifeFailed">0</div><div class="life-meta">worker errors</div></div>
       </div>
     </section>
 
-    <div class="notice" id="notice" role="status" aria-live="polite">
-      <span id="noticeMessage"></span>
-    </div>
+    <section class="card glass live" aria-labelledby="clientsTitle">
+      <div class="card-head"><h2 id="clientsTitle">Clients</h2><span class="count" id="clientCount"></span></div>
+      <div class="table-wrap" id="clientTable"><p class="placeholder">No clients yet.</p></div>
+    </section>
+
+    <section class="card glass" aria-labelledby="recentTitle">
+      <div class="card-head"><h2 id="recentTitle">Recent transcriptions</h2><span class="count" id="recentCount"></span></div>
+      <div class="table-wrap" id="recentTable"><p class="placeholder">Connecting to host…</p></div>
+    </section>
+
+    <footer class="foot"><span id="footVersion">—</span><span>·</span><span>up <span id="footUptime">—</span></span><span>·</span><span id="footMode">—</span></footer>
   </main>
 
 <script>
 (() => {
-  const params = new URLSearchParams(window.location.search);
+  "use strict";
+  const params = new URLSearchParams(location.search);
   const token = params.get("token") || "";
-
-  const el = {};
-  for (const id of [
-    "conn", "connLabel", "bindAddr", "version", "uptime",
-    "configSummary", "cfgWorkers", "cfgQueue", "cfgStreams", "cfgRecording", "cfgGpu", "cfgModel",
-    "editConfig", "configEdit", "inStreams", "inRecording", "inGpu", "modelInputs",
-    "applyConfig", "cancelConfig", "configError", "modelNotice",
-    "streamCount", "streamLane", "streamEmpty",
-    "queueCount", "queueLane", "queueEmpty",
-    "busyCount", "workers",
-    "totalValue", "audioValue", "avgQueueValue", "avgProcValue",
-    "rejectedValue", "failedValue",
-    "clientCount", "clientList", "clientPlaceholder",
-    "recentCount", "recentList", "placeholder",
-    "notice", "noticeMessage",
-  ]) {
-    el[id] = document.getElementById(id);
-  }
-
-  // Must match the SttModel ids the host accepts. Parakeet is the default
-  // engine; the Whisper ids only resolve on a host built with the `whisper`
-  // Cargo feature.
-  const MODEL_IDS = [
-    "parakeet-tdt-0.6b-v3",
-    "parakeet-tdt-0.6b-v2",
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large-v2",
-    "large-v3",
-    "large-v3-turbo",
-  ];
-  const MODEL_NAMES = {
-    "parakeet-tdt-0.6b-v3": "Parakeet TDT 0.6B v3",
-    "parakeet-tdt-0.6b-v2": "Parakeet TDT 0.6B v2 (English)",
-    "tiny": "Whisper Tiny",
-    "base": "Whisper Base",
-    "small": "Whisper Small",
-    "medium": "Whisper Medium",
-    "large-v2": "Whisper Large V2",
-    "large-v3": "Whisper Large V3",
-    "large-v3-turbo": "Whisper V3 Turbo",
-  };
-  const modelDisplayName = (id) => MODEL_NAMES[id] || id || "No model";
-
-  let seenIds = new Set();
-  let loadedOnce = false;
-  let connState = "";
-  let lastStats = null;
-  let lastFetchAt = 0;
-  let editing = false;
-  let workerEls = [];
-  let modelSelects = [];
-  // Surfaces a failed download-start (401/409/network) until the next attempt.
-  let downloadError = "";
-  // Text nodes whose value advances between polls (waits, elapsed, last seen).
-  let tickers = [];
-
-  const pad2 = n => String(n).padStart(2, "0");
-
-  const formatUptime = (totalSeconds) => {
-    const s = Math.max(0, Math.floor(totalSeconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return `${h}h ${pad2(m)}m`;
-    if (m > 0) return `${m}m ${pad2(sec)}s`;
-    return `${sec}s`;
+  const DEMO = params.get("demo") === "1";
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const $ = (id) => document.getElementById(id);
+  const h = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
   };
 
-  const formatTotalAudio = (totalSeconds) => {
-    const s = Math.max(0, totalSeconds);
-    if (s >= 3600) {
-      const h = Math.floor(s / 3600);
-      const m = Math.floor((s % 3600) / 60);
-      return { value: `${h}h ${pad2(m)}m`, unit: "" };
-    }
-    if (s >= 60) {
-      const m = Math.floor(s / 60);
-      const sec = Math.round(s % 60);
-      return { value: `${m}m ${pad2(sec)}s`, unit: "" };
-    }
-    return { value: s.toFixed(1), unit: "s" };
+  // Fallback names for hosts that predate the stats `models` field.
+  const FALLBACK_MODELS = {
+    "parakeet-tdt-0.6b-v3": ["Parakeet TDT 0.6B v3", "NVIDIA"],
+    "parakeet-ultra": ["Parakeet Ultra 0.6B", "Moondream"],
+    "parakeet-tdt-0.6b-v2": ["Parakeet TDT 0.6B v2 (English)", "NVIDIA"],
+    "tiny": ["Whisper Tiny", "OpenAI"], "base": ["Whisper Base", "OpenAI"],
+    "small": ["Whisper Small", "OpenAI"], "medium": ["Whisper Medium", "OpenAI"],
+    "large-v2": ["Whisper Large v2", "OpenAI"], "large-v3": ["Whisper Large v3", "OpenAI"],
+    "large-v3-turbo": ["Whisper Large v3 Turbo", "OpenAI"],
   };
+  const EVENT_TYPES = ["stream_started", "stream_finished", "job_queued", "job_started",
+    "job_completed", "job_failed", "worker_state", "model_download"];
+  const STATE_LABEL = { idle: "Idle", loading: "Loading model", transcribing: "Transcribing", "model-unavailable": "Model missing" };
 
-  const formatDuration = (sec) => {
-    const s = Math.max(0, sec);
-    if (s >= 60) {
-      const m = Math.floor(s / 60);
-      const r = (s - m * 60).toFixed(1);
-      return `${m}m ${r}s`;
-    }
-    return `${s.toFixed(1)}s`;
-  };
-
-  const formatMillis = (ms) => {
-    const value = Math.max(0, Math.round(ms));
-    if (value >= 1000) return `${(value / 1000).toFixed(1)}s`;
-    return `${value}ms`;
-  };
-
-  const formatElapsed = (ms) => {
-    const s = Math.max(0, Math.floor(ms / 1000));
-    if (s >= 60) return `${Math.floor(s / 60)}m ${pad2(s % 60)}s`;
+  /* ── Formatting ── */
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const fmtUptime = (sec) => {
+    const s = Math.max(0, Math.floor(sec));
+    const d = Math.floor(s / 86400), hh = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${hh}h`;
+    if (hh > 0) return `${hh}h ${pad2(m)}m`;
+    if (m > 0) return `${m}m ${pad2(s % 60)}s`;
     return `${s}s`;
   };
-
-  const formatAgo = (ms) => {
+  // Audio lengths: "7.9s", "1m 01s", "2h 05m" — never "1m 1.0s".
+  const fmtAudio = (sec) => {
+    const s = Math.max(0, sec || 0);
+    if (s < 60) return `${s.toFixed(1)}s`;
+    const whole = Math.round(s);
+    if (whole < 3600) return `${Math.floor(whole / 60)}m ${pad2(whole % 60)}s`;
+    return `${Math.floor(whole / 3600)}h ${pad2(Math.floor((whole % 3600) / 60))}m`;
+  };
+  const fmtMs = (ms) => {
+    const v = Math.max(0, Math.round(ms || 0));
+    if (v < 1000) return `${v} ms`;
+    if (v < 60000) return `${(v / 1000).toFixed(v < 10000 ? 2 : 1)} s`;
+    return fmtAudio(v / 1000);
+  };
+  const fmtClockElapsed = (ms) => {
     const s = Math.max(0, Math.floor(ms / 1000));
-    if (s < 5) return "now";
+    return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
+  };
+  const fmtAgo = (ms) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 5) return "just now";
     if (s < 60) return `${s}s ago`;
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
   };
-
-  const formatClock = (ms) => {
+  const fmtClock = (ms) => {
     if (!ms) return "—";
     const d = new Date(ms);
     return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   };
-
-  const sinceFetch = () => (lastFetchAt ? Date.now() - lastFetchAt : 0);
-
-  // Registers a text node that displays a time offset growing between polls.
-  // kind "elapsed" renders a duration from a base of ms-at-fetch; kind "ago"
-  // renders relative time from an epoch timestamp.
-  const addTicker = (node, kind, base) => {
-    tickers.push({ node, kind, base });
-    updateTicker(tickers[tickers.length - 1]);
+  const fmtBytes = (b) => {
+    if (!b) return "—";
+    if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
+    return `${Math.round(b / 1e6)} MB`;
   };
-  const updateTicker = (t) => {
-    if (t.kind === "elapsed") t.node.textContent = formatElapsed(t.base + sinceFetch());
-    else t.node.textContent = formatAgo(Date.now() - t.base);
+  // Clients are peer IPs or tailnet logins; show the readable part.
+  const clientName = (addr) => {
+    if (!addr) return "Unknown client";
+    const at = addr.indexOf("@");
+    return at > 0 ? addr.slice(0, at) : addr;
+  };
+  const initials = (addr) => {
+    const name = clientName(addr);
+    if (/^[\d.:]+$/.test(name)) return name.split(/[.:]/).filter(Boolean).pop().slice(-3);
+    const parts = name.replace(/^(dr|nurse|hca)[._-]/i, (m) => m).split(/[._\-\s]+/).filter(Boolean);
+    return ((parts[0] || "?")[0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+  };
+  const median = (values) => {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+  const percentile = (values, p) => {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
   };
 
-  // Connection state drives the single status indicator. Recovery copy that
-  // needs an operator action lives in the inline notice; the topbar label is
-  // the short canonical state, so the two never restate the same value.
-  const setConnection = (state, label) => {
-    if (state !== connState) {
-      el.conn.setAttribute("data-state", state);
-      document.body.setAttribute("data-conn", state);
-      el.connLabel.textContent = label;
-      connState = state;
+  /* ── State ── */
+  // `stats` mirrors /v1/stats; events patch it between authoritative fetches.
+  // Relative times (elapsedMs, waitingMs) are converted to absolute start
+  // times on arrival so displays advance smoothly without refetching.
+  const S = { stats: null, conn: "", editing: false, downloadError: "", seenRecent: new Set(), loadedOnce: false };
+
+  const modelById = (id) => {
+    const listed = S.stats && (S.stats.models || []).find((m) => m.id === id);
+    if (listed) return listed;
+    const fb = FALLBACK_MODELS[id];
+    return { id, name: fb ? fb[0] : id || "—", publisher: fb ? fb[1] : "", sizeBytes: 0, installed: false, assignedWorkers: [] };
+  };
+  const modelName = (id) => (id === "mixed" ? "Mixed models" : modelById(id).name);
+  const engineOf = (record) => record.backend || (FALLBACK_MODELS[record.model] && FALLBACK_MODELS[record.model][1] === "OpenAI" ? "whisper" : "parakeet");
+
+  const normalise = (stats) => {
+    const now = Date.now();
+    stats.receivedAt = now;
+    for (const w of stats.workers || []) if (w.job) w.job.startedAt = now - (w.job.elapsedMs || 0);
+    for (const q of stats.queue || []) q.enqueuedAt = now - (q.waitingMs || 0);
+    for (const st of stats.streams || []) st.startedAt = now - (st.elapsedMs || 0);
+    stats.startedAt = now - (stats.uptimeSeconds || 0) * 1000;
+    if (!Array.isArray(stats.models) || !stats.models.length) {
+      // Older hosts: synthesise the catalogue from worker assignments.
+      const ids = new Set(Object.keys(FALLBACK_MODELS));
+      stats.models = [...ids].map((id) => ({
+        id, name: FALLBACK_MODELS[id][0], publisher: FALLBACK_MODELS[id][1], sizeBytes: 0,
+        installed: (stats.workers || []).some((w) => w.assignedModel === id && w.modelAvailable),
+        assignedWorkers: (stats.workers || []).filter((w) => w.assignedModel === id).map((w) => w.index),
+      }));
     }
-    const showNotice = state === "unauthorized";
-    el.notice.setAttribute("data-visible", showNotice ? "true" : "false");
-    if (state === "unauthorized") {
-      el.noticeMessage.innerHTML =
-        'Unauthorized. Append <code>?token=…</code> to the URL with the host token.';
-    }
+    return stats;
   };
 
-  /* ── Configuration ── */
-
-  const renderConfig = (stats) => {
-    el.cfgWorkers.textContent = String(stats.workerCount ?? "—");
-    el.cfgQueue.textContent = String(stats.queueCapacity ?? "—");
-    el.cfgStreams.textContent = String(stats.maxActiveStreams ?? "—");
-    el.cfgRecording.textContent = `${stats.maxRecordingSeconds ?? "—"}s`;
-    el.cfgGpu.textContent = stats.useGpu ? "on" : "off";
-    el.cfgModel.textContent = stats.model || "—";
+  /* ── Connection status ── */
+  const setConn = (state, label) => {
+    if (state === S.conn && $("connLabel").textContent === label) return;
+    S.conn = state;
+    $("conn").dataset.state = state;
+    document.body.dataset.conn = state;
+    $("connLabel").textContent = label;
+    $("footMode").textContent = state === "live" ? "live events" : state === "polling" ? "polling every 2s" : state === "demo" ? "demo data" : label.toLowerCase();
+    renderNotice();
   };
 
-  // The served model is host configuration, assigned per worker: one select
-  // when the host runs a single worker, one labelled select per worker
-  // otherwise so mixed-model serving stays a deliberate operator decision.
-  const buildModelInputs = () => {
-    const workers = (lastStats && lastStats.workers) || [];
-    modelSelects = [];
-    el.modelInputs.replaceChildren();
-    workers.forEach((worker, i) => {
-      const field = document.createElement("div");
-      field.className = "field";
-      const label = document.createElement("label");
-      label.setAttribute("for", `inModel${i}`);
-      label.textContent = workers.length > 1 ? `Worker ${i} model` : "Model";
-      const select = document.createElement("select");
-      select.id = `inModel${i}`;
-      for (const id of MODEL_IDS) {
-        const option = document.createElement("option");
-        option.value = id;
-        option.textContent = id;
-        select.appendChild(option);
+  /* ── Theme ── */
+  const THEME_ICONS = {
+    system: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor"/></svg>',
+    light: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></svg>',
+    dark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5 5.8 5.8 0 1 0 13.5 9.6z"/></svg>',
+  };
+  const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+  const applyTheme = () => {
+    const pref = document.documentElement.dataset.themePref || "system";
+    const dark = pref === "dark" || (pref === "system" && darkQuery.matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    $("themeBtn").innerHTML = THEME_ICONS[pref];
+    $("themeBtn").setAttribute("aria-label", `Theme: ${pref}. Switch theme`);
+    $("themeBtn").title = `Theme: ${pref}`;
+    viz.readColors();
+    viz.request();
+  };
+  $("themeBtn").addEventListener("click", () => {
+    const order = ["system", "light", "dark"];
+    const next = order[(order.indexOf(document.documentElement.dataset.themePref || "system") + 1) % 3];
+    document.documentElement.dataset.themePref = next;
+    localStorage.setItem("mv-host-theme", next);
+    applyTheme();
+  });
+  darkQuery.addEventListener("change", applyTheme);
+
+  /* ══════════════════ Constellation ══════════════════ */
+  const viz = (() => {
+    const stage = $("stage"), nodesEl = $("nodes");
+    const back = $("backCanvas"), front = $("frontCanvas");
+    const bctx = back.getContext("2d"), fctx = front.getContext("2d");
+    let W = 0, H = 0, dpr = 1;
+    let colors = {};
+    const nodes = new Map(); // key -> { el, x, y, w, h, kind }
+    let colLabels = [];
+    const jobs = new Map(); // jobId -> particle state
+    const effects = []; // ripples / bursts
+    let queueOrder = [];
+    let clientOrder = [];
+    let raf = 0, lastFrame = 0;
+    const MAX_CLIENT_NODES = 8;
+    const OTHERS = "client:\u0000others";
+
+    const readColors = () => {
+      const cs = getComputedStyle(document.documentElement);
+      for (const name of ["accent", "flow", "done", "load", "warn", "err", "idle", "link", "text-3", "hairline-strong"]) {
+        colors[name] = cs.getPropertyValue(`--${name}`).trim();
       }
-      select.value = worker.assignedModel || "base";
-      field.append(label, select);
-      el.modelInputs.appendChild(field);
-      modelSelects.push(select);
+      colors.dark = document.documentElement.dataset.theme === "dark";
+    };
+
+    const clientKey = (addr) => {
+      const key = `client:${addr || ""}`;
+      return nodes.has(key) ? key : nodes.has(OTHERS) ? OTHERS : null;
+    };
+
+    // Picks which clients get a node: live streams first, then whoever is
+    // running or queued, then the most recently seen.
+    const visibleClients = (stats) => {
+      const ranked = new Map();
+      const bump = (addr, score) => {
+        const key = addr || "";
+        ranked.set(key, Math.max(ranked.get(key) || 0, score));
+      };
+      for (const c of stats.clients || []) bump(c.address, (c.lastSeenMs || 0) / 1e13);
+      for (const q of stats.queue || []) bump(q.client, 2);
+      for (const w of stats.workers || []) if (w.job) bump(w.job.client, 2);
+      for (const st of stats.streams || []) bump(st.client, 3);
+      for (const j of jobs.values()) bump(j.client, 1.5);
+      // Nodes keep their slot: a client joins at the end and only leaves
+      // when it drops out of the most relevant set, so activity never
+      // reshuffles the column.
+      const byScore = [...ranked.entries()].sort((a, b) => b[1] - a[1]).map(([addr]) => addr);
+      const limit = byScore.length <= MAX_CLIENT_NODES ? MAX_CLIENT_NODES : MAX_CLIENT_NODES - 1;
+      const top = new Set(byScore.slice(0, limit));
+      clientOrder = clientOrder.filter((addr) => top.has(addr));
+      for (const addr of byScore) if (top.has(addr) && !clientOrder.includes(addr)) clientOrder.push(addr);
+      return { shown: clientOrder, hidden: byScore.length - clientOrder.length };
+    };
+
+    const ensureNode = (key, kind, build) => {
+      let n = nodes.get(key);
+      if (!n) {
+        const el = build();
+        el.classList.add("node");
+        el.style.opacity = "0";
+        nodesEl.appendChild(el);
+        n = { el, kind, x: 0, y: 0, w: 0, h: 0, fresh: true };
+        nodes.set(key, n);
+      }
+      n.alive = true;
+      return n;
+    };
+    const place = (n, x, y, w, hgt) => {
+      n.x = x; n.y = y; n.w = w; n.h = hgt;
+      if (n.kind === "client" || n.kind === "model") n.el.style.width = `${w}px`;
+      const tx = Math.round(x - w / 2), ty = Math.round(y - hgt / 2);
+      if (n.fresh) {
+        n.el.style.transition = "none";
+        n.el.style.transform = `translate(${tx}px, ${ty}px)`;
+        void n.el.offsetWidth;
+        n.el.style.transition = "";
+        n.fresh = false;
+      } else {
+        n.el.style.transform = `translate(${tx}px, ${ty}px)`;
+      }
+      n.el.style.opacity = "1";
+    };
+
+    const columns = () => {
+      const narrow = W < 900;
+      const leftOut = narrow ? 150 : 214;
+      const rightIn = W - (narrow ? 216 : 292);
+      const span = rightIn - leftOut;
+      return {
+        client: leftOut - (narrow ? 75 : 98) - 2,
+        queue: leftOut + span * 0.30,
+        worker: leftOut + span * 0.70,
+        model: rightIn + (narrow ? 104 : 137),
+        narrow,
+      };
+    };
+
+    // Builds/updates every node from a stats snapshot and positions them.
+    const layout = () => {
+      const stats = S.stats;
+      if (!stats) return;
+      W = stage.clientWidth;
+      for (const n of nodes.values()) n.alive = false;
+      const cols = columns();
+      const now = Date.now();
+
+      // Models: serving/assigned first, then installed, then the rest.
+      const models = [...(stats.models || [])].sort((a, b) => {
+        const rank = (m) => (m.assignedWorkers.length ? 0 : m.installed ? 1 : 2);
+        return rank(a) - rank(b);
+      });
+      const download = stats.modelDownload;
+      let modelHeights = models.map((m) => (m.installed || m.assignedWorkers.length || (download && download.model === m.id && download.stage !== "ready" && download.stage !== "error") ? 44 : 30));
+      const modelGap = (m) => (m.installed ? 8 : 6);
+      let total = modelHeights.reduce((a, b) => a + b, 0) + models.reduce((a, m) => a + modelGap(m), 0);
+      const workerCount = (stats.workers || []).length;
+      const { shown, hidden } = visibleClients(stats);
+      const clientSlots = shown.length + (hidden ? 1 : 0);
+      H = Math.max(440, total + 70, clientSlots * 58 + 70, workerCount * 112 + 60);
+      stage.style.height = `${H}px`;
+      const top = 34;
+
+      // Column labels.
+      if (!colLabels.length) {
+        colLabels = ["Clients", "Queue", "Workers", "Models"].map((t) => {
+          const el = h("div", "col-label", t);
+          nodesEl.appendChild(el);
+          return el;
+        });
+      }
+      [cols.client, cols.queue, cols.worker, cols.model].forEach((x, i) => { colLabels[i].style.left = `${x}px`; });
+
+      // Models column.
+      let y = top + (H - top - total) / 2;
+      models.forEach((m, i) => {
+        const n = ensureNode(`model:${m.id}`, "model", () => {
+          const el = h("div", "mnode");
+          el.append(h("span", "mdot"), (() => { const t = h("div", "mtext"); t.append(h("div", "mname"), h("div", "msub")); return t; })(), h("span", "msize"));
+          return el;
+        });
+        const serving = (stats.workers || []).some((w) => w.assignedModel === m.id && w.loadedModel === m.id);
+        const assigned = m.assignedWorkers.length > 0;
+        const downloading = download && download.model === m.id && download.stage !== "ready" && download.stage !== "error";
+        n.el.dataset.installed = String(m.installed || Boolean(downloading));
+        n.el.dataset.downloading = String(Boolean(downloading));
+        if (downloading) n.el.style.setProperty("--pct", download.percentage);
+        n.el.dataset.serving = String(serving);
+        n.el.dataset.missing = String(assigned && !m.installed && !downloading);
+        n.el.querySelector(".mname").textContent = m.name;
+        const sub = n.el.querySelector(".msub");
+        const hgt = modelHeights[i];
+        sub.style.display = hgt > 30 ? "" : "none";
+        const workersLabel = m.assignedWorkers.map((w) => "W" + w).join(" ");
+        sub.textContent = downloading ? `Downloading ${download.percentage}%${cols.narrow ? "" : ` of ${fmtBytes(m.sizeBytes)}`}`
+          : assigned && !m.installed ? `Not installed · ${workersLabel}`
+          : [m.publisher, fmtBytes(m.sizeBytes), workersLabel].filter(Boolean).join(" · ");
+        // Tall pills carry the size in their sub-line, leaving the full
+        // width for the model name; compact (not installed) pills show it
+        // on the right.
+        n.el.querySelector(".msize").textContent = hgt > 30 ? "" : fmtBytes(m.sizeBytes);
+        n.el.title = `${m.name} — ${m.publisher}${m.installed ? ", installed" : ", not installed"} (${fmtBytes(m.sizeBytes)})`;
+        n.model = m;
+        place(n, cols.model, y + hgt / 2, cols.narrow ? 208 : 274, hgt);
+        y += hgt + modelGap(m);
+      });
+
+      // Workers column, spread around the vertical centre.
+      const wSpacing = Math.min(124, (H - top - 30) / Math.max(1, workerCount));
+      const wTop = top + (H - top - wSpacing * workerCount) / 2 + wSpacing / 2;
+      (stats.workers || []).forEach((w, i) => {
+        const n = ensureNode(`worker:${w.index}`, "worker", () => {
+          const el = h("div", "wnode");
+          const label = h("div", "wlabel");
+          label.append(h("div", "wstate"), h("div", "wsub"));
+          el.append(h("div", "wcore"), label);
+          return el;
+        });
+        const state = w.state || "idle";
+        n.el.dataset.state = state;
+        n.el.querySelector(".wcore").textContent = `W${w.index}`;
+        n.el.querySelector(".wstate").textContent = STATE_LABEL[state] || state;
+        const sub = n.el.querySelector(".wsub");
+        if (w.job && state === "transcribing") sub.textContent = `${clientName(w.job.client)} · ${fmtClockElapsed(now - w.job.startedAt)}`;
+        else if (state === "model-unavailable") sub.textContent = "download to serve";
+        else sub.textContent = `${w.completedJobs || 0} jobs done`;
+        n.worker = w;
+        place(n, cols.worker, wTop + i * wSpacing + 14, 120, 106);
+        n.cy = n.y - 53 + 31; // centre of the circular core
+      });
+
+      // Queue hub.
+      const qn = ensureNode("queue", "queue", () => {
+        const el = h("div", "qnode");
+        el.append(h("div", "qcount"), h("div", "qcap"));
+        return el;
+      });
+      const cap = stats.queueCapacity || 0;
+      const slots = Math.max(1, Math.min(cap || 1, 10));
+      const qh = 64 + slots * 17;
+      qn.el.style.height = `${qh}px`;
+      qn.el.querySelector(".qcount").textContent = String((stats.queue || []).length);
+      qn.el.querySelector(".qcap").textContent = `of ${cap}`;
+      qn.slots = slots;
+      place(qn, cols.queue, top + (H - top) / 2, 84, qh);
+
+      // Clients column.
+      const cSpacing = Math.min(64, (H - top - 20) / Math.max(1, clientSlots));
+      const cTop = top + (H - top - cSpacing * clientSlots) / 2 + cSpacing / 2;
+      const streamsByClient = new Map();
+      for (const st of stats.streams || []) streamsByClient.set(st.client || "", st);
+      const clientStats = new Map((stats.clients || []).map((c) => [c.address, c]));
+      shown.forEach((addr, i) => {
+        const n = ensureNode(`client:${addr}`, "client", () => {
+          const el = h("div", "cnode");
+          const t = h("div", "ctext");
+          t.append(h("div", "cname"), h("div", "csub"));
+          el.append(h("div", "avatar"), t);
+          return el;
+        });
+        const stream = streamsByClient.get(addr);
+        const c = clientStats.get(addr);
+        const running = (stats.workers || []).some((w) => w.job && (w.job.client || "") === addr);
+        const waiting = (stats.queue || []).some((q) => (q.client || "") === addr);
+        const working = running || waiting;
+        n.el.dataset.live = String(Boolean(stream || working));
+        n.el.dataset.recent = String(Boolean(stream || working || (c && now - c.lastSeenMs < 15 * 60000)));
+        n.el.querySelector(".avatar").textContent = initials(addr);
+        n.el.querySelector(".cname").textContent = clientName(addr);
+        n.el.querySelector(".csub").textContent = stream ? `Dictating · ${fmtClockElapsed(now - stream.startedAt)}`
+          : running ? "Transcribing…"
+          : waiting ? "Waiting in queue"
+          : c ? `${c.completed} done · ${fmtAgo(now - c.lastSeenMs)}` : "—";
+        n.el.title = addr || "Unknown client";
+        n.addr = addr;
+        place(n, cols.client, cTop + i * cSpacing, cols.narrow ? 150 : 196, 46);
+      });
+      if (hidden) {
+        const n = ensureNode(OTHERS, "client", () => {
+          const el = h("div", "cnode");
+          const t = h("div", "ctext");
+          t.append(h("div", "cname"), h("div", "csub"));
+          el.append(h("div", "avatar"), t);
+          return el;
+        });
+        n.el.querySelector(".avatar").textContent = `+${hidden}`;
+        n.el.querySelector(".cname").textContent = `${hidden} more client${hidden === 1 ? "" : "s"}`;
+        n.el.querySelector(".csub").textContent = "less recent";
+        n.el.dataset.recent = "false";
+        place(n, cols.client, cTop + shown.length * cSpacing, cols.narrow ? 150 : 196, 46);
+      }
+
+      for (const [key, n] of nodes) {
+        if (!n.alive) { n.el.remove(); nodes.delete(key); }
+      }
+      sizeCanvases();
+      $("stageSummary").textContent = `${shown.length} clients, ${(stats.queue || []).length} queued, ${(stats.workers || []).filter((w) => w.job).length} of ${workerCount} workers busy.`;
+      request();
+    };
+
+    const sizeCanvases = () => {
+      dpr = Math.min(2, window.devicePixelRatio || 1);
+      for (const c of [back, front]) {
+        const tw = Math.round(W * dpr), th = Math.round(H * dpr);
+        if (c.width !== tw || c.height !== th) { c.width = tw; c.height = th; }
+      }
+    };
+
+    /* Geometry helpers */
+    const anchor = (key, side) => {
+      const n = nodes.get(key);
+      if (!n) return null;
+      if (n.kind === "worker") return { x: n.x + (side === "in" ? -33 : side === "out" ? 33 : 0), y: n.cy };
+      if (side === "in") return { x: n.x - n.w / 2, y: n.y };
+      if (side === "out") return { x: n.x + n.w / 2, y: n.y };
+      return { x: n.x, y: n.y };
+    };
+    const queueSlot = (i) => {
+      const q = nodes.get("queue");
+      if (!q) return { x: W / 2, y: H / 2 };
+      const top = q.y - q.h / 2 + 56;
+      const idx = Math.min(i, q.slots - 1);
+      return { x: q.x, y: top + idx * 17 + 6 };
+    };
+    const bez = (a, b, t, bow = 0) => {
+      const dx = (b.x - a.x) * 0.5;
+      const c1 = { x: a.x + dx, y: a.y + bow }, c2 = { x: b.x - dx, y: b.y + bow };
+      const u = 1 - t;
+      return {
+        x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
+        y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
+      };
+    };
+    const strokeCurve = (ctx, a, b, bow = 0) => {
+      const dx = (b.x - a.x) * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.bezierCurveTo(a.x + dx, a.y + bow, b.x - dx, b.y + bow, b.x, b.y);
+      ctx.stroke();
+    };
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const alpha = (color, a) => {
+      // CSS hex -> rgba with alpha.
+      const m = /^#([0-9a-f]{6})$/i.exec(color);
+      if (!m) return color;
+      const v = parseInt(m[1], 16);
+      return `rgba(${v >> 16}, ${(v >> 8) & 255}, ${v & 255}, ${a})`;
+    };
+
+    /* Job lifecycle (driven by events) */
+    const motion = () => !reduceMotion.matches;
+    const travel = (job, stage, dur) => {
+      job.from = job.pos ? { ...job.pos } : null;
+      job.stage = stage;
+      job.t0 = performance.now();
+      job.dur = motion() ? dur : 0;
+    };
+    const syncQueueOrder = () => {
+      queueOrder = (S.stats && S.stats.queue || []).map((q) => q.id);
+    };
+    const onQueued = (d) => {
+      const job = { id: d.jobId, client: d.client || "", source: d.source, stage: "toQueue", pos: null, born: performance.now() };
+      jobs.set(d.jobId, job);
+      travel(job, "toQueue", 700);
+      request();
+    };
+    const onStarted = (d) => {
+      let job = jobs.get(d.jobId);
+      if (!job) {
+        job = { id: d.jobId, client: d.client || "", source: "", pos: anchor("queue") };
+        jobs.set(d.jobId, job);
+      }
+      job.worker = d.worker;
+      job.phase = Math.random() * Math.PI * 2;
+      travel(job, "toWorker", 600);
+      request();
+    };
+    const onCompleted = (d) => {
+      const job = jobs.get(d.jobId) || { id: d.jobId, client: d.client || "", worker: d.worker };
+      job.worker = d.worker;
+      job.client = d.client || job.client;
+      jobs.set(d.jobId, job);
+      travel(job, "return", 900);
+      if (!motion()) finish(job, true);
+      request();
+    };
+    const onFailed = (d) => {
+      const job = jobs.get(d.jobId);
+      const at = job && job.pos ? job.pos : d.worker != null ? anchor(`worker:${d.worker}`) : anchor("queue");
+      if (at) effects.push({ x: at.x, y: at.y, color: colors.err, t0: performance.now(), dur: 900, kind: "burst" });
+      jobs.delete(d.jobId);
+      request();
+    };
+    const finish = (job, completed) => {
+      const key = clientKey(job.client);
+      const at = key ? anchor(key, "out") : null;
+      if (at && completed) effects.push({ x: at.x, y: at.y, color: colors.done, t0: performance.now(), dur: 900, kind: "ripple" });
+      jobs.delete(job.id);
+    };
+
+    // Reconciles particles with an authoritative snapshot: jobs the host
+    // still holds get a marker (without travel), and markers for jobs that
+    // ended unseen are dropped.
+    const reconcile = (stats) => {
+      const live = new Set();
+      (stats.queue || []).forEach((q) => {
+        live.add(q.id);
+        if (!jobs.has(q.id)) jobs.set(q.id, { id: q.id, client: q.client || "", source: q.source, stage: "queued", t0: 0, dur: 0 });
+      });
+      for (const w of stats.workers || []) {
+        if (!w.job || w.job.id == null) continue;
+        live.add(w.job.id);
+        const j = jobs.get(w.job.id);
+        if (!j) jobs.set(w.job.id, { id: w.job.id, client: w.job.client || "", source: w.job.source, worker: w.index, stage: "working", phase: Math.random() * 6.28, t0: 0, dur: 0 });
+        else if (j.stage === "queued" || j.stage === "toQueue") { j.worker = w.index; j.phase = j.phase || 0; travel(j, "toWorker", 600); }
+      }
+      const now = performance.now();
+      for (const [id, j] of jobs) {
+        if (live.has(id) || j.stage === "return") continue;
+        if (now - (j.t0 || 0) > 1500) jobs.delete(id);
+      }
+      syncQueueOrder();
+    };
+
+    /* Drawing */
+    const position = (job, now) => {
+      const p = job.dur ? Math.min(1, (now - job.t0) / job.dur) : 1;
+      const e = ease(p);
+      const ck = clientKey(job.client);
+      const cOut = ck ? anchor(ck, "out") : { x: 0, y: H / 2 };
+      const slot = Math.max(0, queueOrder.indexOf(job.id));
+      switch (job.stage) {
+        case "toQueue": {
+          const target = queueSlot(slot);
+          if (p >= 1) job.stage = "queued";
+          return { pos: bez(cOut, target, e), p, moving: p < 1, color: colors.flow };
+        }
+        case "queued": {
+          const s = queueSlot(slot);
+          return { pos: { x: s.x + Math.sin(now / 500 + job.id) * 1.2, y: s.y }, p: 1, moving: false, color: colors.flow };
+        }
+        case "toWorker":
+        case "working": {
+          const wn = nodes.get(`worker:${job.worker}`);
+          if (!wn) return null;
+          const ang = (job.phase || 0) + now / 700;
+          const orbit = { x: wn.x + Math.cos(ang) * 39, y: wn.cy + Math.sin(ang) * 39 };
+          if (job.stage === "toWorker") {
+            const from = job.from || anchor("queue");
+            if (p >= 1) job.stage = "working";
+            return { pos: bez(from, orbit, e), p, moving: p < 1, color: colors.flow };
+          }
+          return { pos: motion() ? orbit : { x: wn.x + 39, y: wn.cy }, p: 1, moving: false, color: colors.flow, orbit: true };
+        }
+        case "return": {
+          const wn = nodes.get(`worker:${job.worker}`);
+          const from = wn ? { x: wn.x - 33, y: wn.cy } : anchor("queue");
+          if (p >= 1) { finish(job, true); return null; }
+          return { pos: bez(from, cOut, e, 34), from, to: cOut, p, moving: true, color: colors.done, ret: true };
+        }
+        default:
+          return null;
+      }
+    };
+
+    const glowDot = (ctx, x, y, color, r, glow) => {
+      if (glow) {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 4.2);
+        g.addColorStop(0, alpha(color, colors.dark ? 0.6 : 0.45));
+        g.addColorStop(1, alpha(color, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r * 4.2, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = colors.dark ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.9)";
+      ctx.beginPath(); ctx.arc(x, y, r * 0.42, 0, Math.PI * 2); ctx.fill();
+    };
+
+    const drawBack = (now) => {
+      const ctx = bctx;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      const stats = S.stats;
+      if (!stats) return;
+      // A faint, fixed star field gives the stage depth without motion.
+      ctx.fillStyle = colors["text-3"];
+      for (let i = 0; i < 90; i++) {
+        const x = ((i * 9301 + 49297) % 233280) / 233280 * W;
+        const y = ((i * 7919 + 1237) % 104729) / 104729 * H;
+        ctx.globalAlpha = 0.10 + ((i * 37) % 10) / 60;
+        ctx.beginPath(); ctx.arc(x, y, (i % 3) * 0.35 + 0.6, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      const q = nodes.get("queue");
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = colors.link;
+      // Clients -> queue.
+      for (const [key, n] of nodes) {
+        if (n.kind !== "client" || !q) continue;
+        strokeCurve(ctx, anchor(key, "out"), { x: q.x - q.w / 2, y: q.y });
+      }
+      // Queue -> workers.
+      for (const [key, n] of nodes) {
+        if (n.kind !== "worker" || !q) continue;
+        strokeCurve(ctx, { x: q.x + q.w / 2, y: q.y }, anchor(key, "in"));
+      }
+      // Workers -> assigned model.
+      for (const [key, n] of nodes) {
+        if (n.kind !== "worker") continue;
+        const w = n.worker;
+        const mk = `model:${w.assignedModel}`;
+        if (!nodes.has(mk)) continue;
+        const state = w.state || "idle";
+        const color = state === "model-unavailable" ? colors.warn : state === "loading" ? colors.load : state === "transcribing" ? colors.accent : colors.idle;
+        ctx.save();
+        ctx.lineWidth = state === "transcribing" ? 2 : 1.4;
+        ctx.strokeStyle = alpha(color, state === "idle" ? 0.55 : 0.85);
+        if (state === "model-unavailable" || state === "loading") {
+          ctx.setLineDash([4, 5]);
+          if (state === "loading" && motion()) ctx.lineDashOffset = -now / 40;
+        }
+        strokeCurve(ctx, anchor(key, "out"), anchor(mk, "in"));
+        ctx.restore();
+      }
+      // Live dictation: audio flowing from the speaking client to whichever
+      // stage holds its job.
+      const streaming = new Set((stats.streams || []).map((s) => s.client || ""));
+      for (const job of jobs.values()) {
+        if (job.source !== "stream" || !streaming.has(job.client)) continue;
+        if (job.stage !== "working" && job.stage !== "queued") continue;
+        const ck = clientKey(job.client);
+        if (!ck) continue;
+        const from = anchor(ck, "out");
+        const to = job.stage === "working" ? anchor(`worker:${job.worker}`, "in") : queueSlot(Math.max(0, queueOrder.indexOf(job.id)));
+        if (!from || !to) continue;
+        ctx.save();
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = alpha(colors.accent, 0.55);
+        ctx.setLineDash([2, 7]);
+        ctx.lineCap = "round";
+        if (motion()) ctx.lineDashOffset = -now / 28;
+        strokeCurve(ctx, from, to, -10);
+        ctx.restore();
+      }
+      // Queue slots.
+      if (q) {
+        for (let i = 0; i < q.slots; i++) {
+          const s = queueSlot(i);
+          ctx.strokeStyle = colors["hairline-strong"];
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(s.x, s.y, 4.5, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+    };
+
+    const drawFront = (now) => {
+      const ctx = fctx;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      let busy = false;
+      for (const job of [...jobs.values()]) {
+        const r = position(job, now);
+        if (!r) continue;
+        job.pos = r.pos;
+        if (r.moving) {
+          busy = true;
+          // Comet trail: earlier points on the same path, fading out.
+          for (let k = 6; k >= 1; k--) {
+            const pt = k * 0.035;
+            const tp = Math.max(0, r.p - pt);
+            let tr;
+            if (job.stage === "return") tr = bez(r.from, r.to, ease(tp), 34);
+            else continue;
+            ctx.fillStyle = alpha(r.color, 0.28 * (1 - k / 7));
+            ctx.beginPath(); ctx.arc(tr.x, tr.y, 3.2 - k * 0.3, 0, Math.PI * 2); ctx.fill();
+          }
+          if (job.stage !== "return" && job.prev) {
+            ctx.strokeStyle = alpha(r.color, 0.35);
+            ctx.lineWidth = 2.4;
+            ctx.lineCap = "round";
+            ctx.beginPath(); ctx.moveTo(job.prev.x, job.prev.y); ctx.lineTo(r.pos.x, r.pos.y); ctx.stroke();
+          }
+        }
+        if (r.orbit) busy = busy || motion();
+        if (job.stage === "queued") busy = busy || motion();
+        glowDot(ctx, r.pos.x, r.pos.y, r.color, r.moving ? 4.6 : 4, true);
+        job.prev = r.moving ? { ...r.pos } : null;
+      }
+      for (let i = effects.length - 1; i >= 0; i--) {
+        const fx = effects[i];
+        const p = (now - fx.t0) / fx.dur;
+        if (p >= 1) { effects.splice(i, 1); continue; }
+        busy = true;
+        const r = fx.kind === "burst" ? 6 + p * 22 : 8 + p * 26;
+        ctx.strokeStyle = alpha(fx.color, (1 - p) * 0.8);
+        ctx.lineWidth = 2 * (1 - p) + 0.5;
+        ctx.beginPath(); ctx.arc(fx.x, fx.y, motion() ? r : 14, 0, Math.PI * 2); ctx.stroke();
+        if (fx.kind === "burst") {
+          ctx.fillStyle = alpha(fx.color, (1 - p) * 0.9);
+          ctx.beginPath(); ctx.arc(fx.x, fx.y, 4, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      return busy;
+    };
+
+    const frame = (now) => {
+      raf = 0;
+      if (document.hidden) return;
+      drawBack(now);
+      const busy = drawFront(now);
+      const streaming = S.stats && (S.stats.streams || []).length > 0;
+      const loading = S.stats && (S.stats.workers || []).some((w) => w.state === "loading");
+      // Keep animating only while something moves; otherwise idle at 0 fps.
+      if (busy || (motion() && (streaming || loading))) raf = requestAnimationFrame(frame);
+      lastFrame = now;
+    };
+    const request = () => {
+      if (!raf && !document.hidden) raf = requestAnimationFrame(frame);
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) request();
     });
+    reduceMotion.addEventListener("change", request);
+    new ResizeObserver(() => { if (S.stats) layout(); }).observe(stage);
+
+    readColors();
+    return { layout, request, readColors, reconcile, onQueued, onStarted, onCompleted, onFailed, syncQueueOrder };
+  })();
+
+  /* ══════════════════ Panels ══════════════════ */
+  const setKpi = (id, value, unit, meta) => {
+    const tile = $(id);
+    const valueEl = tile.querySelector(".kpi-value");
+    const text = `${value}${unit || ""}`;
+    if (valueEl.dataset.v !== text) {
+      if (valueEl.dataset.v !== undefined) {
+        tile.classList.remove("bump");
+        void tile.offsetWidth;
+        tile.classList.add("bump");
+      }
+      valueEl.dataset.v = text;
+      valueEl.replaceChildren(document.createTextNode(value));
+      if (unit) valueEl.appendChild(h("span", "unit", unit));
+    }
+    tile.querySelector(".kpi-meta").textContent = meta;
   };
 
-  const openConfigEdit = () => {
-    if (!lastStats) return;
-    editing = true;
-    el.inStreams.value = String(lastStats.maxActiveStreams ?? "");
-    el.inRecording.value = String(lastStats.maxRecordingSeconds ?? "");
-    el.inGpu.checked = Boolean(lastStats.useGpu);
-    buildModelInputs();
-    el.configError.textContent = "";
-    el.configEdit.setAttribute("data-open", "true");
-    el.editConfig.setAttribute("aria-expanded", "true");
-    el.inStreams.focus();
+  const renderKpis = (stats) => {
+    const now = Date.now();
+    const workers = stats.workers || [];
+    const running = workers.filter((w) => w.job).length;
+    const queued = (stats.queue || []).length;
+    const streams = (stats.streams || []).length;
+    setKpi("kpiFlight", String(running + queued), "", `${streams} dictating · ${running} transcribing`);
+    const waits = (stats.recent || []).map((r) => r.queueWaitMs || 0);
+    setKpi("kpiQueue", String(queued), ` / ${stats.queueCapacity || 0}`, waits.length ? `median wait ${fmtMs(median(waits))}` : "no waits yet");
+    const proc = (stats.recent || []).map((r) => r.processingMs || 0);
+    const med = median(proc);
+    if (med == null) setKpi("kpiLatency", "—", "", "release to text");
+    else {
+      const [v, u] = med < 1000 ? [String(Math.round(med)), " ms"] : [(med / 1000).toFixed(2), " s"];
+      setKpi("kpiLatency", v, u, `p95 ${fmtMs(percentile(proc, 0.95))} · last ${proc.length}`);
+    }
+    // Completions per minute over the last ten minutes (or the span the
+    // recent buffer covers, when it is full).
+    const recent = stats.recent || [];
+    const windowStart = Math.max(now - 10 * 60000, recent.length >= 50 ? recent[recent.length - 1].completedAtMs : 0);
+    const inWindow = recent.filter((r) => r.completedAtMs >= windowStart);
+    const minutes = Math.max(1, (now - windowStart) / 60000);
+    const audio = inWindow.reduce((a, r) => a + (r.durationSeconds || 0), 0);
+    setKpi("kpiThroughput", (inWindow.length / minutes).toFixed(inWindow.length / minutes >= 10 ? 0 : 1), " /min",
+      `${fmtAudio(audio / minutes)} audio per min`);
+    const loading = workers.filter((w) => w.state === "loading").length;
+    const missing = workers.filter((w) => w.state === "model-unavailable").length;
+    setKpi("kpiWorkers", String(running), ` / ${workers.length}`,
+      missing ? `${missing} missing a model` : loading ? `${loading} loading` : stats.useGpu ? "GPU enabled" : "CPU only");
   };
 
-  const closeConfigEdit = () => {
-    editing = false;
-    el.configEdit.setAttribute("data-open", "false");
-    el.editConfig.setAttribute("aria-expanded", "false");
-    el.editConfig.focus();
+  const kvRow = (container, key, value, note) => {
+    const row = h("div", "kv-row");
+    const v = h("div", "v", value);
+    if (note) v.appendChild(h("small", "", note));
+    row.append(h("div", "k", key), v);
+    container.appendChild(row);
+  };
+  const renderConfig = (stats) => {
+    const view = $("configView");
+    view.replaceChildren();
+    kvRow(view, "Workers", String(stats.workerCount ?? "—"), "restart to change");
+    kvRow(view, "Queue capacity", String(stats.queueCapacity ?? "—"), "restart to change");
+    kvRow(view, "Max active streams", String(stats.maxActiveStreams ?? "—"));
+    kvRow(view, "Max recording", fmtAudio(stats.maxRecordingSeconds || 0).replace(/^(\d+)m 00s$/, "$1 min"));
+    kvRow(view, "GPU", stats.useGpu ? "On" : "Off");
+    const workers = stats.workers || [];
+    const uniform = workers.length && workers.every((w) => w.assignedModel === workers[0].assignedModel);
+    if (uniform || !workers.length) kvRow(view, workers.length > 1 ? "Model (all workers)" : "Model", modelName(workers.length ? workers[0].assignedModel : stats.model));
+    else workers.forEach((w) => kvRow(view, `Worker ${w.index} model`, modelName(w.assignedModel)));
+    view.style.display = S.editing ? "none" : "";
   };
 
-  const applyConfig = async () => {
-    const maxActiveStreams = Number(el.inStreams.value);
-    const maxRecordingSeconds = Number(el.inRecording.value);
+  let modelSelects = [];
+  const openConfig = () => {
+    const stats = S.stats;
+    if (!stats) return;
+    S.editing = true;
+    $("inStreams").value = String(stats.maxActiveStreams ?? "");
+    $("inRecording").value = String(stats.maxRecordingSeconds ?? "");
+    $("inGpu").checked = Boolean(stats.useGpu);
+    const box = $("modelInputs");
+    box.replaceChildren();
+    modelSelects = (stats.workers || []).map((w, i, all) => {
+      const row = h("div", "form-row");
+      const label = h("label", "", all.length > 1 ? `Worker ${w.index} model` : "Model");
+      label.htmlFor = `inModel${i}`;
+      const select = h("select");
+      select.id = `inModel${i}`;
+      for (const m of stats.models || []) {
+        const opt = h("option", "", `${m.name}${m.installed ? "" : " — not installed"}`);
+        opt.value = m.id;
+        select.appendChild(opt);
+      }
+      select.value = w.assignedModel;
+      row.append(label, select);
+      box.appendChild(row);
+      return select;
+    });
+    $("configError").textContent = "";
+    $("configForm").dataset.open = "true";
+    $("configView").style.display = "none";
+    $("editConfig").setAttribute("aria-expanded", "true");
+    $("editConfig").textContent = "Close";
+    $("inStreams").focus();
+  };
+  const closeConfig = () => {
+    S.editing = false;
+    $("configForm").dataset.open = "false";
+    $("configView").style.display = "";
+    $("editConfig").setAttribute("aria-expanded", "false");
+    $("editConfig").textContent = "Edit";
+  };
+  const authHeaders = (json) => {
+    const headers = json ? { "Content-Type": "application/json" } : {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  };
+  const applyConfig = async (event) => {
+    event.preventDefault();
+    const maxActiveStreams = Number($("inStreams").value);
+    const maxRecordingSeconds = Number($("inRecording").value);
     if (!Number.isInteger(maxActiveStreams) || maxActiveStreams < 1 || maxActiveStreams > 32) {
-      el.configError.textContent = "Max active streams must be a whole number from 1 to 32.";
+      $("configError").textContent = "Max active streams must be a whole number from 1 to 32.";
       return;
     }
     if (!Number.isInteger(maxRecordingSeconds) || maxRecordingSeconds < 10 || maxRecordingSeconds > 600) {
-      el.configError.textContent = "Max recording must be a whole number from 10 to 600 seconds.";
+      $("configError").textContent = "Max recording must be a whole number from 10 to 600 seconds.";
       return;
     }
-    el.applyConfig.disabled = true;
-    el.applyConfig.textContent = "Applying…";
-    el.configError.textContent = "";
+    const update = { maxActiveStreams, maxRecordingSeconds, useGpu: $("inGpu").checked, workerModels: modelSelects.map((s) => s.value) };
+    $("applyConfig").disabled = true;
+    $("configError").textContent = "";
     try {
-      const headers = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch("/v1/config", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          maxActiveStreams,
-          maxRecordingSeconds,
-          useGpu: el.inGpu.checked,
-          workerModels: modelSelects.map((select) => select.value),
-        }),
-      });
-      if (res.status === 401) {
-        setConnection("unauthorized", "Unauthorized");
-        el.configError.textContent = "Unauthorized — config change was not applied.";
-        return;
-      }
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        el.configError.textContent =
-          (data && data.error) || `Host rejected the change (${res.status}).`;
-        return;
-      }
-      if (lastStats && data) {
-        lastStats.maxActiveStreams = data.maxActiveStreams;
-        lastStats.maxRecordingSeconds = data.maxRecordingSeconds;
-        lastStats.useGpu = data.useGpu;
-        lastStats.model = data.model;
-        if (Array.isArray(data.workerModels) && Array.isArray(lastStats.workers)) {
-          lastStats.workers.forEach((worker, i) => {
-            worker.assignedModel = data.workerModels[i] || worker.assignedModel;
-          });
-        }
-        renderConfig(lastStats);
-      }
-      closeConfigEdit();
-    } catch {
-      el.configError.textContent = "Host unreachable — config change was not applied.";
+      const data = DEMO ? demo.applyConfig(update) : await (async () => {
+        const res = await fetch("/v1/config", { method: "POST", headers: authHeaders(true), body: JSON.stringify(update) });
+        if (res.status === 401) { setConn("unauthorized", "Unauthorized"); throw new Error("Unauthorized — the change was not applied."); }
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error((body && body.error) || `Host rejected the change (${res.status}).`);
+        return body;
+      })();
+      Object.assign(S.stats, { maxActiveStreams: data.maxActiveStreams, maxRecordingSeconds: data.maxRecordingSeconds, useGpu: data.useGpu, model: data.model });
+      (S.stats.workers || []).forEach((w, i) => { w.assignedModel = data.workerModels[i] || w.assignedModel; });
+      closeConfig();
+      renderAll();
+      resyncSoon(50);
+    } catch (err) {
+      $("configError").textContent = err instanceof TypeError ? "Host unreachable — the change was not applied." : err.message;
     } finally {
-      el.applyConfig.disabled = false;
-      el.applyConfig.textContent = "Apply";
+      $("applyConfig").disabled = false;
     }
   };
+  $("editConfig").addEventListener("click", () => (S.editing ? closeConfig() : openConfig()));
+  $("cancelConfig").addEventListener("click", closeConfig);
+  $("configForm").addEventListener("submit", applyConfig);
+  $("configForm").addEventListener("keydown", (e) => { if (e.key === "Escape") closeConfig(); });
 
-  el.editConfig.addEventListener("click", () => (editing ? closeConfigEdit() : openConfigEdit()));
-  el.cancelConfig.addEventListener("click", closeConfigEdit);
-  el.applyConfig.addEventListener("click", applyConfig);
-  el.configEdit.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeConfigEdit();
-    if (event.key === "Enter" && event.target.tagName === "INPUT") applyConfig();
-  });
-
-  /* ── Live pipeline ── */
-
-  const chip = (parts) => {
-    const span = document.createElement("span");
-    span.className = "chip";
-    span.setAttribute("role", "listitem");
-    for (const part of parts) span.appendChild(part);
-    return span;
-  };
-  const piece = (text, cls) => {
-    const s = document.createElement("span");
-    if (cls) s.className = cls;
-    s.textContent = text;
-    return s;
-  };
-
-  const renderStreams = (streams) => {
-    el.streamCount.textContent = String(streams.length);
-    el.streamLane.replaceChildren();
-    if (streams.length === 0) {
-      el.streamEmpty.textContent = "No active streams.";
-      el.streamLane.appendChild(el.streamEmpty);
-      return;
-    }
-    for (const stream of streams) {
-      const t = piece("", "t");
-      addTicker(t.appendChild(document.createTextNode("")), "elapsed", stream.elapsedMs || 0);
-      el.streamLane.appendChild(chip([
-        piece(stream.client || "unknown"),
-        piece("·", "dim"),
-        t,
-      ]));
-    }
-  };
-
-  const renderQueue = (queue, capacity) => {
-    el.queueCount.textContent = `${queue.length}/${capacity || "—"}`;
-    el.queueLane.replaceChildren();
-    if (queue.length === 0) {
-      el.queueEmpty.textContent = "Queue empty.";
-      el.queueLane.appendChild(el.queueEmpty);
-      return;
-    }
-    for (const job of queue) {
-      const t = piece("", "t");
-      addTicker(t.appendChild(document.createTextNode("")), "elapsed", job.waitingMs || 0);
-      el.queueLane.appendChild(chip([
-        piece(job.model || "—"),
-        piece("·", "dim"),
-        piece(job.client || job.source || "—", "dim"),
-        piece("·", "dim"),
-        t,
-      ]));
-    }
-  };
-
-  // Tiles an operator clicked open stay open across polls.
-  let expandedWorkers = new Set();
-
-  const buildWorkers = (count) => {
-    workerEls = [];
-    el.workers.replaceChildren();
-    expandedWorkers = new Set([...expandedWorkers].filter((i) => i < count));
-    for (let i = 0; i < count; i += 1) {
-      const root = document.createElement("div");
-      root.className = "worker";
-      root.setAttribute("role", "button");
-      root.setAttribute("tabindex", "0");
-      root.setAttribute("aria-label", `Worker ${i} details`);
-      root.setAttribute("aria-expanded", "false");
-      root.setAttribute("data-state", "idle");
-
-      const name = piece("", "worker-model-name");
-      const status = piece("", "worker-status");
-      const detail = document.createElement("div");
-      detail.className = "worker-detail";
-      detail.hidden = true;
-
-      const toggle = () => {
-        if (expandedWorkers.has(i)) expandedWorkers.delete(i);
-        else expandedWorkers.add(i);
-        if (lastStats) renderWorkers(lastStats.workers || []);
-      };
-      root.addEventListener("click", (event) => {
-        // Let the operator select/copy detail text without collapsing it.
-        if (detail.contains(event.target)) return;
-        toggle();
-      });
-      root.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          toggle();
-        }
-      });
-
-      root.append(name, status, detail);
-      el.workers.appendChild(root);
-      workerEls.push({ root, name, status, detail });
-    }
-  };
-
-  const detailRow = (label, value) => {
-    const row = document.createElement("div");
-    row.className = "drow";
-    row.append(piece(label, "dl"), piece(value, "dv"));
-    return row;
-  };
-
-  const renderWorkers = (workers) => {
-    if (workerEls.length !== workers.length) buildWorkers(workers.length);
-    let busy = 0;
-    workers.forEach((worker, i) => {
-      const w = workerEls[i];
-      const state = worker.state || "idle";
-      if (worker.job) busy += 1;
-      w.root.setAttribute("data-state", state);
-
-      // The assigned model is host configuration, so the tile always names
-      // it — even while the file is still missing or loading.
-      const modelId = (state === "loading" && worker.job ? worker.job.model : null)
-        || worker.loadedModel || worker.assignedModel;
-      w.name.textContent = modelDisplayName(modelId);
-
-      // Idle tiles keep a clean face; the lit border carries the state.
-      w.status.replaceChildren();
-      if (state === "model-unavailable") {
-        w.status.textContent = "not installed";
-      } else if (state === "loading") {
-        w.status.textContent = "loading model…";
-      } else if (state === "transcribing") {
-        w.status.appendChild(document.createTextNode("transcribing · "));
-        addTicker(w.status.appendChild(document.createTextNode("")), "elapsed",
-          worker.job ? worker.job.elapsedMs || 0 : 0);
-      } else if (worker.lastError) {
-        w.status.textContent = "last job failed";
+  const startDownload = async (model) => {
+    S.downloadError = "";
+    if (DEMO) { demo.download(model); return; }
+    try {
+      const res = await fetch("/v1/models/download", { method: "POST", headers: authHeaders(true), body: JSON.stringify({ model }) });
+      if (res.status === 401) { setConn("unauthorized", "Unauthorized"); S.downloadError = "Unauthorized — download was not started."; }
+      else if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        S.downloadError = (body && body.error) || `Host rejected the download (${res.status}).`;
       }
+    } catch {
+      S.downloadError = "Host unreachable — download was not started.";
+    }
+    resyncSoon(50);
+  };
 
-      const expanded = expandedWorkers.has(i);
-      w.root.setAttribute("aria-expanded", expanded ? "true" : "false");
-      w.detail.hidden = !expanded;
-      w.detail.replaceChildren();
-      if (expanded) {
-        w.detail.appendChild(detailRow("Worker", `#${i}`));
-        w.detail.appendChild(detailRow("State", state.replace(/-/g, " ")));
-        w.detail.appendChild(detailRow("Assigned model", worker.assignedModel || "—"));
-        w.detail.appendChild(detailRow("Loaded model", worker.loadedModel || "none"));
-        w.detail.appendChild(detailRow("Model file", worker.modelAvailable ? "installed" : "missing"));
-        w.detail.appendChild(detailRow("Jobs completed", String(worker.completedJobs || 0)));
-        if (worker.job) {
-          w.detail.appendChild(detailRow("Current job",
-            `${worker.job.source || "—"} · ${worker.job.client || "unknown"} · ${formatDuration(worker.job.audioSeconds || 0)} audio`));
+  const renderModels = (stats) => {
+    const list = $("modelList");
+    const models = stats.models || [];
+    const download = stats.modelDownload;
+    const active = download && download.stage !== "ready" && download.stage !== "error";
+    list.replaceChildren();
+    $("modelsCount").textContent = `${models.filter((m) => m.installed).length} of ${models.length} installed`;
+    for (const m of models) {
+      const row = h("div", "mrow");
+      const serving = m.assignedWorkers.length > 0 && m.installed;
+      row.dataset.installed = String(m.installed);
+      row.dataset.serving = String(serving);
+      const name = h("div", "mrow-name", m.name);
+      name.appendChild(h("small", "", m.publisher));
+      row.append(h("span", "mdot"), name, h("span", "mrow-size", fmtBytes(m.sizeBytes)));
+      const status = h("div", "mrow-status");
+      const mine = download && download.model === m.id;
+      if (mine && active) {
+        status.textContent = `${download.stage === "validating" ? "Validating" : "Downloading"} ${download.percentage}%`;
+      } else if (serving) {
+        status.textContent = `Serving · ${m.assignedWorkers.map((w) => "W" + w).join(", ")}`;
+      } else if (m.installed) {
+        status.textContent = "Installed";
+      } else {
+        const btn = h("button", "btn", m.assignedWorkers.length ? "Download now" : "Download");
+        btn.type = "button";
+        btn.disabled = Boolean(active);
+        if (m.assignedWorkers.length) btn.classList.add("primary");
+        btn.addEventListener("click", () => { btn.disabled = true; startDownload(m.id); });
+        status.appendChild(btn);
+      }
+      row.appendChild(status);
+      if (mine && active) {
+        const bar = h("div", "mrow-progress");
+        const fill = h("i");
+        fill.style.width = `${download.percentage}%`;
+        bar.appendChild(fill);
+        row.appendChild(bar);
+      }
+      const failure = mine && download.stage === "error" ? download.error : "";
+      if (failure) row.appendChild(h("div", "mrow-error", `Download failed: ${failure}`));
+      list.appendChild(row);
+    }
+    if (S.downloadError) list.appendChild(h("p", "form-error", S.downloadError));
+  };
+
+  const renderNotice = () => {
+    const notice = $("notice");
+    notice.replaceChildren();
+    notice.dataset.visible = "false";
+    if (S.conn === "unauthorized") {
+      notice.dataset.visible = "true";
+      notice.dataset.tone = "error";
+      notice.innerHTML = "This host requires a token. Open the dashboard as <code>/?token=…</code> with the host's <code>MULTIVOICE_HOST_TOKEN</code>.";
+      return;
+    }
+    const stats = S.stats;
+    if (!stats) return;
+    const download = stats.modelDownload;
+    const active = download && download.stage !== "ready" && download.stage !== "error";
+    const missing = [...new Set((stats.workers || []).filter((w) => w.modelAvailable === false).map((w) => w.assignedModel))];
+    if (!missing.length || active) return;
+    notice.dataset.visible = "true";
+    notice.dataset.tone = "warn";
+    const label = h("span");
+    label.append(`${missing.map(modelName).join(", ")} ${missing.length === 1 ? "is" : "are"} assigned to a worker but not installed on this host.`);
+    notice.appendChild(label);
+    for (const id of missing) {
+      const btn = h("button", "btn primary", missing.length === 1 ? "Download" : `Download ${modelName(id)}`);
+      btn.type = "button";
+      btn.addEventListener("click", () => { btn.disabled = true; startDownload(id); });
+      notice.appendChild(btn);
+    }
+  };
+
+  const renderLifetime = (stats) => {
+    $("lifeTotal").textContent = (stats.totalTranscriptions || 0).toLocaleString();
+    $("lifeAudio").textContent = fmtAudio(stats.totalAudioSeconds || 0);
+    $("lifeQueue").textContent = fmtMs(stats.averageQueueMs);
+    $("lifeProc").textContent = fmtMs(stats.averageProcessingMs);
+    $("lifeRejected").textContent = String(stats.rejectedJobs || 0);
+    $("lifeFailed").textContent = String(stats.failedJobs || 0);
+    $("lifeFailedBox").dataset.alert = String((stats.failedJobs || 0) > 0);
+  };
+
+  const whoCell = (addr, live) => {
+    const td = h("td");
+    const who = h("div", "who");
+    const av = h("span", "avatar", initials(addr));
+    const name = h("b", "", clientName(addr));
+    who.append(av, name);
+    if (addr && clientName(addr) !== addr) who.appendChild(h("small", "", addr.slice(addr.indexOf("@"))));
+    if (live) who.appendChild(h("span", "tag live", "Live"));
+    td.title = addr || "Unknown client";
+    td.appendChild(who);
+    return td;
+  };
+  const table = (headers) => {
+    const t = h("table");
+    const tr = h("tr");
+    for (const [label, cls] of headers) tr.appendChild(h("th", cls || "", label));
+    const thead = h("thead");
+    thead.appendChild(tr);
+    t.append(thead, h("tbody"));
+    return t;
+  };
+  const numCell = (value, alert) => {
+    const td = h("td", "n", String(value));
+    if (alert) td.dataset.alert = "true";
+    return td;
+  };
+
+  const renderClients = (stats) => {
+    const clients = stats.clients || [];
+    $("clientCount").textContent = clients.length ? String(clients.length) : "";
+    const wrap = $("clientTable");
+    if (!clients.length) { wrap.replaceChildren(h("p", "placeholder", "No clients yet.")); return; }
+    const live = new Set([...(stats.streams || []).map((s) => s.client || ""), ...(stats.workers || []).filter((w) => w.job).map((w) => w.job.client || "")]);
+    const t = table([["Client"], ["Last model"], ["Requests", "n"], ["Done", "n"], ["Rejected", "n"], ["Failed", "n"], ["Audio", "n"], ["Last seen", "n"]]);
+    const body = t.tBodies[0];
+    const now = Date.now();
+    for (const c of clients) {
+      const tr = h("tr");
+      tr.append(
+        whoCell(c.address, live.has(c.address)),
+        h("td", "", c.lastModel ? modelName(c.lastModel) : "—"),
+        numCell(c.requests || 0), numCell(c.completed || 0),
+        numCell(c.rejected || 0, c.rejected > 0), numCell(c.failed || 0, c.failed > 0),
+        numCell(fmtAudio(c.totalAudioSeconds || 0)),
+        numCell(fmtAgo(now - (c.lastSeenMs || now))),
+      );
+      body.appendChild(tr);
+    }
+    wrap.replaceChildren(t);
+  };
+
+  const renderRecent = (stats) => {
+    const records = stats.recent || [];
+    $("recentCount").textContent = records.length ? `last ${records.length}` : "";
+    const wrap = $("recentTable");
+    if (!records.length) { wrap.replaceChildren(h("p", "placeholder", "No transcriptions yet.")); S.seenRecent = new Set(); return; }
+    const t = table([["Time"], ["Client"], ["Source"], ["Model"], ["Audio", "n"], ["Queue", "n"], ["Processing", "n"]]);
+    const body = t.tBodies[0];
+    const next = new Set();
+    for (const r of records) {
+      const key = `${r.id}:${r.completedAtMs}`;
+      next.add(key);
+      const tr = h("tr");
+      if (S.loadedOnce && !S.seenRecent.has(key)) tr.className = "fresh";
+      const model = h("td", "", modelName(r.model));
+      const engine = engineOf(r);
+      model.appendChild(h("span", `tag ${engine}`, engine === "whisper" ? "Whisper" : "Parakeet"));
+      tr.append(
+        h("td", "muted", fmtClock(r.completedAtMs)),
+        whoCell(r.client, false),
+        h("td", "", r.source === "stream" ? "Live stream" : "Upload"),
+        model,
+        numCell(fmtAudio(r.durationSeconds)),
+        numCell(fmtMs(r.queueWaitMs)),
+        numCell(fmtMs(r.processingMs)),
+      );
+      body.appendChild(tr);
+    }
+    wrap.replaceChildren(t);
+    S.seenRecent = next;
+    S.loadedOnce = true;
+  };
+
+  const renderChrome = (stats) => {
+    const uptime = (Date.now() - stats.startedAt) / 1000;
+    $("hostChip").textContent = `${stats.bindAddr || "—"} · v${stats.serverVersion || "?"}`;
+    $("footVersion").textContent = `Fairspoken host v${stats.serverVersion || "?"}`;
+    $("footUptime").textContent = fmtUptime(uptime);
+    $("editConfig").disabled = false;
+  };
+
+  // Panels re-render together, at most once per frame.
+  let renderQueued = false;
+  const renderAll = () => {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      const stats = S.stats;
+      if (!stats) return;
+      renderChrome(stats);
+      renderKpis(stats);
+      if (!S.editing) renderConfig(stats);
+      renderModels(stats);
+      renderNotice();
+      renderLifetime(stats);
+      renderClients(stats);
+      renderRecent(stats);
+      viz.layout();
+    });
+  };
+  // Clocks (elapsed, last seen, uptime) advance once a second.
+  setInterval(() => { if (S.stats && !document.hidden) renderAll(); }, 1000);
+
+  /* ══════════════════ Events ══════════════════ */
+  const applySnapshot = (stats, { animateDiff = false } = {}) => {
+    const prev = S.stats;
+    normalise(stats);
+    if (animateDiff && prev) synthesiseEvents(prev, stats);
+    S.stats = stats;
+    viz.reconcile(stats);
+    renderAll();
+  };
+
+  // Applies one /v1/events event to the mirrored stats and the animation.
+  const onEvent = (type, d) => {
+    const stats = S.stats;
+    if (!stats) return;
+    const now = Date.now();
+    const touchClient = (addr, patch) => {
+      if (!addr) return;
+      stats.clients = stats.clients || [];
+      let c = stats.clients.find((x) => x.address === addr);
+      if (!c) { c = { address: addr, requests: 0, completed: 0, rejected: 0, failed: 0, totalAudioSeconds: 0, lastSeenMs: now, lastModel: null }; stats.clients.unshift(c); }
+      c.lastSeenMs = now;
+      patch(c);
+      stats.clients.sort((a, b) => b.lastSeenMs - a.lastSeenMs);
+    };
+    const worker = (i) => (stats.workers || []).find((w) => w.index === i);
+    switch (type) {
+      case "stream_started":
+        stats.streams = stats.streams || [];
+        stats.streams.push({ id: d.streamId, client: d.client, startedAt: now });
+        touchClient(d.client, (c) => { c.requests += 1; });
+        break;
+      case "stream_finished":
+        stats.streams = (stats.streams || []).filter((s) => s.id !== d.streamId);
+        break;
+      case "job_queued":
+        stats.queue = stats.queue || [];
+        stats.queue.push({ id: d.jobId, client: d.client, source: d.source, model: d.model, audioSeconds: d.audioSeconds, enqueuedAt: now });
+        if (d.source === "batch") touchClient(d.client, (c) => { c.requests += 1; });
+        viz.syncQueueOrder();
+        viz.onQueued(d);
+        break;
+      case "job_started": {
+        const q = (stats.queue || []).find((x) => x.id === d.jobId);
+        stats.queue = (stats.queue || []).filter((x) => x.id !== d.jobId);
+        const w = worker(d.worker);
+        if (w) {
+          w.job = { id: d.jobId, model: d.model, client: d.client, source: q ? q.source : "stream", audioSeconds: q ? q.audioSeconds : 0, startedAt: now };
         }
-        if (worker.lastError) {
-          w.detail.appendChild(detailRow("Last error", worker.lastError));
+        viz.syncQueueOrder();
+        viz.onStarted(d);
+        break;
+      }
+      case "job_completed": {
+        const w = worker(d.worker);
+        const source = w && w.job ? w.job.source : "stream";
+        if (w) { w.job = null; w.completedJobs = (w.completedJobs || 0) + 1; }
+        stats.totalTranscriptions = (stats.totalTranscriptions || 0) + 1;
+        stats.totalAudioSeconds = (stats.totalAudioSeconds || 0) + (d.audioSeconds || 0);
+        stats.recent = stats.recent || [];
+        const started = w && w.lastQueueWait != null ? w.lastQueueWait : 0;
+        stats.recent.unshift({ id: `e${d.jobId}`, completedAtMs: d.at || now, durationSeconds: d.audioSeconds, backend: FALLBACK_MODELS[d.model] && FALLBACK_MODELS[d.model][1] === "OpenAI" ? "whisper" : "parakeet", model: d.model, source, client: d.client, queueWaitMs: started, processingMs: d.processingMs });
+        stats.recent.length = Math.min(stats.recent.length, 50);
+        touchClient(d.client, (c) => { c.completed += 1; c.totalAudioSeconds += d.audioSeconds || 0; c.lastModel = d.model; });
+        viz.onCompleted(d);
+        resyncSoon();
+        break;
+      }
+      case "job_failed": {
+        stats.queue = (stats.queue || []).filter((x) => x.id !== d.jobId);
+        const w = d.worker != null ? worker(d.worker) : null;
+        if (w) w.job = null;
+        if (d.worker == null) stats.rejectedJobs = (stats.rejectedJobs || 0) + 1;
+        else if (d.error !== "Stream upload aborted") {
+          stats.failedJobs = (stats.failedJobs || 0) + 1;
+          touchClient(d.client, (c) => { c.failed += 1; });
+          if (w) w.lastError = d.error;
         }
+        viz.syncQueueOrder();
+        viz.onFailed(d);
+        resyncSoon();
+        break;
+      }
+      case "worker_state": {
+        const w = worker(d.worker);
+        if (w) {
+          w.state = d.state;
+          if (d.state === "idle" || d.state === "transcribing") w.loadedModel = d.model;
+          if (d.state === "model-unavailable") { w.loadedModel = null; w.modelAvailable = false; }
+        }
+        break;
+      }
+      case "model_download":
+        stats.modelDownload = { model: d.model, stage: d.stage, percentage: d.percentage, error: d.error || null };
+        if (d.stage === "ready" || d.stage === "error") resyncSoon(100);
+        break;
+      default:
+        return;
+    }
+    if (type === "job_started") {
+      const w = worker(d.worker);
+      if (w) w.lastQueueWait = d.queueWaitMs;
+    }
+    renderAll();
+  };
+
+  // Polling fallback: derive the same events from consecutive snapshots so
+  // the constellation still animates without /v1/events.
+  const synthesiseEvents = (prev, next) => {
+    const at = Date.now();
+    const prevQueued = new Map((prev.queue || []).map((q) => [q.id, q]));
+    const prevRunning = new Map((prev.workers || []).filter((w) => w.job && w.job.id != null).map((w) => [w.job.id, w]));
+    const nextRunning = new Map((next.workers || []).filter((w) => w.job && w.job.id != null).map((w) => [w.job.id, w]));
+    const nextQueued = new Set((next.queue || []).map((q) => q.id));
+    for (const q of next.queue || []) {
+      if (!prevQueued.has(q.id) && !prevRunning.has(q.id)) viz.onQueued({ jobId: q.id, client: q.client, source: q.source, at });
+    }
+    for (const [id, w] of nextRunning) {
+      if (prevRunning.has(id)) continue;
+      if (!prevQueued.has(id)) viz.onQueued({ jobId: id, client: w.job.client, source: w.job.source, at });
+      viz.onStarted({ jobId: id, worker: w.index, client: w.job.client, at });
+    }
+    const failedMore = (next.failedJobs || 0) > (prev.failedJobs || 0);
+    for (const [id, w] of prevRunning) {
+      if (nextRunning.has(id) || nextQueued.has(id)) continue;
+      if (failedMore) viz.onFailed({ jobId: id, worker: w.index, client: w.job.client, at });
+      else viz.onCompleted({ jobId: id, worker: w.index, client: w.job.client, at });
+    }
+  };
+
+  /* ══════════════════ Transport ══════════════════ */
+  let resyncTimer = 0;
+  const resyncSoon = (delay = 400) => {
+    if (DEMO) { clearTimeout(resyncTimer); resyncTimer = setTimeout(() => applySnapshot(demo.snapshot()), delay); return; }
+    clearTimeout(resyncTimer);
+    resyncTimer = setTimeout(() => fetchStats(false), delay);
+  };
+
+  // Counts applied events so a /v1/stats response that raced with live
+  // events (and may predate them) is retried instead of rolling state back.
+  let eventSeq = 0;
+  let staleRetries = 0;
+  const fetchStats = async (animateDiff) => {
+    const seqAtStart = eventSeq;
+    try {
+      const res = await fetch("/v1/stats", { headers: authHeaders(false), cache: "no-store" });
+      if (res.status === 401) { setConn("unauthorized", "Unauthorized"); return false; }
+      if (!res.ok) { setConn("offline", `Host error ${res.status}`); return false; }
+      const data = await res.json();
+      if (S.conn === "live" && eventSeq !== seqAtStart && staleRetries < 3) {
+        staleRetries += 1;
+        resyncSoon(300);
+        return true;
+      }
+      staleRetries = 0;
+      if (S.conn !== "live") setConn("polling", "Live · polling");
+      applySnapshot(data, { animateDiff });
+      return true;
+    } catch {
+      setConn("offline", "Reconnecting…");
+      return false;
+    }
+  };
+
+  let source = null, pollTimer = 0, retryTimer = 0;
+  const startPolling = () => {
+    if (pollTimer) return;
+    fetchStats(false);
+    pollTimer = setInterval(() => fetchStats(true), 2000);
+    // Try the event stream again periodically; polling stays as the floor.
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connectEvents, 30000);
+  };
+  const stopPolling = () => { clearInterval(pollTimer); pollTimer = 0; };
+
+  const connectEvents = () => {
+    if (!("EventSource" in window)) { startPolling(); return; }
+    if (source) source.close();
+    const url = `/v1/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    const es = new EventSource(url);
+    source = es;
+    let opened = false;
+    es.addEventListener("open", () => { opened = true; });
+    es.addEventListener("snapshot", (e) => {
+      eventSeq += 1;
+      stopPolling();
+      setConn("live", "Live");
+      applySnapshot(JSON.parse(e.data));
+    });
+    for (const type of EVENT_TYPES) {
+      es.addEventListener(type, (e) => { eventSeq += 1; try { onEvent(type, JSON.parse(e.data)); } catch (err) { console.warn("Bad event", type, err); } });
+    }
+    es.addEventListener("error", () => {
+      if (es.readyState === EventSource.CLOSED || !opened) {
+        // 401/503 or no SSE support on this host: fall back to polling,
+        // which also surfaces an auth problem.
+        es.close();
+        if (source === es) source = null;
+        startPolling();
+      } else {
+        // The browser reconnects by itself and receives a fresh snapshot.
+        setConn("offline", "Reconnecting…");
       }
     });
-    el.busyCount.textContent = `${busy}/${workers.length}`;
   };
 
-  /* ── Missing-model recovery ── */
+  /* ══════════════════ Demo ══════════════════ */
+  // ?demo=1 — a simulated busy GP practice, no server needed. It produces
+  // the same events and snapshots as a real host, so it exercises exactly
+  // the code paths above.
+  const demo = (() => {
+    if (!DEMO) return null;
+    const now0 = Date.now();
+    const catalogue = [
+      ["parakeet-tdt-0.6b-v3", "Parakeet TDT 0.6B v3", "NVIDIA", 2549805858, true],
+      ["parakeet-ultra", "Parakeet Ultra 0.6B", "Moondream", 2595892056, true],
+      ["parakeet-tdt-0.6b-v2", "Parakeet TDT 0.6B v2 (English)", "NVIDIA", 2549805858, false],
+      ["tiny", "Whisper Tiny", "OpenAI", 77691713, false],
+      ["base", "Whisper Base", "OpenAI", 147951465, false],
+      ["small", "Whisper Small", "OpenAI", 487601967, true],
+      ["medium", "Whisper Medium", "OpenAI", 1533763059, false],
+      ["large-v2", "Whisper Large v2", "OpenAI", 3094623691, false],
+      ["large-v3", "Whisper Large v3", "OpenAI", 3095033483, false],
+      ["large-v3-turbo", "Whisper Large v3 Turbo", "OpenAI", 1624555275, true],
+    ];
+    const people = [
+      ["dr.patel@riverside.example", 0.9],
+      ["dr.okafor@riverside.example", 0.8],
+      ["dr.lindqvist@riverside.example", 0.7],
+      ["nurse.hughes@riverside.example", 0.55],
+      ["reception@riverside.example", 0.35],
+      ["pm.carter@riverside.example", 0.2],
+      ["hca.ahmed@riverside.example", 0.4],
+      ["dr.morgan@riverside.example", 0.5],
+    ];
+    const host = {
+      serverVersion: "0.1.0", bindAddr: "riverside-host.tail1234.ts.net:48173",
+      uptimeSeconds: 8 * 86400 + 22 * 3600 + 7 * 60, startedReal: now0,
+      workerCount: 4, queueCapacity: 8, maxActiveStreams: 8, maxRecordingSeconds: 600, useGpu: true,
+      workerModels: ["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v3", "parakeet-ultra", "large-v3-turbo"],
+      installed: new Set(catalogue.filter((m) => m[4]).map((m) => m[0])),
+      download: { model: "large-v3", stage: "downloading", percentage: 38, error: null },
+      rejectedJobs: 2, failedJobs: 1, totalTranscriptions: 3184, totalAudioSeconds: 61240, totalQueue: 3184 * 41, totalProc: 3184 * 212,
+      workers: [], queue: [], streams: [], recent: [], clients: new Map(),
+      nextJob: 9120, nextStream: 2210,
+    };
+    host.workers = host.workerModels.map((m, i) => ({ index: i, state: "idle", loadedModel: m, job: null, completedJobs: [912, 887, 731, 654][i], lastError: null }));
+    people.forEach(([addr], i) => host.clients.set(addr, {
+      address: addr, requests: 180 - i * 17, completed: 176 - i * 17, rejected: i === 5 ? 1 : 0, failed: i === 2 ? 1 : 0,
+      totalAudioSeconds: (180 - i * 17) * 22.5, lastSeenMs: now0 - (i + 1) * 47000 - (i > 5 ? 50 * 60000 : 0), lastModel: host.workerModels[i % 4],
+    }));
+    for (let i = 0; i < 24; i++) {
+      const [addr] = people[i % people.length];
+      const model = host.workerModels[(i * 3) % 4];
+      const audio = 6 + ((i * 37) % 41) + ((i * 13) % 10) / 10;
+      host.recent.push({ id: 9100 - i, completedAtMs: now0 - i * 21000 - 4000, durationSeconds: audio, backend: model.startsWith("parakeet") ? "parakeet" : "whisper", model, source: i % 7 === 6 ? "batch" : "stream", client: addr, queueWaitMs: (i * 7) % 30, processingMs: model === "large-v3-turbo" ? 390 + (i * 29) % 180 : 110 + (i * 17) % 120 });
+    }
+    const emit = (type, data) => onEvent(type, { at: Date.now(), ...data });
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    const procMs = (model, audio) => Math.round((model === "large-v3-turbo" ? 300 : model === "small" ? 220 : 90) + audio * (model === "large-v3-turbo" ? 9 : 4) + rnd(0, 80));
 
-  const startModelDownload = async (model) => {
-    downloadError = "";
-    try {
-      const headers = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch("/v1/models/download", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ model }),
+    const startJob = (job) => {
+      const w = host.workers.find((x) => !x.job && x.state === "idle");
+      if (!w) return false;
+      host.queue = host.queue.filter((q) => q !== job);
+      const model = host.workerModels[w.index];
+      w.job = { ...job, model, startedAt: Date.now() };
+      w.state = "transcribing";
+      job.wait = Date.now() - job.enqueuedAt;
+      host.totalQueue += job.wait;
+      emit("job_started", { jobId: job.id, worker: w.index, model, client: job.client, queueWaitMs: job.wait });
+      emit("worker_state", { worker: w.index, state: "transcribing", model });
+      if (job.source === "batch" || job.ended) finishLater(w);
+      return true;
+    };
+    const finishLater = (w) => {
+      const job = w.job;
+      const ms = procMs(job.model, job.audioSeconds);
+      setTimeout(() => complete(w, ms), Math.max(150, ms));
+    };
+    const complete = (w, ms) => {
+      const job = w.job;
+      if (!job) return;
+      w.job = null; w.state = "idle"; w.completedJobs += 1;
+      const failed = Math.random() < 0.015;
+      if (failed) {
+        host.failedJobs += 1;
+        emit("job_failed", { jobId: job.id, worker: w.index, client: job.client, error: "Whisper context failed to decode audio" });
+      } else {
+        host.totalTranscriptions += 1;
+        host.totalAudioSeconds += job.audioSeconds;
+        host.totalProc += ms;
+        host.recent.unshift({ id: job.id, completedAtMs: Date.now(), durationSeconds: job.audioSeconds, backend: job.model.startsWith("parakeet") ? "parakeet" : "whisper", model: job.model, source: job.source, client: job.client, queueWaitMs: job.wait || 0, processingMs: ms });
+        host.recent.length = Math.min(50, host.recent.length);
+        const c = host.clients.get(job.client);
+        if (c) { c.completed += 1; c.totalAudioSeconds += job.audioSeconds; c.lastModel = job.model; c.lastSeenMs = Date.now(); }
+        emit("job_completed", { jobId: job.id, worker: w.index, model: job.model, client: job.client, audioSeconds: job.audioSeconds, processingMs: ms });
+      }
+      emit("worker_state", { worker: w.index, state: "idle", model: host.workerModels[w.index] });
+      const next = host.queue[0];
+      if (next) startJob(next);
+    };
+    const enqueue = (client, source, audioSeconds) => {
+      const job = { id: ++host.nextJob, client, source, audioSeconds, enqueuedAt: Date.now(), ended: source === "batch" };
+      if (host.queue.length >= host.queueCapacity) {
+        host.rejectedJobs += 1;
+        emit("job_failed", { jobId: job.id, worker: null, client, error: "Transcription queue is full" });
+        return null;
+      }
+      host.queue.push(job);
+      const c = host.clients.get(client);
+      if (c) { c.requests += 1; c.lastSeenMs = Date.now(); }
+      emit("job_queued", { jobId: job.id, client, source, model: "mixed", audioSeconds });
+      startJob(job);
+      return job;
+    };
+    const dictate = (client, seconds) => {
+      const id = ++host.nextStream;
+      const stream = { id, client, startedAt: Date.now() };
+      host.streams.push(stream);
+      emit("stream_started", { streamId: id, client });
+      const job = enqueue(client, "stream", 0);
+      setTimeout(() => {
+        host.streams = host.streams.filter((s) => s !== stream);
+        emit("stream_finished", { streamId: id, client, audioSeconds: seconds });
+        if (!job) return;
+        job.audioSeconds = seconds;
+        job.ended = true;
+        const w = host.workers.find((x) => x.job && x.job.id === job.id);
+        if (w) { w.job.audioSeconds = seconds; finishLater(w); }
+      }, seconds * 1000 / 3.2);
+    };
+    const tick = () => {
+      if (document.hidden) return;
+      const busy = new Set(host.streams.map((s) => s.client));
+      for (const [addr, rate] of people) {
+        if (busy.has(addr) || host.streams.length >= 5) continue;
+        if (Math.random() < rate * 0.045) dictate(addr, rnd(8, 52));
+      }
+      if (Math.random() < 0.012) enqueue("pm.carter@riverside.example", "batch", rnd(40, 140));
+      const d = host.download;
+      if (d && d.stage === "downloading") {
+        d.percentage = Math.min(100, d.percentage + (Math.random() < 0.18 ? 1 : 0));
+        if (d.percentage >= 100) { d.stage = "ready"; host.installed.add(d.model); }
+        emit("model_download", { ...d });
+      }
+    };
+    const snapshot = () => {
+      const now = Date.now();
+      const models = catalogue.map(([id, name, publisher, sizeBytes]) => ({
+        id, name, publisher, sizeBytes, installed: host.installed.has(id),
+        assignedWorkers: host.workerModels.map((m, i) => (m === id ? i : -1)).filter((i) => i >= 0),
+      }));
+      return JSON.parse(JSON.stringify({
+        serverVersion: host.serverVersion, bindAddr: host.bindAddr,
+        uptimeSeconds: host.uptimeSeconds + Math.floor((now - host.startedReal) / 1000),
+        activeSessions: host.streams.length + host.workers.filter((w) => w.job).length,
+        activeStreams: host.streams.length, queuedJobs: host.queue.length, runningJobs: host.workers.filter((w) => w.job).length,
+        workerCount: host.workerCount, queueCapacity: host.queueCapacity, maxActiveStreams: host.maxActiveStreams,
+        maxRecordingSeconds: host.maxRecordingSeconds, useGpu: host.useGpu,
+        model: new Set(host.workerModels).size === 1 ? host.workerModels[0] : "mixed",
+        models, modelDownload: host.download,
+        rejectedJobs: host.rejectedJobs, failedJobs: host.failedJobs,
+        totalTranscriptions: host.totalTranscriptions, totalAudioSeconds: host.totalAudioSeconds,
+        averageQueueMs: Math.round(host.totalQueue / Math.max(1, host.totalTranscriptions)),
+        averageProcessingMs: Math.round(host.totalProc / Math.max(1, host.totalTranscriptions)),
+        workers: host.workers.map((w) => ({
+          index: w.index, state: w.state, assignedModel: host.workerModels[w.index],
+          modelAvailable: host.installed.has(host.workerModels[w.index]), loadedModel: w.loadedModel,
+          completedJobs: w.completedJobs, lastError: w.lastError,
+          job: w.job ? { id: w.job.id, model: w.job.model, source: w.job.source, client: w.job.client, audioSeconds: w.job.audioSeconds, elapsedMs: now - w.job.startedAt } : null,
+        })),
+        queue: host.queue.map((q) => ({ id: q.id, model: "mixed", source: q.source, client: q.client, audioSeconds: q.audioSeconds, waitingMs: now - q.enqueuedAt })),
+        streams: host.streams.map((s) => ({ id: s.id, client: s.client, elapsedMs: now - s.startedAt })),
+        clients: [...host.clients.values()].sort((a, b) => b.lastSeenMs - a.lastSeenMs),
+        recent: host.recent,
+      }));
+    };
+    const applyConfig = (update) => {
+      host.maxActiveStreams = update.maxActiveStreams;
+      host.maxRecordingSeconds = update.maxRecordingSeconds;
+      host.useGpu = update.useGpu;
+      host.workerModels = update.workerModels;
+      host.workers.forEach((w, i) => {
+        const m = host.workerModels[i];
+        w.state = host.installed.has(m) ? "idle" : "model-unavailable";
+        w.loadedModel = host.installed.has(m) ? m : null;
       });
-      if (res.status === 401) {
-        setConnection("unauthorized", "Unauthorized");
-        downloadError = "Unauthorized — download was not started.";
-      } else if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        downloadError = (data && data.error) || `Host rejected the download (${res.status}).`;
-      }
-    } catch {
-      downloadError = "Host unreachable — download was not started.";
-    }
-    fetchStats();
-  };
+      return { maxActiveStreams: host.maxActiveStreams, maxRecordingSeconds: host.maxRecordingSeconds, useGpu: host.useGpu, model: new Set(host.workerModels).size === 1 ? host.workerModels[0] : "mixed", workerModels: host.workerModels };
+    };
+    const download = (model) => {
+      host.download = { model, stage: "downloading", percentage: 1, error: null };
+      emit("model_download", { ...host.download });
+    };
+    const start = () => {
+      setConn("demo", "Demo · simulated practice");
+      applySnapshot(snapshot());
+      // Open on a busy moment: three clinicians already dictating.
+      dictate(people[0][0], 34); dictate(people[1][0], 22); dictate(people[3][0], 15);
+      setTimeout(() => enqueue("pm.carter@riverside.example", "batch", 96), 400);
+      setInterval(tick, 250);
+      setInterval(() => applySnapshot(snapshot()), 5000);
+    };
+    return { start, snapshot, applyConfig, download };
+  })();
 
-  // A configured-but-missing model is an operator state with a recovery
-  // action, not a stream of failed jobs: name the models and offer the
-  // download in place.
-  const renderModelNotice = (stats) => {
-    const workers = stats.workers || [];
-    const download = stats.modelDownload || null;
-    const downloading = download && download.stage !== "ready" && download.stage !== "error";
-    const missing = [...new Set(
-      workers.filter((w) => w.modelAvailable === false && w.assignedModel)
-        .map((w) => w.assignedModel),
-    )];
-
-    el.modelNotice.replaceChildren();
-    if (!downloading && missing.length === 0) {
-      el.modelNotice.setAttribute("data-visible", "false");
-      return;
-    }
-    el.modelNotice.setAttribute("data-visible", "true");
-
-    if (downloading) {
-      const label = document.createElement("span");
-      const stage = download.stage === "validating" ? "Validating" : "Downloading";
-      label.append(`${stage} `, piece(download.model, "mono"), ` — ${download.percentage}%`);
-      el.modelNotice.appendChild(label);
-      return;
-    }
-
-    const label = document.createElement("span");
-    label.append(
-      missing.length === 1 ? "Model " : "Models ",
-      piece(missing.join(", "), "mono"),
-      missing.length === 1
-        ? " is configured but not installed on this host."
-        : " are configured but not installed on this host.",
-    );
-    el.modelNotice.appendChild(label);
-    for (const model of missing) {
-      const button = document.createElement("button");
-      button.className = "btn";
-      button.textContent = missing.length === 1 ? "Download" : `Download ${model}`;
-      button.addEventListener("click", () => {
-        button.disabled = true;
-        startModelDownload(model);
-      });
-      el.modelNotice.appendChild(button);
-    }
-    const failure = downloadError || (download && download.stage === "error" && download.error) || "";
-    if (failure) {
-      const message = piece(`Download failed: ${failure}`, "config-error");
-      message.style.width = "100%";
-      el.modelNotice.appendChild(message);
-    }
-  };
-
-  /* ── Clients ── */
-
-  const renderClients = (clients) => {
-    el.clientCount.textContent = String(clients.length);
-    el.clientList.replaceChildren();
-    if (clients.length === 0) {
-      el.clientList.appendChild(el.clientPlaceholder);
-      return;
-    }
-    const head = document.createElement("div");
-    head.className = "clients-headrow";
-    for (const [label, cls] of [
-      ["Address", ""], ["Last model", ""], ["Req", "n"], ["Done", "n"],
-      ["Rej", "n"], ["Fail", "n"], ["Last seen", "n"],
-    ]) {
-      head.appendChild(piece(label, cls));
-    }
-    el.clientList.appendChild(head);
-
-    for (const client of clients) {
-      const row = document.createElement("div");
-      row.className = "clients-row";
-      row.appendChild(piece(client.address || "unknown", "addr"));
-      row.appendChild(piece(client.lastModel || "—", "model"));
-      row.appendChild(piece(String(client.requests || 0), "n"));
-      row.appendChild(piece(String(client.completed || 0), "n"));
-      const rej = piece(String(client.rejected || 0), "n");
-      if (client.rejected > 0) rej.setAttribute("data-active", "true");
-      row.appendChild(rej);
-      const fail = piece(String(client.failed || 0), "n");
-      if (client.failed > 0) fail.setAttribute("data-active", "true");
-      row.appendChild(fail);
-      const seen = piece("", "seen");
-      addTicker(seen.appendChild(document.createTextNode("")), "ago", client.lastSeenMs || 0);
-      row.appendChild(seen);
-      el.clientList.appendChild(row);
-    }
-  };
-
-  /* ── Recent transcriptions ── */
-
-  const renderRecent = (records) => {
-    if (!records || records.length === 0) {
-      el.recentList.replaceChildren();
-      el.placeholder.textContent = "No transcriptions yet.";
-      el.recentList.appendChild(el.placeholder);
-      el.recentCount.textContent = "0";
-      seenIds = new Set();
-      return;
-    }
-    el.recentCount.textContent = String(records.length);
-
-    const frag = document.createDocumentFragment();
-    const nextSeen = new Set();
-    for (const r of records) {
-      nextSeen.add(r.id);
-      const isFresh = loadedOnce && !seenIds.has(r.id);
-      const row = document.createElement("div");
-      row.className = "row" + (isFresh ? " fresh" : "");
-      row.setAttribute("role", "listitem");
-
-      const time = piece(formatClock(r.completedAtMs), "row-time");
-      const source = piece(r.source || "—", "row-source");
-      const client = piece(r.client || "—", "row-client");
-
-      const model = document.createElement("span");
-      model.className = "row-model";
-      const sep = document.createElement("span");
-      sep.className = "sep";
-      sep.textContent = "·";
-      model.appendChild(document.createTextNode(r.backend || "—"));
-      model.appendChild(sep);
-      model.appendChild(document.createTextNode(r.model || "—"));
-
-      const duration = piece([
-        formatDuration(r.durationSeconds || 0),
-        `q ${formatMillis(r.queueWaitMs || 0)}`,
-        `p ${formatMillis(r.processingMs || 0)}`,
-      ].join(" · "), "row-duration");
-
-      row.append(time, source, client, model, duration);
-      frag.appendChild(row);
-    }
-
-    el.recentList.replaceChildren(frag);
-    seenIds = nextSeen;
-  };
-
-  /* ── Apply a stats snapshot ── */
-
-  const apply = (stats) => {
-    lastStats = stats;
-    lastFetchAt = Date.now();
-    tickers = [];
-
-    el.bindAddr.textContent = stats.bindAddr || "—";
-    el.version.textContent = stats.serverVersion ? `v${stats.serverVersion}` : "—";
-    el.uptime.textContent = formatUptime(stats.uptimeSeconds || 0);
-
-    el.editConfig.disabled = false;
-    if (!editing) renderConfig(stats);
-    renderModelNotice(stats);
-
-    renderStreams(stats.streams || []);
-    renderQueue(stats.queue || [], stats.queueCapacity || 0);
-    renderWorkers(stats.workers || []);
-
-    el.totalValue.textContent = String(stats.totalTranscriptions || 0);
-    const audio = formatTotalAudio(stats.totalAudioSeconds || 0);
-    el.audioValue.replaceChildren(document.createTextNode(audio.value));
-    if (audio.unit) {
-      const u = document.createElement("span");
-      u.className = "unit";
-      u.textContent = audio.unit;
-      el.audioValue.appendChild(u);
-    }
-    el.avgQueueValue.textContent = formatMillis(stats.averageQueueMs || 0);
-    el.avgProcValue.textContent = formatMillis(stats.averageProcessingMs || 0);
-    el.rejectedValue.textContent = String(stats.rejectedJobs || 0);
-    el.failedValue.textContent = String(stats.failedJobs || 0);
-
-    renderClients(stats.clients || []);
-    renderRecent(stats.recent || []);
-    loadedOnce = true;
-  };
-
-  const fetchStats = async () => {
-    try {
-      const headers = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch("/v1/stats", { headers, cache: "no-store" });
-      if (res.status === 401) {
-        setConnection("unauthorized", "Unauthorized");
-        return;
-      }
-      if (!res.ok) {
-        setConnection("offline", `Host error ${res.status}`);
-        return;
-      }
-      const data = await res.json();
-      setConnection("live", "Live");
-      apply(data);
-    } catch {
-      setConnection("offline", "Reconnecting…");
-    }
-  };
-
-  fetchStats();
-  setInterval(fetchStats, 2000);
-  // Between polls, advance the displayed waits / elapsed times / last-seen
-  // ages so the pipeline reads as live rather than 2s-stale.
-  setInterval(() => {
-    if (connState !== "live") return;
-    for (const t of tickers) updateTicker(t);
-  }, 1000);
+  applyTheme();
+  if (DEMO) demo.start();
+  else {
+    // The event stream opens with a snapshot; polling (and its first fetch)
+    // only starts if the stream is unavailable.
+    connectEvents();
+    // Slow authoritative resync while live, so tables never drift.
+    setInterval(() => { if (S.conn === "live" && !document.hidden) fetchStats(false); }, 15000);
+  }
 })();
 </script>
 </body>
