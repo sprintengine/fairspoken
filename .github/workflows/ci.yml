@@ -1,9 +1,42 @@
 name: CI
 
+# Every pull request and every push to main, for every product: the Tauri
+# desktop app (released for Windows and Linux; its crate is also built and
+# tested on macOS), the standalone transcription host (the same crate's
+# `transcription-host` bin, plus a Linux arm64 build) and the two native macOS
+# apps in apps/macos, Fairspoken (the dictation client) and Fairspoken Server
+# (the transcription server).
+#
+# Pushes to other branches are left to their pull request, as in
+# sprintengine/studio: a branch with a PR open would otherwise be checked twice.
+#
+# No path filters, on the workflow or on a job: a required check that a path
+# filter skips never reports, and the pull request waits for it forever. Every
+# job runs on every change.
 on:
-  push:
-    branches: ["**"]
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  # The release workflow runs this whole gate against the exact commit it is
+  # releasing (see release.yml).
+  workflow_call:
+    inputs:
+      ref:
+        description: "The commit to check"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# A newer push supersedes an older one, on a pull request and on main alike. A
+# release gate (workflow_call, the only event with a ref input) gets a group of
+# its own so no push can cancel it. The same rule as Studio's ci.yml.
+concurrency:
+  group: ${{ inputs.ref && format('ci-release-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ !inputs.ref }}
 
 jobs:
   build:
@@ -12,12 +45,15 @@ jobs:
     # `ort` downloads is built against glibc >= 2.38 (it references the C23
     # `__isoc23_strtoll` family), which ubuntu-22.04's glibc 2.35 cannot link.
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -41,6 +77,11 @@ jobs:
       - name: Type-check and build frontend
         run: npm run build
 
+      - name: Test release scripts
+        run: npm run test:release
+
+      # --all-targets includes the transcription-host bin, so the host's
+      # Linux x64 build is checked here too.
       - name: Build backend (default — Parakeet + Whisper)
         run: cargo build --manifest-path src-tauri/Cargo.toml --all-targets
 
@@ -55,12 +96,15 @@ jobs:
     # macOS is the primary platform, and the Accessibility / insertion code
     # (macos_ax.rs, objc2) only compiles here — the Linux job never sees it.
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -85,12 +129,163 @@ jobs:
       - name: Test backend (default — Parakeet + Whisper)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  windows:
+    name: Build & test (Windows)
+    # The Windows desktop app and transcription host otherwise first compile in
+    # a release leg. The same image and native dependencies as release.yml's
+    # windows leg, so what passes here packages there.
+    #
+    # Only the library's unit tests run (`--lib`): they are the platform-neutral
+    # logic (settings, models, host protocol, transcript handling) and need no
+    # audio device or desktop session. The bins are built, not run.
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Windows native dependencies
+        shell: pwsh
+        run: |
+          choco install llvm cmake -y --no-progress
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # tauri::generate_context! embeds ../dist, so the frontend is built before
+      # any cargo command, the host bin included (it is in the same crate).
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - name: Build backend and transcription host
+        run: cargo build --manifest-path src-tauri/Cargo.toml --lib --bins
+
+      - name: Test backend (unit tests)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+  host-linux-arm64:
+    name: Build transcription host (Linux arm64)
+    # The one platform the release ships the host for but no other job builds:
+    # there is no Linux arm64 desktop app (Studio ships none either). ort has a
+    # prebuilt ONNX Runtime for aarch64-unknown-linux-gnu; ubuntu-24.04-arm has
+    # the same glibc 2.39 as the x64 job.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # The host is a bin of the Tauri crate, so it links the same libraries.
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev pkg-config cmake clang
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - name: Build transcription host
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin transcription-host
+
+  macos-app:
+    name: Build & test (macOS app)
+    # apps/macos targets macOS 26 and uses Liquid Glass, so it needs the macOS 26
+    # SDK: Xcode 26 on the macos-26 (arm64) image. Xcode is pinned by path rather
+    # than left to the image default, which moves; the Xcode_26.6.app path stays
+    # valid when a 26.6.x patch replaces it. Keep it in step with release.yml.
+    runs-on: macos-26
+    # Two apps and two Swift packages' tests.
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      # XcodeGen generates the git-ignored MultiVoice.xcodeproj. Not on the
+      # image; the release zip is pinned by version and checksum.
+      - name: Install XcodeGen
+        env:
+          XCODEGEN_VERSION: "2.46.0"
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodegen --version
+
+      # The FluidAudio and KeyboardShortcuts checkouts. They are pinned
+      # exactly in project.yml and in the local packages' manifests
+      # (FluidAudio in Packages/FairspokenSpeech), so those files are the key.
+      - name: Cache Swift packages
+        uses: actions/cache@v6
+        with:
+          path: apps/macos/build/SourcePackages
+          key: swiftpm-macos26-${{ hashFiles('apps/macos/project.yml', 'apps/macos/Packages/*/Package.swift') }}
+
+      # Every Swift package's unit tests (MultiVoiceCore and FairspokenHost).
+      - name: Unit tests (Swift packages)
+        run: apps/macos/scripts/test.sh
+
+      # Debug, ad-hoc signed: no Config/Local.xcconfig exists here, so no
+      # keychain identity is needed. build.sh builds both apps by default;
+      # release.yml builds and signs Release.
+      - name: Build both apps (Fairspoken and Fairspoken Server)
+        run: apps/macos/scripts/build.sh
+
   licenses:
     name: Dependency licenses
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Check Rust dependency licenses
         uses: EmbarkStudios/cargo-deny-action@v2

@@ -1,109 +1,232 @@
 name: Release
 
+# Main feeds a nightly train; stable is a promotion of what a nightly already
+# shipped. docs/releasing.md walks through each entry point:
+#
+#   schedule                    every 30 minutes, a nightly of main's head, but
+#                               only when the last nightly is 6+ hours old AND
+#                               main has commits it did not ship
+#                               (scripts/release/nightly-gate.mjs). A tick whose
+#                               main is behind or diverged from the last
+#                               nightly's commit (history rewritten) FAILS in
+#                               the resolve step rather than skipping quietly.
+#   dispatch nightly            a nightly of main's head now, gate skipped
+#   dispatch stable             promote: rebuild the commit the latest nightly
+#                               shipped, as stable X.Y.Z, and tag it -- so stable
+#                               only ever ships a build nightly users have run
+#   push a tag vX.Y.Z           stable build of exactly the tagged commit (hotfix)
+#
+# A merge to main publishes nothing; CI (ci.yml) gates it as before.
+#
+# Nightlies are vX.Y.Z-nightly.YYYYMMDD.RUN, where X.Y.Z is the version the next
+# stable would take (Conventional Commits since the last stable tag), published
+# as prereleases that are never marked latest, each carrying nightly.json.
+# Stables carry latest.json, which installed stable builds reach through
+# /releases/latest/download/latest.json (the endpoint in tauri.conf.json).
+#
+# Build jobs publish NOTHING. They hand their files and their share of the
+# updater manifest to one publish job, which merges the manifest, uploads
+# everything to a draft and only then makes the release visible, so a failed
+# leg never leaves a public half-release behind it.
+#
+# Every release carries every product, built from one commit at one version,
+# as Studio ships everything on one train:
+#
+#   package     the Tauri desktop app (Windows x64, Linux x64) and, on the same
+#               runner and target dir, the standalone transcription host
+#               (Windows x64, Linux x64/arm64, macOS arm64/x64). The
+#               linux-arm64 and both macOS legs build only the host: there is
+#               no Tauri app for Linux arm64, and none for macOS, where the
+#               native apps below take its place.
+#   macos-app   the native macOS apps in apps/macos (Apple Silicon, macOS 26):
+#               Fairspoken, the dictation client, and Fairspoken Server, the
+#               transcription server
+#
+# Only the Tauri app has an updater manifest, with Windows and Linux entries
+# only. The native apps' Sparkle feed is a TODO (see the macos-app job); the
+# host is installed by hand.
 on:
   push:
     tags:
       - "v*"
+  schedule:
+    # Minutes 7 and 37, off the top of the hour when scheduled runs queue
+    # longest. Most ticks end in the resolve step, which decides in seconds that
+    # the gate is shut; only a tick that passes it spends the packaging legs.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
-      publish:
-        description: "Publish artifacts to a GitHub Release"
+      channel:
+        description: "nightly builds main now; stable promotes the commit the latest nightly shipped"
         required: true
-        default: "true"
+        default: nightly
         type: choice
         options:
-          - "true"
-          - "false"
+          - nightly
+          - stable
+      version:
+        description: "stable only: publish as this X.Y.Z instead of the nightly's version (any version above the latest stable that no tag holds)"
+        required: false
+        default: ""
+        type: string
+      publish:
+        description: "Publish the release (false: build and keep the packages as workflow artifacts)"
+        required: true
+        default: true
+        type: boolean
+
+# Two queues. Nightlies share one so two ticks can never build the same commit
+# or publish out of order; stable runs (promotions, tags) share the other, so a
+# queued nightly never holds up a promotion. Neither cancels: a cancelled
+# release run can leave a draft or a tag behind, and every queued run is kept
+# rather than replaced by the next one.
+concurrency:
+  group: desktop-release-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel == 'nightly')) && 'nightly' || 'stable' }}
+  cancel-in-progress: false
+  queue: max
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
-    name: Validate release version
+    name: Resolve release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      publish: ${{ steps.publish.outputs.publish }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      ref: ${{ steps.resolve.outputs.ref }}
+      previous_sha: ${{ steps.resolve.outputs.previous_sha }}
+      source_private: ${{ steps.resolve.outputs.source_private }}
+      slug: ${{ steps.resolve.outputs.slug }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Read package version
-        id: version
-        shell: bash
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
 
-      - name: Validate tag matches package version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          VERSION="${{ steps.version.outputs.version }}"
-          if [ "$TAG" != "$VERSION" ]; then
-            echo "Tag v${TAG} does not match package.json version ${VERSION}" >&2
-            exit 1
-          fi
+      # Channel, version and commit for every later job. See the header for the
+      # entry points; scripts/release/release.mjs for the rules. A shut gate
+      # ends the run here, green, with should_build=false; a refusal (main
+      # rewritten under the last nightly, a promotion that cannot ship) exits
+      # non-zero and fails the run, so it is seen.
+      - name: Resolve channel, version and commit
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+          DISPATCH_CHANNEL: ${{ inputs.channel }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+          DISPATCH_PUBLISH: ${{ inputs.publish }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_TOKEN: ${{ github.token }}
+        run: node scripts/release/release.mjs resolve
 
-      - name: Decide publish mode
-        id: publish
-        shell: bash
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ] || [ "${{ github.event.inputs.publish }}" = "true" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          fi
+  # The whole CI gate against the exact commit being released. It runs beside
+  # the packaging legs; only the publish job waits for it, so it costs no
+  # wall-clock time.
+  quality:
+    name: Quality gate
+    needs: validate
+    if: needs.validate.outputs.should_build == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.validate.outputs.ref }}
 
   package:
     name: Package (${{ matrix.name }})
     needs: validate
+    if: needs.validate.outputs.should_build == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
+          # hostTarget names the leg's transcription host archive
+          # (HOST_TARGETS in scripts/release/release-lib.mjs). bundles is
+          # empty on a host-only leg, which skips the app packaging and
+          # collect steps; platform then only keys the Rust cache and the
+          # artifact, and is no updater platform.
           - name: windows
             os: windows-2022
-            args: ""
-            rustTargets: ""
-            artifactName: multivoice-tauri-windows
+            platform: windows-x86_64
+            target: ""
+            bundles: nsis
             hostBinary: src-tauri/target/release/transcription-host.exe
-            hostAsset: multivoice-tauri-transcription-host-windows.zip
+            hostTarget: windows-x64
+          # The transcription host only, signed and notarized. The Tauri app
+          # does not ship for macOS (the native apps do, from the macos-app
+          # job), so the updater manifest has no darwin-* entry.
           - name: macos-x64
             os: macos-15-intel
-            args: "--target x86_64-apple-darwin"
-            rustTargets: "x86_64-apple-darwin"
-            artifactName: multivoice-tauri-macos-x64
+            platform: darwin-x86_64
+            target: x86_64-apple-darwin
+            bundles: ""
             hostBinary: src-tauri/target/x86_64-apple-darwin/release/transcription-host
-            hostAsset: multivoice-tauri-transcription-host-macos-x64.zip
+            hostTarget: macos-x64
           - name: macos-arm64
-            os: macos-latest
-            args: "--target aarch64-apple-darwin"
-            rustTargets: "aarch64-apple-darwin"
-            artifactName: multivoice-tauri-macos-arm64
+            os: macos-15
+            platform: darwin-aarch64
+            target: aarch64-apple-darwin
+            bundles: ""
             hostBinary: src-tauri/target/aarch64-apple-darwin/release/transcription-host
-            hostAsset: multivoice-tauri-transcription-host-macos-arm64.zip
+            hostTarget: macos-arm64
           - name: linux
             # ubuntu-24.04 (glibc 2.39): the prebuilt ONNX Runtime pulled in by
             # the default Parakeet engine links against glibc >= 2.38, so it
             # cannot be linked on ubuntu-22.04. This raises the glibc floor for
             # the shipped Linux binaries accordingly.
             os: ubuntu-24.04
-            args: ""
-            rustTargets: ""
-            artifactName: multivoice-tauri-linux
+            platform: linux-x86_64
+            target: ""
+            bundles: appimage,deb
             hostBinary: src-tauri/target/release/transcription-host
-            hostAsset: multivoice-tauri-transcription-host-linux.zip
+            hostTarget: linux-x64
+          # The transcription host only: no bundles, so the app packaging and
+          # collect steps skip. Studio ships no Linux arm64 desktop app and
+          # neither does this train; the updater manifest has no linux-aarch64
+          # entry. Same glibc 2.39 floor as the x64 leg.
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            platform: linux-aarch64
+            target: ""
+            bundles: ""
+            hostBinary: src-tauri/target/release/transcription-host
+            hostTarget: linux-arm64
+
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      TAG: ${{ needs.validate.outputs.tag }}
+      TARGET: ${{ matrix.target }}
+      BUNDLES: ${{ matrix.bundles }}
+      # Signs the updater payload; the public half is in tauri.conf.json.
+      # Without it `tauri build` fails, rather than shipping an update no
+      # installed build would accept.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -111,12 +234,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rustTargets }}
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust build outputs
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: ${{ matrix.platform }}
 
       - name: Install Windows native dependencies
         if: runner.os == 'Windows'
@@ -129,73 +253,459 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev pkg-config rpm cmake clang libfuse2
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev pkg-config cmake clang libfuse2
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and publish release assets
-        if: needs.validate.outputs.publish == 'true'
-        uses: tauri-apps/tauri-action@action-v0.6.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
-        with:
-          tagName: v__VERSION__
-          releaseName: Multivoice Tauri v__VERSION__
-          releaseBody: Download the installer for your platform from the assets below.
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+      # Before the build: a nightly or promoted version is not what
+      # package.json says at this commit, and the version must be the same in
+      # the bundle, the app's own Settings screen and the updater manifest.
+      #
+      # A promotion builds the commit a nightly shipped while this workflow
+      # file comes from main, so a step that calls a repository script must
+      # survive a checkout from before that script existed. Every step here
+      # calls scripts that predate the first nightly; keep it that way.
+      - name: Stamp the release version
+        run: node scripts/release/release.mjs stamp "${VERSION}"
 
-      - name: Build workflow artifacts
-        if: needs.validate.outputs.publish != 'true'
-        uses: tauri-apps/tauri-action@action-v0.6.2
+      # Packaging is split by platform ONLY so each platform's signing secrets
+      # reach no other runner. macOS has no app step: those legs build only the
+      # transcription host.
+      #
+      # Azure Trusted Signing through trusted-signing-cli, which Tauri runs on
+      # every binary it signs -- no certificate file, no hardware token. All
+      # six secrets sign; none leaves the installer unsigned (SmartScreen warns
+      # on first run); a partial set is a misconfiguration and fails.
+      - name: Package app (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
-        with:
-          args: ${{ matrix.args }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        run: |
+          names=(AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TRUSTED_SIGNING_ENDPOINT
+                 AZURE_TRUSTED_SIGNING_ACCOUNT_NAME AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME)
+          present=0
+          for name in "${names[@]}"; do [ -n "${!name}" ] && present=$((present + 1)); done
+          config='{"bundle":{"createUpdaterArtifacts":true}}'
+          if [ "$present" -eq "${#names[@]}" ]; then
+            echo "Windows signing enabled (Azure Trusted Signing)."
+            cargo install trusted-signing-cli --locked
+            # shellcheck disable=SC2016 # the ${...} are node's template literals, not the shell's
+            config=$(node -e '
+              const e = process.env
+              const sign = `trusted-signing-cli -e ${e.AZURE_TRUSTED_SIGNING_ENDPOINT} -a ${e.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME} -c ${e.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME} %1`
+              console.log(JSON.stringify({ bundle: { createUpdaterArtifacts: true, windows: { signCommand: sign } } }))')
+          elif [ "$present" -eq 0 ]; then
+            echo "Windows signing disabled: no Azure Trusted Signing secrets are set."
+          else
+            echo "Only ${present} of the ${#names[@]} Azure Trusted Signing secrets are set." >&2
+            echo "Set all of them to sign, or none to ship unsigned." >&2
+            exit 1
+          fi
+          npx tauri build --bundles "$BUNDLES" --config "$config"
+          echo "BUNDLE_DIR=src-tauri/target/release/bundle" >> "$GITHUB_ENV"
+
+      - name: Package app (Linux)
+        if: runner.os == 'Linux' && matrix.bundles != ''
+        shell: bash
+        run: |
+          npx tauri build --bundles "$BUNDLES" --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          echo "BUNDLE_DIR=src-tauri/target/release/bundle" >> "$GITHUB_ENV"
+
+      # Renames the bundles so every leg's files can share one release, and
+      # writes this leg's entry of the updater manifest beside them.
+      - name: Collect release files
+        if: matrix.bundles != ''
+        shell: bash
+        run: node scripts/release/release.mjs collect "${{ matrix.platform }}" release-assets
+
+      # `tauri build` builds the frontend on the app legs; the host is a bin
+      # of the same crate, whose tauri::generate_context! reads ../dist, so
+      # the host-only legs (linux-arm64, macos-x64, macos-arm64) build it here.
+      - name: Build frontend (host-only leg)
+        if: matrix.bundles == ''
+        run: npm run build
 
       - name: Build transcription host
-        run: cargo build --manifest-path src-tauri/Cargo.toml --bin transcription-host --release ${{ matrix.args }}
+        shell: bash
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin transcription-host --release ${TARGET:+--target "$TARGET"}
 
-      - name: Package transcription host
-        id: package-host
-        shell: pwsh
-        run: |
-          $assetDir = Join-Path $env:RUNNER_TEMP "multivoice-tauri-assets"
-          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
-          $binary = "${{ matrix.hostBinary }}"
-          if (-not (Test-Path $binary)) {
-            throw "Expected transcription host binary not found: $binary"
-          }
-          $staged = Join-Path $assetDir (Split-Path -Leaf $binary)
-          Copy-Item $binary $staged -Force
-          $archive = Join-Path $assetDir "${{ matrix.hostAsset }}"
-          Compress-Archive -Path $staged -DestinationPath $archive -Force
-          "host_archive=$archive" >> $env:GITHUB_OUTPUT
-
-      - name: Upload transcription host release asset
-        if: needs.validate.outputs.publish == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.validate.outputs.version }}
-          name: Multivoice Tauri v${{ needs.validate.outputs.version }}
-          body: Download the installer for your platform from the assets below.
-          draft: true
-          prerelease: false
-          files: ${{ steps.package-host.outputs.host_archive }}
+      # The macOS host binary gets the Developer ID signature and hardened
+      # runtime, and is notarized, when the Apple secrets are set. CSC_LINK is
+      # a "Developer ID Application" certificate exported as a base64 .p12 (the
+      # same secret names as sprintengine/studio, so the values carry over).
+      # With none of the five set it keeps the linker's ad-hoc signature, with
+      # a warning; a partial set is a misconfiguration and fails. A bare binary
+      # cannot be stapled: Gatekeeper fetches its ticket online the first time
+      # a downloaded copy runs. The certificate goes into a temporary keychain
+      # of this job's own, never the login one.
+      - name: Sign and notarize transcription host (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          HOST_BINARY: ${{ matrix.hostBinary }}
+        run: |
+          set -euo pipefail
+          names=(CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID)
+          present=0
+          for name in "${names[@]}"; do [ -n "${!name}" ] && present=$((present + 1)); done
+          if [ "$present" -eq 0 ]; then
+            echo "::warning::No Apple signing secrets: the macOS transcription host ships ad-hoc signed and not notarized."
+            exit 0
+          elif [ "$present" -ne "${#names[@]}" ]; then
+            echo "Only ${present} of the ${#names[@]} Apple signing secrets are set." >&2
+            echo "Set all of them to sign and notarize, or none to ship ad-hoc signed." >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/host-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/host-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/host-signing.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/host-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          # shellcheck disable=SC2046 # one keychain path per word
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -nE 's/^ *[0-9]+\) [0-9A-F]+ "(Developer ID Application: .*)"$/\1/p' | head -1)"
+          if [ -z "$identity" ]; then
+            echo "CSC_LINK holds no Developer ID Application identity." >&2
+            exit 1
+          fi
+          codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$identity" "$HOST_BINARY"
+          codesign --verify --strict --verbose=2 "$HOST_BINARY"
+          ditto -c -k "$HOST_BINARY" "$RUNNER_TEMP/host-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/host-notarize.zip" --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 45m --output-format json > "$RUNNER_TEMP/host-notarize.json" || true
+          status="$(plutil -extract status raw -o - "$RUNNER_TEMP/host-notarize.json" 2>/dev/null || echo "no answer")"
+          security delete-keychain "$keychain"
+          if [ "$status" != "Accepted" ]; then
+            cat "$RUNNER_TEMP/host-notarize.json" >&2 || true
+            echo "Notarization of the transcription host ended: ${status}" >&2
+            exit 1
+          fi
+          echo "Transcription host signed as ${identity} and notarized."
+
+      # One folder per platform, named like the archive: the binary, the wire
+      # protocol it serves, the systemd and launchd service files, and the
+      # licences. tar.gz keeps the binary executable; Windows gets a zip.
+      # hostArchiveName in scripts/release/release-lib.mjs names the same files
+      # for the verify step.
+      - name: Package transcription host
+        shell: pwsh
+        env:
+          SLUG: ${{ needs.validate.outputs.slug }}
+          HOST_TARGET: ${{ matrix.hostTarget }}
+          HOST_BINARY: ${{ matrix.hostBinary }}
+        run: |
+          if (-not (Test-Path $env:HOST_BINARY)) {
+            throw "Expected transcription host binary not found: $env:HOST_BINARY"
+          }
+          $stem = "$env:SLUG-$env:VERSION-transcription-host-$env:HOST_TARGET"
+          $stage = Join-Path $env:RUNNER_TEMP $stem
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Copy-Item $env:HOST_BINARY $stage
+          foreach ($file in @('src-tauri/src/host/PROTOCOL.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+            if (Test-Path $file) { Copy-Item $file $stage }
+          }
+          if (Test-Path packaging/host) { Copy-Item packaging/host/* $stage }
+          if ($IsWindows) {
+            Compress-Archive -Path $stage -DestinationPath "release-assets/$stem.zip" -Force
+          } else {
+            chmod +x (Join-Path $stage (Split-Path -Leaf $env:HOST_BINARY))
+            tar -C $env:RUNNER_TEMP -czf "release-assets/$stem.tar.gz" $stem
+            if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
+          }
+          Get-ChildItem -Recurse $stage | ForEach-Object { $_.FullName.Substring($env:RUNNER_TEMP.Length) }
+
+      # A host for a headless server must not need a desktop. Printed rather
+      # than enforced until a release has shown what it links.
+      - name: Show the transcription host's shared libraries (Linux)
+        if: runner.os == 'Linux'
+        run: ldd "${{ matrix.hostBinary }}"
 
       - name: Upload packaged artifacts
-        if: needs.validate.outputs.publish != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifactName }}-${{ needs.validate.outputs.version }}
+          name: release-${{ matrix.platform }}-${{ needs.validate.outputs.version }}
           if-no-files-found: error
           retention-days: 14
-          path: |
-            src-tauri/target/**/release/bundle/**/*
-            ${{ steps.package-host.outputs.host_archive }}
+          path: release-assets/*
+
+  # The native macOS apps (apps/macos): the same commit and version as every
+  # other leg, on the same release. Release configuration, Developer ID signed
+  # with the hardened runtime, notarized and stapled by
+  # apps/macos/scripts/release.sh -- the script a maintainer runs locally:
+  #
+  #   release.sh               Fairspoken.app, the dictation client, as
+  #                            Fairspoken-<version>-macos-arm64.zip and .dmg
+  #   release.sh --app server  Fairspoken Server.app, the transcription server,
+  #                            as Fairspoken-Server-<version>-macos-arm64.zip
+  #                            and .dmg
+  #
+  # Both runs write into release-assets, so one artifact carries all four files.
+  #
+  # Apple Silicon only (the apps need macOS 26 and the Neural Engine). They
+  # need the macOS 26 SDK, so Xcode 26 on macos-26, pinned by path as in ci.yml.
+  #
+  # Bundle ids ie.fairspoken.mac (client) and ie.fairspoken.server (server), the
+  # same on both channels; a nightly says what it is in its version
+  # (CFBundleShortVersionString is the full nightly version). Studio keeps one
+  # app id across channels the same way, and macOS keys Microphone and
+  # Accessibility grants on the bundle id, so moving between nightly and stable
+  # keeps them. CFBundleVersion is this workflow's run number, which only grows:
+  # what Sparkle will compare.
+  #
+  # TODO(updates): Sparkle is not set up, so there is no appcast and nothing
+  # here publishes one; installs update by hand. Each .zip is the payload a
+  # Sparkle appcast will point at once it exists.
+  macos-app:
+    name: Package (macos-app-arm64)
+    needs: validate
+    if: needs.validate.outputs.should_build == 'true'
+    runs-on: macos-26
+    # Two apps, each built, then notarized twice (the app, then its DMG).
+    timeout-minutes: 150
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+
+      - name: Install XcodeGen
+        env:
+          XCODEGEN_VERSION: "2.46.0"
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcodegen --version
+
+      # Spotlight indexes each DMG the moment hdiutil mounts it and holds the
+      # volume open, so the detach fails "Resource busy" (Studio hit this).
+      - name: Stop Spotlight indexing
+        run: sudo mdutil -a -i off
+
+      # All five secrets sign and notarize; none ships ad-hoc signed builds
+      # named -unsigned, with a warning; a partial set is a misconfiguration and
+      # fails, as in the transcription host's macOS signing. CSC_LINK is the
+      # Developer ID Application .p12 (base64) shared with those legs and with
+      # Studio. It is imported into a temporary keychain that only this job
+      # uses, and both apps are signed from it.
+      - name: Import the Developer ID certificate
+        id: signing
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          names=(CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID)
+          present=0
+          for name in "${names[@]}"; do [ -n "${!name}" ] && present=$((present + 1)); done
+          if [ "$present" -eq 0 ]; then
+            echo "::warning::No Apple signing secrets are set; the native macOS apps ship ad-hoc signed, not notarized, and named -unsigned."
+            echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$present" -ne "${#names[@]}" ]; then
+            echo "Only ${present} of the ${#names[@]} Apple signing secrets are set." >&2
+            echo "Set all of them to sign and notarize, or none to ship unsigned." >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/app-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/app-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          # Locks after three hours idle: longer than the job may run.
+          security set-keychain-settings -lut 10800 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/app-signing.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/app-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          # shellcheck disable=SC2046 # one keychain path per word
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "FS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "mode=notarize" >> "$GITHUB_OUTPUT"
+          echo "Developer ID certificate imported; the apps will be signed and notarized."
+
+      - name: Build, sign, notarize and package Fairspoken (client)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MODE: ${{ steps.signing.outputs.mode }}
+        run: |
+          args=(--version "$VERSION" --build-number "$GITHUB_RUN_NUMBER" --out "$GITHUB_WORKSPACE/release-assets")
+          if [ "$MODE" = "unsigned" ]; then args+=(--unsigned); fi
+          apps/macos/scripts/release.sh "${args[@]}"
+
+      # The same version, build number, output folder, secrets and unsigned
+      # fallback as the client.
+      - name: Build, sign, notarize and package Fairspoken Server
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MODE: ${{ steps.signing.outputs.mode }}
+        run: |
+          args=(--app server --version "$VERSION" --build-number "$GITHUB_RUN_NUMBER" --out "$GITHUB_WORKSPACE/release-assets")
+          if [ "$MODE" = "unsigned" ]; then args+=(--unsigned); fi
+          apps/macos/scripts/release.sh "${args[@]}"
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos-app-${{ needs.validate.outputs.version }}
+          if-no-files-found: error
+          retention-days: 14
+          path: release-assets/*
+
+      - name: Remove the signing keychain
+        if: always() && env.FS_KEYCHAIN != ''
+        run: security delete-keychain "$FS_KEYCHAIN" || true
+
+  publish:
+    name: Publish release
+    needs: [validate, quality, package, macos-app]
+    if: needs.validate.outputs.should_build == 'true' && needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # To create the release, and the tag it sits on, in this repository.
+      contents: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      TAG: ${{ needs.validate.outputs.tag }}
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+      REF: ${{ needs.validate.outputs.ref }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*-${{ needs.validate.outputs.version }}
+          merge-multiple: true
+          path: release-assets
+
+      - name: Merge the updater manifest
+        run: node scripts/release/release.mjs merge-manifest release-assets "${CHANNEL}"
+
+      - name: Write release notes
+        env:
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_PRIVATE: ${{ needs.validate.outputs.source_private }}
+          PREVIOUS_SHA: ${{ needs.validate.outputs.previous_sha }}
+        run: node scripts/release/release.mjs notes release-notes.md
+
+      # Draft first, every file uploaded, and only then visible. The updater
+      # reads the release the moment it is published; a release published
+      # before its last file finished uploading is one somebody can
+      # half-install.
+      - name: Publish the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCT="$(node -p "require('./src-tauri/tauri.conf.json').productName")"
+
+          # --target does not move an existing tag. A retry must never publish
+          # packages whose source differs from the tag the release advertises.
+          if tagged_ref=$(git rev-parse --verify "refs/tags/${TAG}^{commit}" 2>/dev/null); then
+            if [ "$tagged_ref" != "$REF" ]; then
+              echo "${TAG} points at ${tagged_ref}, not the built commit ${REF}." >&2
+              exit 1
+            fi
+          fi
+
+          # A draft left by an earlier failed attempt of this same version.
+          if gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null | grep -qx true; then
+            echo "Removing the draft left by an earlier attempt."
+            gh release delete "$TAG" --repo "$REPO" --yes
+          fi
+
+          # Only a stable is ever latest: every installed stable build resolves
+          # its next version through /releases/latest.
+          if [ "$CHANNEL" = "latest" ]; then
+            flags=()
+            latest="--latest"
+          else
+            flags=(--prerelease)
+            latest="--latest=false"
+          fi
+
+          # --target: a tag that does not exist yet is created on the commit
+          # that was built, not on whatever main has moved to since. For a
+          # promotion that is the nightly's commit, which is how the stable tag
+          # lands on it.
+          gh release create "$TAG" --repo "$REPO" --target "$REF" --draft "${flags[@]}" \
+            --title "${PRODUCT} ${VERSION}" \
+            --notes-file release-notes.md \
+            release-assets/*
+          gh release edit "$TAG" --repo "$REPO" --draft=false "$latest"
+
+      # Twice over: once through the API with the job's token, which says the
+      # release is complete, and once with no credential at all against the
+      # URLs installed builds read, which says a user can actually get at it.
+      # Only the second catches a repository that is private or misnamed.
+      - name: Verify the published release, authenticated and not
+        run: node scripts/release/release.mjs verify
+
+      # Nightlies past the newest few are installers nothing reads: installed
+      # nightly builds, the nightly gate and a stable promotion all go to the
+      # newest. Their tags stay. After the release is verified, so the newest
+      # is the one just made; and a failure here leaves the release it follows
+      # published, so it does not fail the job.
+      - name: Delete the older nightly releases
+        if: needs.validate.outputs.channel == 'nightly'
+        continue-on-error: true
+        run: node scripts/release/release.mjs prune-nightlies
+
+      # A promoted stable has no tag in the source repo yet; a pushed one does.
+      # `gh release create --target` above normally creates it already; this
+      # stays as the guard. The workflow's own token does not trigger another run.
+      - name: Tag the source commit
+        if: needs.validate.outputs.channel == 'latest' && github.event_name != 'push'
+        run: |
+          if gh api "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "${TAG} already exists on ${REPO}."
+          else
+            gh api "repos/${REPO}/git/refs" -f "ref=refs/tags/${TAG}" -f "sha=${REF}"
+          fi

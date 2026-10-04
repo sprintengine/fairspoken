@@ -1,0 +1,9 @@
+# Configuration for actionlint (https://github.com/rhysd/actionlint).
+#   actionlint            # from the repository root: checks every workflow
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      # `concurrency.queue: max` keeps every queued release run instead of
+      # replacing the pending one (sprintengine/studio's release.yml uses it the
+      # same way). actionlint 1.7.12, the newest release, predates the key.
+      - 'unexpected key "queue" for "concurrency" section'
