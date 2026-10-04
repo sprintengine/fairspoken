@@ -2,11 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createPublisherIcon } from "./publisherIcons";
 
-type ModelSettings = { model: string };
+type ModelSettings = { model: string; polishModel?: string };
 function render(settings: ModelSettings): void {
   for (const [id, publisher] of [
-    ["speechModelIdentity", settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"],
-    ["polishModelIdentity", "Qwen"],
+    ["speechModelIdentity", settings.model === "parakeet-ultra" ? "Moondream" : settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"],
+    ["polishModelIdentity", settings.polishModel?.startsWith("speakoflow") ? "SpeakoFlow" : "Qwen"],
   ]) {
     const host = document.getElementById(id);
     if (!host) continue;

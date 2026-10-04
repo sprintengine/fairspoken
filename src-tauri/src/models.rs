@@ -21,6 +21,10 @@ const PARAKEET_DIR: &str = "parakeet-tdt-0.6b-v3";
 const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 const PARAKEET_V2_MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
 const PARAKEET_V2_BASE_URL: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85";
+/// Moondream's Parakeet Ultra, a post-trained Parakeet TDT 0.6B v3, as an
+/// ONNX export laid out exactly like the istupakov TDT folders.
+const PARAKEET_ULTRA_MODEL_ID: &str = "parakeet-ultra";
+const PARAKEET_ULTRA_BASE_URL: &str = "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/parakeet-ultra";
 const PARAKEET_FILES: [&str; 4] = [
     "encoder-model.onnx",
     "encoder-model.onnx.data",
@@ -34,6 +38,7 @@ const PARAKEET_FILES: [&str; 4] = [
 pub enum SttModel {
     Parakeet,
     ParakeetV2,
+    ParakeetUltra,
     #[cfg(feature = "whisper")]
     Whisper(WhisperModel),
 }
@@ -49,6 +54,7 @@ impl SttModel {
         match model_id {
             PARAKEET_MODEL_ID | "parakeet" => Some(Self::Parakeet),
             PARAKEET_V2_MODEL_ID => Some(Self::ParakeetV2),
+            PARAKEET_ULTRA_MODEL_ID => Some(Self::ParakeetUltra),
             #[cfg(feature = "whisper")]
             other => WhisperModel::from_model_id(other).map(Self::Whisper),
             #[cfg(not(feature = "whisper"))]
@@ -60,6 +66,7 @@ impl SttModel {
         match self {
             Self::Parakeet => PARAKEET_MODEL_ID,
             Self::ParakeetV2 => PARAKEET_V2_MODEL_ID,
+            Self::ParakeetUltra => PARAKEET_ULTRA_MODEL_ID,
             #[cfg(feature = "whisper")]
             Self::Whisper(model) => model.model_id(),
         }
@@ -69,7 +76,7 @@ impl SttModel {
     /// the language and vocabulary-prompt settings).
     pub fn is_whisper(self) -> bool {
         match self {
-            Self::Parakeet | Self::ParakeetV2 => false,
+            Self::Parakeet | Self::ParakeetV2 | Self::ParakeetUltra => false,
             #[cfg(feature = "whisper")]
             Self::Whisper(_) => true,
         }
@@ -276,6 +283,7 @@ impl ModelService {
         match model {
             SttModel::Parakeet => self.base_dir.join(PARAKEET_DIR),
             SttModel::ParakeetV2 => self.base_dir.join(PARAKEET_V2_MODEL_ID),
+            SttModel::ParakeetUltra => self.base_dir.join(PARAKEET_ULTRA_MODEL_ID),
             #[cfg(feature = "whisper")]
             SttModel::Whisper(whisper) => self.base_dir.join(whisper.file_name()),
         }
@@ -327,6 +335,27 @@ impl ModelService {
                     })
                     .collect();
                 (self.base_dir.join(PARAKEET_V2_MODEL_ID), files)
+            }
+            SttModel::ParakeetUltra => {
+                // v3's architecture, tokenizer (identical vocab.txt) and 25
+                // languages with post-trained weights, so the same TDT loader
+                // runs it unchanged. Only the fp32 export is published.
+                let hashes = [
+                    "76f835e57d62d82f1485c7a84706782e44a123a69f4efa86ed3b4ad56e236051",
+                    "6aeb9438f1f45dafc17d27c61a12bc406c0c2ccb8c17219aeeb3f898c283a8e6",
+                    "a5911fe202e8fba44251fce252a6c9c7c0a7c724c882a13f81d96611fa2d7ccb",
+                    "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+                ];
+                let files = PARAKEET_FILES
+                    .iter()
+                    .zip(hashes)
+                    .map(|(name, hash)| ModelFile {
+                        name,
+                        url: format!("{PARAKEET_ULTRA_BASE_URL}/{name}"),
+                        hash: Some(ModelHash::Sha256(hash)),
+                    })
+                    .collect();
+                (self.base_dir.join(PARAKEET_ULTRA_MODEL_ID), files)
             }
             SttModel::Parakeet => {
                 let files = PARAKEET_FILES
@@ -596,6 +625,26 @@ mod tests {
         assert!(files.iter().all(
             |f| f.url.contains("0bbb45a3365852604aef28b538a8f066f4ccaa85") && f.hash.is_some()
         ));
+    }
+
+    #[test]
+    fn parakeet_ultra_has_its_own_pinned_verified_manifest() {
+        let model: SttModel = serde_json::from_str("\"parakeet-ultra\"").unwrap();
+        assert_eq!(model, SttModel::ParakeetUltra);
+        assert!(!model.is_whisper());
+        assert_eq!(serde_json::to_string(&model).unwrap(), "\"parakeet-ultra\"");
+        let service = ModelService::default();
+        let (path, files) = service.storage(model);
+        assert!(path.ends_with("parakeet-ultra"));
+        assert_ne!(path, service.path_for(SttModel::default()));
+        assert_eq!(
+            files.iter().map(|f| f.name).collect::<Vec<_>>(),
+            super::PARAKEET_FILES
+        );
+        assert!(files.iter().all(|f| f
+            .url
+            .contains("4d2a8bc71f5c896ec40faa59732e6716295edaf2/parakeet-ultra/")
+            && f.hash.is_some()));
     }
 
     #[test]

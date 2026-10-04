@@ -127,7 +127,7 @@ fn maybe_polish_impl(
         return PolishDecision::Disabled;
     }
     if settings.cloud_auth_token.trim().is_empty() {
-        return PolishDecision::Skipped("no MultiVoice Cloud token");
+        return PolishDecision::Skipped("no Fairspoken Cloud token");
     }
     if raw_transcript.trim().is_empty() {
         return PolishDecision::Skipped("empty transcript");
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn response_deserializes_from_the_worker_shape() {
-        // Copied from the MultiVoice Cloud Worker's /v1/polish contract.
+        // Copied from the Fairspoken Cloud Worker's /v1/polish contract.
         let body = r#"{
             "text": "cleaned transcript",
             "changed": true,
@@ -353,7 +353,7 @@ mod tests {
         };
         assert!(matches!(
             maybe_polish(raw, &no_token, None, None),
-            PolishDecision::Skipped("no MultiVoice Cloud token")
+            PolishDecision::Skipped("no Fairspoken Cloud token")
         ));
 
         assert!(matches!(

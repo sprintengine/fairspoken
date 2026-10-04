@@ -34,6 +34,13 @@ async function choose(patch: Partial<Settings>): Promise<void> {
   await invoke("save_settings", { settings: { ...latest, ...patch } });
   await load();
 }
+// Parakeet variants share one row; each has its own picker label, publisher and summary.
+const PARAKEET_VARIANTS: Record<string, { label: string; publisher: string; detail: string }> = {
+  "parakeet-tdt-0.6b-v3": { label: "0.6B v3 · Recommended", publisher: "NVIDIA", detail: "NVIDIA · Recommended · 25 languages" },
+  "parakeet-ultra": { label: "Ultra 0.6B · Moondream", publisher: "Moondream", detail: "Moondream · Post-trained v3, lower error rates · 25 languages · 2.60 GB download" },
+  "parakeet-tdt-0.6b-v2": { label: "0.6B v2 · English", publisher: "NVIDIA", detail: "NVIDIA · English · 2.51 GB download" },
+};
+const parakeetVariant = (model: string) => PARAKEET_VARIANTS[model] ?? PARAKEET_VARIANTS["parakeet-tdt-0.6b-v3"];
 const size = (bytes: number): string => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
 function row(id: string, title: string, publisher: string, detail: string, status: string): { element: HTMLElement; actions: HTMLElement } {
   const element = document.createElement("div"); element.className = "ds-list-row model-row"; element.id = `model-${id}`;
@@ -163,7 +170,7 @@ function progressUpdate(value: Download): void {
 function render(): void {
   const focusedId = root.contains(document.activeElement) ? (document.activeElement as HTMLElement).id : "";
   rows.clear();
-  root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "Available speech models for this device." : `Currently using ${settings.transcriptionLocation === "cloud" ? "MultiVoice Cloud" : "your remote host"}. Choose Use to switch to local dictation.`;
+  root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "Available speech models for this device." : `Currently using ${settings.transcriptionLocation === "cloud" ? "Fairspoken Cloud" : "your remote host"}. Choose Use to switch to local dictation.`;
   const speechList = root.querySelector("#dictationModels")!; speechList.replaceChildren();
   for (const family of ["parakeet", "whisper"]) {
     const options = speech.filter(m => m.model.startsWith("parakeet") === (family === "parakeet"));
@@ -173,11 +180,11 @@ function render(): void {
     variants.set(family, m.model);
     const parakeet = family === "parakeet";
     const selected = settings.transcriptionLocation === "local" && settings.model === m.model;
-    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? "NVIDIA" : "OpenAI", parakeet ? (m.model.endsWith("-v2") ? "NVIDIA · English · 2.51 GB download" : "NVIDIA · Recommended · 25 languages") : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
+    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? parakeetVariant(m.model).publisher : "OpenAI", parakeet ? parakeetVariant(m.model).detail : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
     r.element.id = `family-${family}`;
     const picker = variantPicker(family, parakeet ? "Parakeet" : "Whisper", options.map(option => ({
       value: option.model,
-      label: `${parakeet ? (option.model.endsWith("-v2") ? "0.6B v2 · English" : "0.6B v3 · Recommended") : option.model}${option.cached ? " · Downloaded" : ""}${settings.model === option.model && settings.transcriptionLocation === "local" ? " · Selected" : ""}`,
+      label: `${parakeet ? parakeetVariant(option.model).label : option.model}${option.cached ? " · Downloaded" : ""}${settings.model === option.model && settings.transcriptionLocation === "local" ? " · Selected" : ""}`,
     })), m.model);
     r.element.querySelector(".ds-list-row-content")!.append(picker);
     r.actions.append(button(m.cached ? (selected ? "Selected" : "Use") : speechDownload === m.model ? "Downloading…" : "Download", async () => {
@@ -270,6 +277,7 @@ function supportedVariant(id: string): { family: string; model?: string } | null
     const model = `parakeet-tdt-0.6b-${parakeet[1] ?? parakeet[2]}`;
     if (speech.some(m => m.model === model)) return { family: "parakeet", model };
   }
+  if (id === "moondream/parakeet-ultra" && speech.some(m => m.model === "parakeet-ultra")) return { family: "parakeet", model: "parakeet-ultra" };
   const whisper = /^openai\/whisper-(tiny|base|small|medium|large-v2|large-v3|large-v3-turbo)$/.exec(id);
   if (whisper && speech.some(m => m.model === whisper[1])) return { family: "whisper", model: whisper[1] };
   if (id === "ggerganov/whisper.cpp" && speech.some(m => !m.model.startsWith("parakeet"))) return { family: "whisper" };
@@ -296,7 +304,7 @@ function localHits(query: string): SearchHit[] {
     if (!options.length) continue;
     const title = family === "parakeet" ? "Parakeet" : "Whisper";
     const publisher = family === "parakeet" ? "NVIDIA" : "OpenAI";
-    if (![title, publisher, family, ...options.map(m => m.model)].join(" ").toLowerCase().includes(needle)) continue;
+    if (![title, publisher, family, ...options.map(m => m.model), ...options.map(m => PARAKEET_VARIANTS[m.model]?.publisher ?? "")].join(" ").toLowerCase().includes(needle)) continue;
     hits.push({ key: `local-${family}`, title, publisher, detail: family === "parakeet" ? "On-device dictation" : "whisper.cpp dictation", family, model: variants.get(family) ?? options.find(m => m.model === settings?.model)?.model ?? options[0].model });
   }
   for (const model of catalog?.polish ?? []) {
