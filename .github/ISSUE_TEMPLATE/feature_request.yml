@@ -6,7 +6,7 @@ body:
     id: problem
     attributes:
       label: What problem would this solve?
-      description: Describe the situation where MultiVoice falls short today.
+      description: Describe the situation where Fairspoken falls short today.
     validations:
       required: true
   - type: textarea

@@ -1,14 +1,14 @@
-# MultiVoice
+# Fairspoken
 
 Fast, private, local-first desktop dictation. Press a shortcut, speak, and the
 text lands in whatever app you're typing in.
 
-MultiVoice transcribes **on your machine** by default with NVIDIA's Parakeet
+Fairspoken transcribes **on your machine** by default with NVIDIA's Parakeet
 TDT model: no account, no network, and no audio ever leaves your computer. On
 Apple Silicon a typical dictation is transcribed in a few hundred milliseconds.
 
 If you'd rather not spend local CPU/RAM, or want the extra features below,
-there is an optional hosted service, **MultiVoice Cloud**, that you can sign in
+there is an optional hosted service, **Fairspoken Cloud**, that you can sign in
 to and pay for with credits. It is off by default and the app is fully usable
 without it.
 
@@ -26,18 +26,33 @@ without it.
 - **History and notes**: recent transcripts, copy-again, and a notes view.
 - **Remote host**: run the bundled `transcription-host` on another machine
   (e.g. a Mac mini) and stream audio to it over your own network.
-- **MultiVoice Cloud (optional, paid)**: hosted transcription, AI polish
+- **Fairspoken Cloud (optional, paid)**: hosted transcription, AI polish
   (filler-word and self-correction cleanup with one-click "Undo AI edit"), and
   app-aware tone. Polish and context awareness are off unless you turn them on.
 
 ## Install
 
 Pre-built releases are published on the
-[Releases page](https://github.com/sprintengine/multivoice-tauri/releases).
-macOS is the primary platform; Windows and Linux builds are produced by CI and
-are less tested.
+[Releases page](https://github.com/sprintengine/fairspoken/releases).
+macOS is the primary platform. Each release carries:
 
-On macOS, MultiVoice needs **Microphone** access, and **Accessibility** access
+- **macOS** (Apple Silicon, macOS 26): the native app,
+  `Fairspoken-<version>-macos-arm64.dmg` (or `.zip`), and Fairspoken Server,
+  `Fairspoken-Server-<version>-macos-arm64.dmg` (or `.zip`), for a Mac that
+  transcribes for other devices. The desktop app built from this repository is
+  not released for macOS.
+- **Windows and Linux**: the desktop app (`-windows-x64-setup.exe`,
+  `.AppImage`, `.deb`), produced by CI and less tested.
+- **The standalone transcription host** for macOS (arm64 and x64), Windows and
+  Linux (x64 and arm64), as `-transcription-host-<platform>` archives.
+
+Installed Windows and Linux builds update themselves: stable builds follow
+stable releases, and nightly builds (the prereleases) follow nightlies. Updates
+download in the background and install when you choose **Restart to update** in
+Settings → General → Updates. The macOS apps do not update themselves yet;
+install each new release by hand. See [docs/releasing.md](docs/releasing.md).
+
+On macOS, Fairspoken needs **Microphone** access, and **Accessibility** access
 to insert text into other apps.
 
 ## Build from source
@@ -89,19 +104,60 @@ Capacity settings (defaults shown):
 MULTIVOICE_HOST_WORKERS=1
 MULTIVOICE_HOST_QUEUE_CAPACITY=8
 MULTIVOICE_HOST_MAX_ACTIVE_STREAMS=4
-MULTIVOICE_HOST_MAX_RECORDING_SECONDS=120
+MULTIVOICE_HOST_MAX_RECORDING_SECONDS=600
 ```
 
 In the app's settings, set **Transcription location** to **Remote host** and
 enter the host URL and token. The client streams mono PCM while you record and
 the host returns the final transcript.
 
+Open `http://<host>:48173/?token=<token>` for the live dashboard: connected
+clients, the queue, workers and every model the host can serve, with requests
+animated as they flow through, plus configuration, model downloads and recent
+jobs. Add `&demo=1` (or open `/?demo=1`) for simulated data. The dashboard reads
+`GET /v1/stats` and the Server-Sent Events feed `GET /v1/events`; the full host
+protocol is in [`src-tauri/src/host/PROTOCOL.md`](src-tauri/src/host/PROTOCOL.md).
+
+### Running the host on a Tailscale network
+
+Keep the host bound to loopback and let `tailscale serve` publish it to your
+tailnet over HTTPS with a real `*.ts.net` certificate:
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --release --bin transcription-host
+MULTIVOICE_HOST_TOKEN=<choose-a-token> src-tauri/target/release/transcription-host
+tailscale serve --bg --https=443 http://127.0.0.1:48173
+```
+
+Open `https://<machine>.<tailnet>.ts.net/?token=<token>` to reach the
+dashboard and download a model. On each client, set the host URL to
+`https://<machine>.<tailnet>.ts.net` and enter the token.
+
+Plain `http://` also works for tailnet addresses (`100.64.0.0/10`, MagicDNS
+names and `*.ts.net`) because tailnet traffic is already encrypted. For that,
+bind the host with `MULTIVOICE_HOST_ADDR=0.0.0.0:48173` instead of using
+`tailscale serve`.
+
+To keep the host running across logins and reboots:
+
+- **macOS:** copy
+  `packaging/host/com.multivoice.transcription-host.plist` to
+  `~/Library/LaunchAgents/`, fill in the binary path, token and log directory,
+  `chmod 600` it, then run
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.multivoice.transcription-host.plist`.
+- **Linux:** copy the binary to `~/.local/bin/transcription-host`, put
+  `MULTIVOICE_HOST_TOKEN=<token>` in `~/.config/multivoice-tauri/host.env`,
+  copy `packaging/host/multivoice-transcription-host.service` to
+  `~/.config/systemd/user/`, then run
+  `systemctl --user enable --now multivoice-transcription-host` (and
+  `loginctl enable-linger $USER` to start it without logging in).
+
 ## Privacy
 
 - **Local mode** (the default): audio and text stay on your computer.
 - **Remote host**: audio goes only to the host you configure.
-- **MultiVoice Cloud**: audio (for cloud transcription) and transcript text
-  (for AI polish) are sent to the MultiVoice Cloud service for processing and
+- **Fairspoken Cloud**: audio (for cloud transcription) and transcript text
+  (for AI polish) are sent to the Fairspoken Cloud service for processing and
   are not stored.
 - **Context awareness** (off by default) reads text near your cursor through
   the macOS Accessibility API, locally, to improve casing and vocabulary.
@@ -114,6 +170,6 @@ privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MultiVoice is released under the [MIT License](LICENSE). The speech models it
+Fairspoken is released under the [MIT License](LICENSE). The speech models it
 downloads are licensed separately. Parakeet TDT is © NVIDIA and licensed
 CC BY 4.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -130,7 +130,7 @@ pub fn search(query: &str) -> Result<SearchResults, String> {
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("Multivoice/0.1 model-discovery")
+        .user_agent("Fairspoken/0.1 model-discovery")
         .build()
         .map_err(|_| "Could not initialize Hugging Face search.".to_string())?;
     let response = client.get(request_url(query)?).send().map_err(|error| {

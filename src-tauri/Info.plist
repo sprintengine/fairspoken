@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Multivoice needs microphone access to record dictation audio for transcription.</string>
+  <string>Fairspoken needs microphone access to record dictation audio for transcription.</string>
 </dict>
 </plist>

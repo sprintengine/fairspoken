@@ -1,6 +1,6 @@
 # Security policy
 
-MultiVoice records microphone audio, writes to the clipboard, simulates
+Fairspoken records microphone audio, writes to the clipboard, simulates
 keystrokes to insert text, and (when context awareness is enabled) reads the
 focused app's Accessibility tree. We take reports about any of these seriously.
 
@@ -28,5 +28,5 @@ Security fixes are made against the latest release and `main`.
 ## Scope
 
 In scope: the desktop app and the bundled `transcription-host` binary in this
-repository. The hosted MultiVoice Cloud service is operated separately; report
+repository. The hosted Fairspoken Cloud service is operated separately; report
 issues with it through the same form and we will route them.

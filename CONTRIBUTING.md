@@ -1,6 +1,6 @@
-# Contributing to MultiVoice
+# Contributing to Fairspoken
 
-Thanks for your interest in improving MultiVoice. Bug reports, fixes, and
+Thanks for your interest in improving Fairspoken. Bug reports, fixes, and
 well-scoped features are all welcome.
 
 ## Before you start

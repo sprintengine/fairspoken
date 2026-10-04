@@ -86,7 +86,7 @@ pub fn wait_for_modifier_release(timeout: Duration) -> Result<(), String> {
 pub fn paste_clipboard_at_cursor() -> Result<(), String> {
     if !accessibility_trusted(true) {
         return Err(
-            "Multivoice needs the macOS Accessibility permission to insert text at the cursor"
+            "Fairspoken needs the macOS Accessibility permission to insert text at the cursor"
                 .to_string(),
         );
     }
@@ -174,7 +174,7 @@ pub fn spawn_fn_push_to_talk_tap(app: AppHandle, enabled: Arc<AtomicBool>) {
                     &app,
                     "warning",
                     "Hold-Fn push-to-talk is unavailable: macOS denied the keyboard event tap. \
-                     Grant Multivoice the Input Monitoring (or Accessibility) permission and relaunch.",
+                     Grant Fairspoken the Input Monitoring (or Accessibility) permission and relaunch.",
                 );
             }
         })

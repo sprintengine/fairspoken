@@ -87,7 +87,7 @@ pub fn build_capture_result(
 pub fn capture_preview_mode(location: TranscriptionLocation) -> CapturePreviewMode {
     match location {
         TranscriptionLocation::Local => CapturePreviewMode::Chunked,
-        // Remote targets (self-hosted or MultiVoice Cloud) return one final
+        // Remote targets (self-hosted or Fairspoken Cloud) return one final
         // transcript at stream end; there are no live partial previews.
         TranscriptionLocation::RemoteHost | TranscriptionLocation::Cloud => {
             CapturePreviewMode::FinalOnly

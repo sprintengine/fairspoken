@@ -46,3 +46,7 @@ Thumbs.db
 .idea/
 .vscode/
 __pycache__/
+.sprintengine/
+
+# Brand research captures of third-party sites: local reference only, never published
+design/brand/research/
