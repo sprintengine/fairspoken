@@ -1,0 +1,7 @@
+MultiVoice.xcodeproj/
+build/
+DerivedData/
+Config/Local.xcconfig
+Packages/*/.build/
+Packages/*/.swiftpm/
+*.xcuserstate

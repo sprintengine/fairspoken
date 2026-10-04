@@ -1,0 +1,3 @@
+// Fairspoken Server, Release: bundle id ie.fairspoken.server.
+#include "Release.xcconfig"
+#include "Server.xcconfig"

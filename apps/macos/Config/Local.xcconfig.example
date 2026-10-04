@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig (git-ignored) or run scripts/setup-signing.sh.
+// A stable identity keeps Accessibility / Input Monitoring grants across rebuilds.
+MV_SIGN_IDENTITY = Apple Development: Your Name (TEAMID1234)
+DEVELOPMENT_TEAM = TEAMID1234

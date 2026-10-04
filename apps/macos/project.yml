@@ -1,0 +1,90 @@
+# XcodeGen spec. The generated MultiVoice.xcodeproj is git-ignored: regenerate with
+#   xcodegen generate        (or scripts/build.sh, which does it for you)
+#
+# Two apps share the packages under Packages/:
+#   MultiVoice        → Fairspoken.app         (dictation client, ie.fairspoken.mac)
+#   FairspokenServer  → Fairspoken Server.app  (transcription server, ie.fairspoken.server)
+name: MultiVoice
+options:
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Release: Config/Release.xcconfig
+packages:
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    exactVersion: 1.10.0
+  MultiVoiceCore:
+    path: Packages/MultiVoiceCore
+  FairspokenSpeech:
+    path: Packages/FairspokenSpeech
+  FairspokenUI:
+    path: Packages/FairspokenUI
+  FairspokenHost:
+    path: Packages/FairspokenHost
+targets:
+  MultiVoice:
+    type: application
+    platform: macOS
+    sources:
+      - path: MultiVoice
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: KeyboardShortcuts
+      - package: MultiVoiceCore
+      - package: FairspokenSpeech
+      - package: FairspokenUI
+  FairspokenServer:
+    type: application
+    platform: macOS
+    configFiles:
+      Debug: Config/Server-Debug.xcconfig
+      Release: Config/Server-Release.xcconfig
+    sources:
+      - path: FairspokenServer
+        excludes:
+          - Info.plist
+          - LaunchAgent
+      # The web dashboard is the Rust host's own file, bundled as-is (never copied by hand).
+      - path: ../../src-tauri/src/host/dashboard.html
+        buildPhase: resources
+        group: FairspokenServer/Resources
+    dependencies:
+      - package: MultiVoiceCore
+      - package: FairspokenSpeech
+      - package: FairspokenUI
+      - package: FairspokenHost
+schemes:
+  MultiVoice:
+    build:
+      targets:
+        MultiVoice: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - package: MultiVoiceCore/MultiVoiceCoreTests
+    archive:
+      config: Release
+  FairspokenServer:
+    build:
+      targets:
+        FairspokenServer: all
+    run:
+      config: Debug
+      commandLineArguments:
+        "--show-window": true
+    test:
+      config: Debug
+      targets:
+        - package: FairspokenHost/FairspokenHostTests
+    archive:
+      config: Release

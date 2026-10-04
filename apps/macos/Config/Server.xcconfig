@@ -1,0 +1,12 @@
+// Settings that make the second target Fairspoken Server. Included after the client's
+// Debug/Release xcconfig, so everything else (version, signing, Swift settings) is shared.
+//
+// The display name lives here once, as MV_DISPLAY_NAME does for the client in Base.xcconfig.
+// Release packages are named <client name>-Server-<version>-macos-arm64.{zip,dmg}.
+MV_DISPLAY_NAME = Fairspoken Server
+// macOS keys Local Network and login-item state on the bundle id; changing it later makes
+// every user re-allow the server.
+MV_BUNDLE_ID_BASE = ie.fairspoken.server
+PRODUCT_MODULE_NAME = FairspokenServerApp
+INFOPLIST_FILE = FairspokenServer/Info.plist
+CODE_SIGN_ENTITLEMENTS = Config/FairspokenServer.entitlements

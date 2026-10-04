@@ -1,0 +1,49 @@
+// Shared build settings for the native macOS app.
+//
+// PRODUCT NAME: the display name lives in exactly one place, MV_DISPLAY_NAME below.
+// It flows into PRODUCT_NAME (the .app name) and CFBundleDisplayName / CFBundleName,
+// and the Swift code reads it back from the bundle (AppInfo.displayName).
+MV_DISPLAY_NAME = Fairspoken
+
+// BUNDLE ID: ie.fairspoken.mac (Release). Debug builds append ".dev" so they never
+// clobber the installed app's privacy grants. (The plan's earlier placeholder was
+// com.multicodelabs.multivoice.mac; nothing shipped under it.)
+// WARNING: macOS keys Microphone / Accessibility / Input Monitoring grants on the bundle
+// id AND the code-signing identity. Changing either later makes every user re-grant them.
+MV_BUNDLE_ID_BASE = ie.fairspoken.mac
+
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+PRODUCT_NAME = $(MV_DISPLAY_NAME)
+PRODUCT_MODULE_NAME = MultiVoiceApp
+INFOPLIST_FILE = MultiVoice/Info.plist
+CODE_SIGN_ENTITLEMENTS = Config/MultiVoice.entitlements
+GENERATE_INFOPLIST_FILE = NO
+
+MACOSX_DEPLOYMENT_TARGET = 26.0
+ARCHS = arm64
+SDKROOT = macosx
+SUPPORTED_PLATFORMS = macosx
+
+SWIFT_VERSION = 6.0
+SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
+SWIFT_APPROACHABLE_CONCURRENCY = YES
+SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor
+COMBINE_HIDPI_IMAGES = YES
+DEAD_CODE_STRIPPING = YES
+
+// Signing. Not sandboxed (Accessibility + synthetic ⌘V need it); hardened runtime on.
+// Default is ad-hoc ("-"), which loses Accessibility on every rebuild. Run
+// scripts/setup-signing.sh once to write Config/Local.xcconfig with a stable identity.
+ENABLE_HARDENED_RUNTIME = YES
+CODE_SIGN_STYLE = Manual
+MV_SIGN_IDENTITY = -
+CODE_SIGN_IDENTITY = $(MV_SIGN_IDENTITY)
+DEVELOPMENT_TEAM =
+OTHER_CODE_SIGN_FLAGS = --timestamp=none
+
+#include? "Local.xcconfig"
