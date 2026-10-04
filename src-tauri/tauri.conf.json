@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Multivoice Tauri",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "com.multicodelabs.multivoice.tauri",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,7 +14,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Multivoice",
+        "title": "Fairspoken",
         "label": "main",
         "width": 76,
         "height": 24,
@@ -28,7 +28,7 @@
         "skipTaskbar": false
       },
       {
-        "title": "Multivoice",
+        "title": "Fairspoken",
         "label": "home",
         "url": "home.html",
         "width": 980,
@@ -53,7 +53,7 @@
         }
       },
       {
-        "title": "Multivoice Transcript Shelf",
+        "title": "Fairspoken Transcript Shelf",
         "label": "transcript-shelf",
         "url": "transcript-shelf.html",
         "width": 360,
@@ -106,5 +106,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUxNkI3NkVCNzUwRkEzRUUKUldUdW93OTE2M1pyVVpsUzFNSzFTOUQwZVdsWUZyS0IzTVVSNU12YWFxdWVHM2ZNTTVNYklVdlUK",
+      "endpoints": [
+        "https://github.com/sprintengine/fairspoken/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

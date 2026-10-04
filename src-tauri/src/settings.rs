@@ -12,13 +12,13 @@ pub enum TranscriptionLocation {
     #[default]
     Local,
     RemoteHost,
-    /// The hosted MultiVoice Cloud service (Cloudflare Worker). Unlike
+    /// The hosted Fairspoken Cloud service (Cloudflare Worker). Unlike
     /// `RemoteHost`, the URL is ours (not user-editable) and the token is a
     /// multiauth-issued JWT.
     Cloud,
 }
 
-/// MultiVoice Cloud endpoint. Not user-editable: users configure only their
+/// Fairspoken Cloud endpoint. Not user-editable: users configure only their
 /// token. Forks and self-hosters bake in their own endpoint by setting
 /// `MULTIVOICE_CLOUD_URL` at compile time; the same variable at runtime
 /// overrides it again (dev builds).
@@ -52,7 +52,7 @@ pub enum PolishProvider {
 }
 
 fn default_polish_model() -> String {
-    "qwen3.5-0.8b".to_string()
+    "speakoflow-mini".to_string()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -68,7 +68,7 @@ pub struct Settings {
     pub remote_auth_token: String,
     #[serde(default = "default_remote_timeout_seconds")]
     pub remote_timeout_seconds: u16,
-    /// multiauth-issued JWT for MultiVoice Cloud. Phase 1 stores it in
+    /// multiauth-issued JWT for Fairspoken Cloud. Phase 1 stores it in
     /// settings JSON exactly like `remote_auth_token` (same acknowledged
     /// keychain debt; phase-1 tokens are short-lived which bounds exposure).
     #[serde(default)]
@@ -116,7 +116,7 @@ pub struct Settings {
     #[serde(default)]
     pub fn_push_to_talk: bool,
     /// Opt-in AI polish: send the raw transcript (text, never audio) to
-    /// MultiVoice Cloud for filler/self-correction cleanup before the user's
+    /// Fairspoken Cloud for filler/self-correction cleanup before the user's
     /// deterministic rules run. Requires a cloud token; failures always fall
     /// back to the raw transcript.
     #[serde(default)]

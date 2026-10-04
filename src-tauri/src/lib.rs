@@ -30,6 +30,7 @@ mod speed_test;
 mod transcript_cleanup;
 mod transcript_history;
 mod transcription;
+mod updates;
 mod usage_stats;
 
 pub use host::run_transcription_host;
@@ -138,6 +139,19 @@ fn get_app_status(services: State<'_, AppServices>) -> BackendStatus {
         state: "idle",
         message: "Ready",
     }
+}
+
+#[tauri::command]
+fn get_update_status(app: AppHandle) -> updates::UpdateStatus {
+    updates::status(&app)
+}
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) -> Result<updates::UpdateStatus, String> {
+    updates::check(&app).await
+}
+#[tauri::command]
+fn install_update(app: AppHandle) -> Result<(), String> {
+    updates::install_and_restart(&app)
 }
 
 #[derive(Clone, Serialize)]
@@ -396,6 +410,7 @@ async fn remove_local_model(app: AppHandle, model: String) -> Result<(), String>
 fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
     let ids = [
         "parakeet-tdt-0.6b-v3",
+        "parakeet-ultra",
         "parakeet-tdt-0.6b-v2",
         "tiny",
         "base",
@@ -1109,7 +1124,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
                 &app,
                 "info",
                 if settings.transcription_location == TranscriptionLocation::Cloud {
-                    "Starting MultiVoice Cloud streaming transcription session"
+                    "Starting Fairspoken Cloud streaming transcription session"
                 } else {
                     "Starting remote streaming transcription session"
                 },
@@ -1693,7 +1708,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 /// AppleScript; see `insertion.rs` for why tiers are chosen by
 /// pre-condition and never verified-and-retried). AX insert is only
 /// considered when the user opted into `accessibility_insert`. Skipped when one of our
-/// own windows is focused (the paste would land in Multivoice itself);
+/// own windows is focused (the paste would land in Fairspoken itself);
 /// every other failure is surfaced as a backend event because the user is
 /// otherwise left wondering why no text appeared.
 ///
@@ -1711,7 +1726,7 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_inser
         emit_backend_event(
             app,
             "info",
-            "Insert at cursor skipped while a Multivoice window is focused; transcript is on the clipboard",
+            "Insert at cursor skipped while a Fairspoken window is focused; transcript is on the clipboard",
         );
         return;
     }
@@ -2700,6 +2715,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
             // The home window is a real app window: closing it should hide it
             // (keeping it reopenable from the pill), not tear it down.
@@ -2741,12 +2757,14 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             fn_push_to_talk_tap_started: AtomicBool::new(false),
         })
+        .manage(updates::Updates::default())
         .setup(|app| {
             let handle = app.handle();
             if let Err(err) = layout_pill_window(handle.clone(), "idle".to_string()) {
                 emit_backend_event(handle, "warning", format!("Could not position pill: {err}"));
             }
             start_note_retention_sweeper(handle.clone());
+            updates::start(handle.clone());
             let _ = open_home_window(handle.clone(), None);
             #[cfg(target_os = "macos")]
             {
@@ -2811,6 +2829,9 @@ pub fn run() {
             save_speed_test_result,
             get_speed_test_summary,
             set_measured_typing_wpm,
+            get_update_status,
+            check_for_updates,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

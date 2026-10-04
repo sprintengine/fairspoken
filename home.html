@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MultiVoice</title>
+  <title>Fairspoken</title>
   <link rel="stylesheet" href="/src/home.css" />
   <script type="module" src="/src/home.ts" defer></script>
   <script type="module" src="/src/settings.ts" defer></script>
@@ -321,6 +321,17 @@
                     </select>
                   </div>
                 </div>
+</div></section>
+<section class="settings-section" aria-labelledby="updatesTitle"><h2 id="updatesTitle">Updates</h2><div class="settings-card">
+<div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Version <span id="appVersion"></span></div>
+                    <div class="row-help" id="updateStatus" role="status">Checks for updates automatically.</div>
+                  </div>
+                  <div class="row-control">
+                    <button id="updateAction" class="btn" type="button">Check for updates</button>
+                  </div>
+                </div>
 </div></section></section>
 <section class="settings-page" data-settings-page="audio" id="settings-audio" aria-label="Audio" hidden><section class="settings-section" aria-labelledby="microphoneTitle"><h2 id="microphoneTitle">Microphone</h2><div class="settings-card">
 <div class="row">
@@ -412,7 +423,7 @@
                     <div class="seg" id="locationSeg" role="group" aria-labelledby="locationLabel">
                       <button type="button" data-value="local" aria-pressed="true">Local</button>
                       <button type="button" data-value="remote-host" aria-pressed="false">My host</button>
-                      <button type="button" data-value="cloud" aria-pressed="false">MultiVoice Cloud</button>
+                      <button type="button" data-value="cloud" aria-pressed="false">Fairspoken Cloud</button>
                     </div>
                   </div>
                 </div><div class="row" id="modelField">
@@ -424,6 +435,7 @@
                     <span class="meta num" id="modelSize">RAM ~2.5G</span>
                     <select id="modelSelect" class="setting-select w-md">
                       <option value="parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
+                      <option value="parakeet-ultra">Parakeet Ultra 0.6B</option>
                       <option value="parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 · English</option>
                     </select>
                   </div>
@@ -470,7 +482,7 @@
                   <div class="row">
                     <div class="row-text">
                       <label class="row-label" for="cloudAuthToken">Token</label>
-                      <div class="row-help">Enter your MultiVoice Cloud token.</div>
+                      <div class="row-help">Enter your Fairspoken Cloud token.</div>
                     </div>
                     <div class="row-control">
                       <input id="cloudAuthToken" class="setting-input w-lg" type="password" autocomplete="off" />
@@ -478,7 +490,7 @@
                   </div>
                   <div class="row">
                     <div class="row-text">
-                      <div class="row-help">Audio is sent to MultiVoice Cloud for transcription.</div>
+                      <div class="row-help">Audio is sent to Fairspoken Cloud for transcription.</div>
                     </div>
                   </div>
                   <div class="row">
@@ -544,12 +556,12 @@
 <div class="row">
                   <div class="row-text">
                     <label class="row-label" for="polishEnabled">AI polish</label>
-                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text, the destination app's name and, when context awareness is on, up to 500 characters of text around your cursor (never audio) to MultiVoice Cloud. Nothing is stored.</div>
+                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text, the destination app's name and, when context awareness is on, up to 500 characters of text around your cursor (never audio) to Fairspoken Cloud. Nothing is stored.</div>
                   </div>
                   <div class="row-control">
                     <input id="polishEnabled" class="switch" type="checkbox" role="switch" />
                   </div>
-                </div><div class="row"><div class="row-text"><label class="row-label" for="polishProviderSelect">Provider</label><div class="row-help">Choose where your transcript is polished.</div></div><div class="row-control"><select id="polishProviderSelect" class="setting-select w-md"><option value="local">On this device</option><option value="cloud">MultiVoice Cloud</option></select></div></div><div class="row" id="polishLocalModelRow"><div class="row-text"><div class="row-label">Local model</div><div class="row-help"><span class="model-identity" id="polishModelIdentity"><span id="selectedPolishModel">Qwen3.5 0.8B</span></span></div></div><div class="row-control"><button class="btn" type="button" data-route="models">Manage models</button></div></div><div id="polishCloudPanel" data-polish-cloud hidden><div class="row"><div class="row-text"><label class="row-label" for="polishCloudAuthToken">Cloud token</label><div class="row-help">Uses the same token as cloud dictation. Your speech model can stay local.</div></div><div class="row-control"><input id="polishCloudAuthToken" class="setting-input w-lg" type="password" autocomplete="off" /></div></div></div>
+                </div><div class="row"><div class="row-text"><label class="row-label" for="polishProviderSelect">Provider</label><div class="row-help">Choose where your transcript is polished.</div></div><div class="row-control"><select id="polishProviderSelect" class="setting-select w-md"><option value="local">On this device</option><option value="cloud">Fairspoken Cloud</option></select></div></div><div class="row" id="polishLocalModelRow"><div class="row-text"><div class="row-label">Local model</div><div class="row-help"><span class="model-identity" id="polishModelIdentity"><span id="selectedPolishModel">Qwen3.5 0.8B</span></span></div></div><div class="row-control"><button class="btn" type="button" data-route="models">Manage models</button></div></div><div id="polishCloudPanel" data-polish-cloud hidden><div class="row"><div class="row-text"><label class="row-label" for="polishCloudAuthToken">Cloud token</label><div class="row-help">Uses the same token as cloud dictation. Your speech model can stay local.</div></div><div class="row-control"><input id="polishCloudAuthToken" class="setting-input w-lg" type="password" autocomplete="off" /></div></div></div>
 </div></section><section id="polishTonesPanel" hidden class="settings-section" aria-labelledby="writing-styleTitle"><h2 id="writing-styleTitle">Writing style</h2><div class="settings-card">
 
                   <div class="row">
@@ -628,7 +640,7 @@
 <div class="row" id="contextAwarenessRow">
                   <div class="row-text">
                     <label class="row-label" for="contextAwareness">Context awareness</label>
-                    <div class="row-help" id="contextAwarenessHelp">Reads text near your cursor and on the active window (via Accessibility) to improve name/term accuracy. Read locally; sent to MultiVoice Cloud only as part of AI polish. Never reads password fields.</div>
+                    <div class="row-help" id="contextAwarenessHelp">Reads text near your cursor and on the active window (via Accessibility) to improve name/term accuracy. Read locally; sent to Fairspoken Cloud only as part of AI polish. Never reads password fields.</div>
                   </div>
                   <div class="row-control">
                     <input id="contextAwareness" class="switch" type="checkbox" role="switch" />
@@ -693,7 +705,7 @@
                     </button>
                   </div>
                 </div>
-</div></section><div class="section-note" id="shortcutStatus" aria-live="polite">Shortcuts work globally while MultiVoice is running.</div></section>
+</div></section><div class="section-note" id="shortcutStatus" aria-live="polite">Shortcuts work globally while Fairspoken is running.</div></section>
 <section class="settings-page" data-settings-page="appearance" id="settings-appearance" aria-label="Appearance" hidden><section class="settings-section" aria-labelledby="colorSchemeTitle"><h2 id="colorSchemeTitle">Color scheme</h2><div id="appearanceChoices" class="appearance-choices" role="group" aria-label="Color scheme"><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="system" type="button" aria-pressed="true"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="light"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span><span class="appearance-preview-pane" data-mode="dark"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">System</span></button><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="light" type="button" aria-pressed="false"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="light"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">Light</span></button><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="dark" type="button" aria-pressed="false"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="dark"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">Dark</span></button></div><p class="section-note" id="appearanceStatus" role="status">Follows your system appearance.</p></section></section></form></div></div></section>
 
         <!-- ════ SPEED TEST (type-vs-speak, driven by speedTest.ts) ════

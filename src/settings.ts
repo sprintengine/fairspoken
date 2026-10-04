@@ -6,6 +6,7 @@ import { addEvent } from "./events";
 // the backend was built with the `whisper` Cargo feature.
 type SttModel =
   | "parakeet-tdt-0.6b-v3"
+  | "parakeet-ultra"
   | "parakeet-tdt-0.6b-v2"
   | "tiny"
   | "base"
@@ -110,7 +111,7 @@ const DEFAULTS: Settings = {
   fnPushToTalk: false,
   polishEnabled: false,
   polishProvider: "cloud",
-  polishModel: "qwen3.5-0.8b",
+  polishModel: "speakoflow-mini",
   polishTones: {},
   contextAwareness: false,
 };
@@ -177,6 +178,7 @@ const polishToneSegs: Record<string, SegControl> = {
 
 const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
   "parakeet-tdt-0.6b-v3": "RAM ~2.5G",
+  "parakeet-ultra": "RAM ~2.5G",
   "parakeet-tdt-0.6b-v2": "RAM ~2.5G · English",
   tiny: "RAM ~0.7G",
   base: "RAM ~1.2G",
@@ -185,6 +187,13 @@ const MODEL_MEMORY_FOOTPRINTS: Record<SttModel, string> = {
   "large-v2": "RAM ~16G",
   "large-v3": "RAM ~16G",
   "large-v3-turbo": "RAM ~8G",
+};
+
+const POLISH_MODEL_NAMES: Record<string, string> = {
+  "qwen3.5-0.8b": "Qwen3.5 · 0.8B",
+  "qwen3.5-2b": "Qwen3.5 · 2B",
+  "qwen3.5-4b": "Qwen3.5 · 4B",
+  "speakoflow-mini": "SpeakoFlow Mini · 0.8B",
 };
 
 let currentSettings: Settings = { ...DEFAULTS };
@@ -329,6 +338,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
 }
 
 function speechModelName(model: string): string {
+  if (model === "parakeet-ultra") return "Parakeet Ultra 0.6B";
   return model.startsWith("parakeet") ? `Parakeet TDT 0.6B ${model.endsWith("-v2") ? "v2 · English" : "v3"}` : `Whisper ${model}`;
 }
 
@@ -341,9 +351,9 @@ function applyToForm(settings: Settings): void {
   }
   modelSelect.value = settings.model;
   const speechName = document.getElementById("selectedSpeechModel");
-  if (speechName) speechName.textContent = `${settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
+  if (speechName) speechName.textContent = `${settings.model === "parakeet-ultra" ? "Moondream" : settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
   const polishName = document.getElementById("selectedPolishModel");
-  if (polishName) polishName.textContent = settings.polishModel === "qwen3.5-0.8b" ? "Qwen3.5 · 0.8B" : settings.polishModel === "qwen3.5-2b" ? "Qwen3.5 · 2B" : settings.polishModel === "qwen3.5-4b" ? "Qwen3.5 · 4B" : settings.polishModel;
+  if (polishName) polishName.textContent = POLISH_MODEL_NAMES[settings.polishModel] ?? settings.polishModel;
   updateModelSize(settings.model);
   remoteUrl.value = settings.remoteUrl;
   remoteAuthToken.value = settings.remoteAuthToken;
@@ -387,13 +397,13 @@ function updatePolishUi(settings: Settings): void {
     ? settings.transcriptionLocation === "local"
       ? "Cleans previews as you dictate locally, then runs a final pass. Manage local model downloads in Models."
       : "Runs a final cleanup pass on this device after remote transcription finishes. Manage downloads in Models."
-    : hasToken ? "Sends transcript text to MultiVoice Cloud for cleanup. Speech transcription can stay local."
-    : "Add your MultiVoice Cloud token below to enable cloud cleanup.";
+    : hasToken ? "Sends transcript text to Fairspoken Cloud for cleanup. Speech transcription can stay local."
+    : "Add your Fairspoken Cloud token below to enable cloud cleanup.";
   polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local);
   document.getElementById("polishLocalModelRow")?.toggleAttribute("hidden", !local);
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
   contextAwarenessHelp.textContent = "On macOS, reads vocabulary from the focused window at recording start and limited text before the caret for final cleanup. No screenshots or continuous screen reading. "
-    + (local ? "Cleanup context stays on this device." : "When cloud cleanup runs, this context is sent with the transcript to MultiVoice Cloud.");
+    + (local ? "Cleanup context stays on this device." : "When cloud cleanup runs, this context is sent with the transcript to Fairspoken Cloud.");
 }
 
 // Mirror of the Rust normalization: only known categories and tones survive,
@@ -763,7 +773,7 @@ function updateUseGpuUi(): void {
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
   const local = location === "local";
   // The model choice and its download state are local-transcription concerns;
-  // a remote host (or MultiVoice Cloud) serves whatever its operator runs.
+  // a remote host (or Fairspoken Cloud) serves whatever its operator runs.
   modelField.hidden = !local;
   modelDownload.hidden = !local;
   remoteHostPanel.hidden = location !== "remote-host";
@@ -774,7 +784,7 @@ function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
   if (location === "cloud") {
     cloudStatus.textContent = currentSettings.cloudAuthToken
       ? "Allowance: shown after first dictation"
-      : "Paste a token to enable MultiVoice Cloud";
+      : "Paste a token to enable Fairspoken Cloud";
   }
 }
 
@@ -921,7 +931,7 @@ locationSeg.onChange((value) => {
   void persistSettings()
     .then((saved) => {
       if (!saved) return;
-      const label = value === "local" ? "local" : value === "cloud" ? "MultiVoice Cloud" : "remote host";
+      const label = value === "local" ? "local" : value === "cloud" ? "Fairspoken Cloud" : "remote host";
       addEvent("info", `Transcription location changed to ${label}`);
       return requestModelStatus();
     })
@@ -944,7 +954,7 @@ remoteTest.addEventListener("click", () => {
   void testRemoteHost(remoteStatus, remoteTest, "Remote host");
 });
 cloudTest.addEventListener("click", () => {
-  void testRemoteHost(cloudStatus, cloudTest, "MultiVoice Cloud");
+  void testRemoteHost(cloudStatus, cloudTest, "Fairspoken Cloud");
 });
 remoteUrl.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteAuthToken.addEventListener("change", () => void persistSettings().catch(reportAsyncError));

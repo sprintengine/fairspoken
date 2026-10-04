@@ -7,6 +7,7 @@ import "./dictionary";
 import "./activity";
 import "./modelDashboard";
 import "./settingsModelSummaries";
+import "./updates";
 import { selectSettingsCategory, updateSettingsHeading } from "./settingsNavigation";
 import { createSpeedTest } from "./speedTest";
 import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
