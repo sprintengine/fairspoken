@@ -1,0 +1,84 @@
+/* Liquid Glass surface styling for the Fairspoken app mockups.
+   Refraction comes from glass.js (SVG filter via backdrop-filter, Chromium only).
+   This file adds what sits on top of the refracted backdrop:
+   tint, the specular rim, the inner edge light, thickness shading and the float shadow. */
+
+@font-face { font-family: "Host Grotesk"; src: url(../site/fonts/host-grotesk-latin-wght-normal.woff2) format("woff2"); font-weight: 300 800; }
+@font-face { font-family: "Newsreader"; src: url(../site/fonts/newsreader-latin-opsz-normal.woff2) format("woff2"); font-weight: 200 800; }
+@font-face { font-family: "Newsreader"; src: url(../site/fonts/newsreader-latin-opsz-italic.woff2) format("woff2"); font-weight: 200 800; font-style: italic; }
+@font-face { font-family: "Atkinson Hyperlegible Mono"; src: url(../site/fonts/atkinson-hyperlegible-mono-latin-wght-normal.woff2) format("woff2"); font-weight: 200 800; }
+
+:root {
+  --spec: 128deg;               /* light direction; glass.js moves it with the pointer */
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Helvetica Neue", system-ui, sans-serif;
+  --serif: "Newsreader", ui-serif, Georgia, serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", monospace;
+  --copybook: #2C4BD0; --copybook-300: #93A8FF; --margin: #E5512B; --margin-400: #FF7148;
+  --ok: #1D7347; --warn: #8F5A00;
+}
+[data-theme="light"] {
+  --glass-tint: rgb(255 255 255 / .16);
+  --glass-tint-strong: rgb(255 255 255 / .42);
+  --glass-rim: rgb(255 255 255 / 1);
+  --glass-rim-dim: rgb(255 255 255 / .18);
+  --glass-edge: rgb(0 0 0 / .07);
+  --glass-shadow: 0 18px 40px -16px rgb(16 24 48 / .28), 0 2px 6px rgb(16 24 48 / .08);
+  --glass-label: #0E1318; --glass-label-2: rgb(14 19 24 / .62);
+  --glass-select: rgb(255 255 255 / .55);
+}
+[data-theme="dark"] {
+  --glass-tint: rgb(28 32 44 / .22);
+  --glass-tint-strong: rgb(40 46 62 / .45);
+  --glass-rim: rgb(255 255 255 / .75);
+  --glass-rim-dim: rgb(255 255 255 / .08);
+  --glass-edge: rgb(255 255 255 / .1);
+  --glass-shadow: 0 22px 50px -18px rgb(0 0 0 / .65), 0 2px 8px rgb(0 0 0 / .3);
+  --glass-label: #F2F4F8; --glass-label-2: rgb(242 244 248 / .66);
+  --glass-select: rgb(255 255 255 / .16);
+}
+
+.glass {
+  position: relative;
+  isolation: isolate;
+  background: var(--glass-tint);
+  box-shadow: var(--glass-shadow), 0 0 0 .5px var(--glass-edge);
+  color: var(--glass-label);
+}
+/* Specular rim: a 1.5 px ring lit from the light direction, brightest on the side facing the light
+   and again, fainter, on the opposite inner edge (light passing through the glass). */
+.glass::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.4px; pointer-events: none; z-index: 2;
+  background: conic-gradient(from var(--spec),
+    var(--glass-rim) 0deg, var(--glass-rim-dim) 42deg, transparent 90deg, var(--glass-rim-dim) 140deg,
+    color-mix(in srgb, var(--glass-rim) 70%, transparent) 180deg, var(--glass-rim-dim) 222deg, transparent 270deg, var(--glass-rim-dim) 320deg, var(--glass-rim) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+/* Thickness: a soft inner highlight along the lit edge and a faint inner shade opposite it. */
+.glass::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 1;
+  box-shadow:
+    inset 1.5px 2px 1px -1px rgb(255 255 255 / .55),
+    inset -1px -2px 2px -1px rgb(255 255 255 / .22),
+    inset 0 0 18px -6px rgb(255 255 255 / .25);
+  background: radial-gradient(120% 70% at 25% 0%, rgb(255 255 255 / .16), transparent 55%);
+}
+[data-theme="dark"] .glass::after, .glass[data-theme="dark"]::after {
+  box-shadow: inset 1.5px 2px 1px -1px rgb(255 255 255 / .35), inset -1px -2px 2px -1px rgb(255 255 255 / .1), inset 0 0 22px -8px rgb(255 255 255 / .12);
+  background: radial-gradient(120% 70% at 25% 0%, rgb(255 255 255 / .07), transparent 55%);
+}
+.glass > * { position: relative; z-index: 3; }
+.glass.clear { background: rgb(255 255 255 / .04); }
+[data-theme="dark"] .glass.clear, .glass.clear[data-theme="dark"] { background: rgb(0 0 0 / .06); }
+/* Tinted, prominent glass for the one primary action on screen */
+.glass.prominent { background: color-mix(in srgb, var(--copybook) 72%, transparent); color: #fff; }
+[data-theme="dark"] .glass.prominent { background: color-mix(in srgb, #5873F0 70%, transparent); }
+.glass.prominent.signal { background: color-mix(in srgb, var(--margin) 78%, transparent); }
+
+/* Glass selection inside a glass container: a brighter lens, never a solid fill */
+.glass-select { background: var(--glass-select); border-radius: 999px; box-shadow: inset 0 1px 0 rgb(255 255 255 / .5), 0 1px 3px rgb(0 0 0 / .08); }
+[data-theme="dark"] .glass-select, [data-theme="dark"].glass .glass-select { box-shadow: inset 0 1px 0 rgb(255 255 255 / .18), 0 1px 3px rgb(0 0 0 / .3); }
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background: var(--glass-tint-strong); }
+}

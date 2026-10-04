@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8">
+<title>Fairspoken · Home (macOS 26 Liquid Glass mockup)</title>
+<link rel="stylesheet" href="glass.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .hero { position: absolute; left: 0; top: 0; width: 1472px; height: 380px; }
+  .hero canvas { position: absolute; inset: 0; }
+  .hero::after { content: ""; position: absolute; inset: auto 0 0 0; height: 90px; background: linear-gradient(transparent, var(--win)); }
+  .greet { position: absolute; left: 290px; top: 74px; color: var(--fg); }
+  .greet .kicker { font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--signal-text); display: flex; gap: 8px; align-items: center; }
+  .greet h1 { margin: 10px 0 6px; font: 700 40px/1.05 var(--ui); letter-spacing: -.03em; }
+  .greet p { margin: 0; font-size: 15px; color: var(--fg-2); max-width: 30em; }
+  .greet p kbd { font: 600 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--chip); box-shadow: inset 0 -1px 0 var(--line-2); color: var(--fg); }
+
+  /* Dictation control: glass over the artwork, sitting on the fair line */
+  .dictate { position: absolute; left: 1000px; top: 234px; height: 64px; border-radius: 999px; display: flex; align-items: center; gap: 14px; padding: 0 10px 0 22px; }
+  .dictate .t { font-size: 14px; font-weight: 600; }
+  .dictate .t span { display: block; font-size: 12px; font-weight: 500; color: var(--glass-label-2); }
+  .mic { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+  .mic svg { width: 21px; height: 21px; }
+  .mic { background: radial-gradient(120% 120% at 30% 20%, #FF8A66, #E5512B 55%, #C2401E); box-shadow: inset 0 1px 1px rgb(255 255 255 / .5), inset 0 -2px 4px rgb(0 0 0 / .15), 0 6px 16px -4px rgb(229 81 43 / .6); }
+  .status { position: absolute; left: 1000px; top: 112px; height: 34px; border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 14px; font-size: 12.5px; font-weight: 500; }
+  .status .dot { background: #28C840; box-shadow: 0 0 0 3px rgb(40 200 64 / .25); }
+
+  .grid { position: absolute; left: 282px; right: 30px; top: 372px; display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 206px 312px; gap: 16px; }
+  .saved .big { margin-top: 18px; }
+  .bars { display: grid; gap: 8px; margin-top: 18px; font-size: 12.5px; color: var(--fg-3); }
+  .bars div { display: grid; grid-template-columns: 70px 1fr 64px; gap: 10px; align-items: center; }
+  .bars i { height: 6px; border-radius: 6px; background: var(--chip); position: relative; overflow: hidden; }
+  .bars i b { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--fg-3); }
+  .bars div:last-child i b { background: var(--accent); }
+  .bars span:last-child { text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  .week .chart { display: flex; align-items: flex-end; gap: 10px; height: 104px; margin-top: 18px; }
+  .week .chart div { flex: 1; display: grid; gap: 6px; justify-items: center; font-size: 11px; color: var(--fg-3); }
+  .week .chart i { width: 100%; border-radius: 6px 6px 3px 3px; background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .week .chart .today i { background: var(--accent); }
+  .week .chart .today { color: var(--fg); font-weight: 600; }
+  .week .tot { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }
+  .week .tot b { font-size: 28px; letter-spacing: -.03em; }
+
+  .last .stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 20px 0 14px; gap: 2px; }
+  .last .stack i { display: block; }
+  .last .legend { display: grid; gap: 7px; font-size: 12.5px; color: var(--fg-2); }
+  .last .legend div { display: flex; align-items: center; gap: 8px; }
+  .last .legend b { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--fg); }
+  .last .legend .sw { width: 9px; height: 9px; border-radius: 3px; }
+
+  .recent { grid-column: span 2; padding-bottom: 8px; }
+  .row > div { min-width: 0; }
+  .row { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 0; border-top: .5px solid var(--line-2); }
+  .row:first-of-type { margin-top: 12px; }
+  .row time { font-size: 12.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+  .row .txt { font-family: var(--serif); font-size: 16.5px; line-height: 1.35; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variation-settings: "opsz" 16; }
+  .row .meta { display: flex; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--fg-3); }
+  .row .right { display: flex; gap: 6px; }
+
+  .engine .item { display: grid; grid-template-columns: 36px 1fr auto; gap: 12px; align-items: center; padding: 12px 0; border-top: .5px solid var(--line-2); }
+  .engine .item:first-of-type { margin-top: 12px; }
+  .engine .ic { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+  .engine .ic svg { width: 18px; height: 18px; }
+  .engine .k { font-size: 12px; color: var(--fg-3); } .engine .v { font-size: 14px; font-weight: 600; }
+  .engine .ok { font-size: 12px; font-weight: 600; color: var(--ok, #1D7347); display: flex; align-items: center; gap: 6px; }
+  .engine .ok .dot { background: currentColor; }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="content">
+    <div class="hero"><canvas id="art"></canvas></div>
+    <div class="greet">
+      <div class="kicker"><span class="dot" style="background:var(--signal)"></span>Ready</div>
+      <h1>Good afternoon, Aoife</h1>
+      <p>Hold <kbd>fn</kbd> in any app and speak. Let go and the text appears at your cursor.</p>
+    </div>
+    <div class="dictate glass" data-glass="clear" data-bevel="20">
+      <div class="t">Hold fn to dictate<span>or click to start</span></div>
+      <div class="mic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></div>
+    </div>
+    <div class="status glass" data-glass="clear" data-bevel="12"><span class="dot"></span>Parakeet v3 · Neural Engine · SpeakoFlow Mini</div>
+
+    <div class="grid">
+      <section class="card saved">
+        <h3>Time saved</h3>
+        <div class="big">14<small>h</small>8<small>m</small></div>
+        <div class="bars">
+          <div><span>Typing</span><i><b style="width:100%"></b></i><span>20 h 5 m</span></div>
+          <div><span>Dictating</span><i><b style="width:30%"></b></i><span>5 h 57 m</span></div>
+        </div>
+      </section>
+      <section class="card week">
+        <h3>This week <a>Activity</a></h3>
+        <div class="tot"><b>6,110</b><span class="sub">words · ↑ 18% on last week</span></div>
+        <div class="chart">
+          <div><i style="height:52px"></i>M</div><div><i style="height:78px"></i>T</div><div><i style="height:64px"></i>W</div>
+          <div><i style="height:90px"></i>T</div><div><i style="height:70px"></i>F</div><div><i style="height:18px"></i>S</div>
+          <div class="today"><i style="height:40px"></i>S</div>
+        </div>
+      </section>
+      <section class="card last">
+        <h3>Last dictation <span class="chip mono">0:41 · 96 words</span></h3>
+        <div class="stack"><i style="flex:52;background:var(--accent)"></i><i style="flex:184;background:color-mix(in srgb,var(--accent) 45%,transparent)"></i><i style="flex:12;background:var(--signal)"></i></div>
+        <div class="legend">
+          <div><span class="sw" style="background:var(--accent)"></span>Speech to text <span class="chip mono" style="height:20px">Neural Engine</span><b>52 ms</b></div>
+          <div><span class="sw" style="background:color-mix(in srgb,var(--accent) 45%,transparent)"></span>Polish · SpeakoFlow Mini<b>184 ms</b></div>
+          <div><span class="sw" style="background:var(--signal)"></span>Insert into Healthlink<b>12 ms</b></div>
+        </div>
+      </section>
+      <section class="card recent">
+        <h3>Recent dictations <span style="display:flex;gap:14px"><a>Hide previews</a><a>All notes</a></span></h3>
+        <div class="row"><time>15:32</time><div><div class="txt">Thank you for seeing this 63-year-old man with three weeks of chest tightness on exertion, relieved by rest.</div><div class="meta">Referral · Healthlink · polished · 2 fillers removed</div></div><div class="right"><span class="chip">0:41</span></div></div>
+        <div class="row"><time>14:05</time><div><div class="txt">Review in two weeks. Repeat bloods: FBC, U&amp;E and HbA1c. Continue metformin 500 mg twice daily.</div><div class="meta">Consultation note · Socrates · polished</div></div><div class="right"><span class="chip">0:18</span></div></div>
+        <div class="row"><time>12:47</time><div><div class="txt">Ms Ní Bhriain called about her repeat prescription; please ring her back after two o'clock.</div><div class="meta">Message · Mail · polished · 1 correction settled</div></div><div class="right"><span class="chip">0:12</span></div></div>
+        <div class="row"><time>11:20</time><div><div class="txt">Add a retry with exponential backoff to the Healthlink webhook handler and log each failure.</div><div class="meta">Prompt · Claude Code · polished · 5 fillers removed</div></div><div class="right"><span class="chip">0:09</span></div></div>
+      </section>
+      <section class="card engine">
+        <h3>On this Mac <a>Models</a></h3>
+        <div class="item"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12c1.5 0 1.5-6 3-6s1.5 12 3 12 1.5-8 3-8 1.5 4 3 4h6"/></svg></span><div><div class="k">Speech</div><div class="v">Parakeet TDT 0.6B v3</div></div><span class="ok"><span class="dot"></span>Loaded</span></div>
+        <div class="item"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3.5 13.8 10l6.7 2-6.7 2L12 20.5 10.2 14l-6.7-2 6.7-2z"/></svg></span><div><div class="k">Clean-up</div><div class="v">SpeakoFlow Mini</div></div><span class="ok"><span class="dot"></span>On</span></div>
+        <div class="item"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg></span><div><div class="k">Host</div><div class="v">This Mac</div></div><span class="ok" style="color:var(--fg-3)">Local</span></div>
+        <div class="item"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="3"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg></span><div><div class="k">History</div><div class="v">Kept 30 days on this Mac</div></div><span class="ok" style="color:var(--fg-3)">Change</span></div>
+      </section>
+    </div>
+    <div class="edge"></div>
+  </div>
+
+  <div class="toolbar">
+    <span class="sp"></span>
+    <div class="cap glass search" data-glass="regular" data-bevel="12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>Search dictations</div>
+    <div class="cap glass" data-glass="regular" data-bevel="12">
+      <button class="on">Today</button><button>Week</button><button>Month</button>
+    </div>
+    <div class="cap glass" data-glass="regular" data-bevel="12">
+      <button title="Hide previews"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button title="Appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+    </div>
+    <div class="cap glass prominent" data-glass="prominent" data-bevel="12"><span class="rec"></span>Dictate <span class="kbd">fn</span></div>
+  </div>
+</div>
+
+<script src="shell.js"></script>
+<script>
+  Shell.mount({ active: 'dashboard', counts: { notes: 128 } });
+  Shell.signalArt(document.getElementById('art'), { w: 1472, h: 380, seed: 7, mx: .655, my: .7, amp: .2, strands: 46 });
+</script>
+<script src="glass.js"></script>
+</body>
+</html>

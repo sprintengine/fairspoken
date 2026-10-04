@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8">
+<title>Fairspoken brand board</title>
+<style>
+  @font-face { font-family: "Host Grotesk"; src: url(../site/fonts/host-grotesk-latin-wght-normal.woff2) format("woff2"); font-weight: 300 800; }
+  @font-face { font-family: "Newsreader"; src: url(../site/fonts/newsreader-latin-opsz-normal.woff2) format("woff2"); font-weight: 200 800; }
+  @font-face { font-family: "Newsreader"; src: url(../site/fonts/newsreader-latin-opsz-italic.woff2) format("woff2"); font-weight: 200 800; font-style: italic; }
+  @font-face { font-family: "Mono"; src: url(../site/fonts/atkinson-hyperlegible-mono-latin-wght-normal.woff2) format("woff2"); font-weight: 200 800; }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 1920px; height: 1200px; background: #F3F1EA; color: #0E1318; font-family: "Host Grotesk"; overflow: hidden; }
+  .board { display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: 470px 330px 340px; gap: 14px; padding: 30px; height: 1200px;
+    background-image: repeating-linear-gradient(to bottom, transparent 0 31px, #C5D1EC66 31px 32px); }
+  .cell { border-radius: 22px; background: #FBFAF6; box-shadow: 0 0 0 1px #0E131814; padding: 22px 24px; position: relative; overflow: hidden; }
+  .l { font: 600 11px Mono; letter-spacing: .1em; text-transform: uppercase; color: #5E6873; margin-bottom: 14px; display: flex; justify-content: space-between; }
+  .night { background: #0A0D12; color: #ECEEF1; box-shadow: none; } .night .l { color: #8B95A2; }
+  .fair { font-family: "Newsreader"; font-style: italic; font-weight: 300; font-variation-settings: "opsz" 72; }
+  /* hero cell */
+  .hero { grid-column: span 7; padding: 0; }
+  .hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 30% 50%; }
+  .hero .over { position: absolute; right: 26px; top: 22px; display: flex; justify-content: space-between; align-items: end; }
+  .hero .tag { font: 600 11px Mono; letter-spacing: .1em; text-transform: uppercase; color: #FF7148; background: #0A0D12cc; padding: 8px 12px; border-radius: 999px; }
+  .story { grid-column: span 5; display: flex; flex-direction: column; }
+  .story img.lock { height: 54px; width: auto; align-self: flex-start; margin: 6px 0 26px; }
+  .story h1 { margin: 0; font-weight: 600; font-size: 54px; line-height: .95; letter-spacing: -.045em; }
+  .story h1 .fair { font-size: 1.05em; letter-spacing: -.035em; }
+  .story p { margin: 18px 0 0; font-size: 16.5px; line-height: 1.5; color: #3D4752; max-width: 38em; }
+  .story .alt { margin-top: auto; display: flex; gap: 10px; align-items: center; font: 600 13px Mono; color: #B23B16; }
+  .story .alt span { color: #5E6873; font-weight: 500; }
+  /* palette */
+  .pal { grid-column: span 5; }
+  .sw { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .sw div { border-radius: 14px; height: 108px; padding: 12px; display: flex; flex-direction: column; justify-content: flex-end; font-size: 12.5px; font-weight: 600; box-shadow: inset 0 0 0 1px #0E131814; }
+  .sw div span { font: 500 11px Mono; opacity: .8; margin-top: 2px; }
+  .fn { display: flex; gap: 8px; margin-top: 12px; font: 500 11px Mono; color: #3D4752; flex-wrap: wrap; }
+  .fn i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  /* type */
+  .type { grid-column: span 4; }
+  .type .s1 { font-size: 46px; font-weight: 600; letter-spacing: -.04em; line-height: 1; }
+  .type .s2 { font-size: 40px; line-height: 1.05; margin-top: 4px; }
+  .type .s3 { font: 500 14px Mono; color: #3D4752; margin-top: 12px; }
+  .type .row { display: grid; grid-template-columns: 1fr auto; font-size: 12.5px; color: #5E6873; border-top: 1px solid #0E131814; padding-top: 8px; margin-top: 12px; gap: 4px 12px; }
+  .type .row b { color: #0E1318; font-weight: 600; }
+  /* logo */
+  .logo { grid-column: span 3; }
+  .logo .marks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .logo .marks div { border-radius: 14px; height: 106px; display: grid; place-items: center; background: #F3F1EA; box-shadow: inset 0 0 0 1px #0E131814; }
+  .logo .marks div.d { background: #0A0D12; }
+  .logo .marks img { height: 64px; }
+  .logo .marks img.icon { height: 92px; }
+  /* bottom row */
+  .glass { grid-column: span 4; padding: 0; background: #0A0D12; }
+  .glass img { width: 100%; display: block; }
+  .glass .txt { padding: 14px 22px; color: #ECEEF1; font-size: 13px; line-height: 1.5; }
+  .glass .txt .l { color: #8B95A2; margin-bottom: 8px; }
+  .glass .txt b { color: #FF7148; font-weight: 600; }
+  .motion { grid-column: span 3; }
+  .motion svg { width: 100%; height: 150px; }
+  .motion ul { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: #3D4752; line-height: 1.55; }
+  .motion b { color: #0E1318; }
+  .voice { grid-column: span 3; font-size: 13px; line-height: 1.45; }
+  .voice .do, .voice .dont { padding: 10px 12px; border-radius: 12px; margin-bottom: 8px; }
+  .voice .do { background: #E6EEFF; } .voice .dont { background: #FCE7E2; color: #5E6873; text-decoration: line-through; text-decoration-color: #E5512B; }
+  .voice .k { font: 600 10.5px Mono; letter-spacing: .08em; text-transform: uppercase; display: block; margin-bottom: 3px; color: #2C4BD0; text-decoration: none; }
+  .voice .dont .k { color: #B23B16; display: inline-block; }
+  .app { grid-column: span 2; padding: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 0; background: #0A0D12; }
+  .app img { width: 100%; height: 100%; object-fit: cover; display: block; }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="cell hero night"><img src="assets/hero-dark.jpg" alt=""><div class="over"><span class="tag">Website hero · WebGL signal → fair line</span></div></div>
+
+  <div class="cell story">
+    <div class="l"><span>Fairspoken · brand board</span><span>October 2026</span></div>
+    <img class="lock" src="../logo/fairspoken-lockup.svg" alt="Fairspoken">
+    <p>Every Irish schoolchild knows rough work from the fair copy. Fairspoken does the rough work for you: your voice, rough and real, settles into one clean line of text at your cursor. Local, open source and calm enough for a consulting room, fast enough for a terminal.</p>
+  </div>
+
+  <div class="cell pal">
+    <div class="l"><span>Palette</span><span>all text pairs WCAG AA or better</span></div>
+    <div class="sw">
+      <div style="background:#F3F1EA">Limestone<span>#F3F1EA</span></div>
+      <div style="background:#0E1318;color:#ECEEF1">Bog Oak<span>#0E1318 · 16.5:1</span></div>
+      <div style="background:#2C4BD0;color:#fff">Copybook Blue<span>#2C4BD0 · 6.1:1</span></div>
+      <div style="background:#E5512B;color:#fff">Margin Red<span>#E5512B · signal only</span></div>
+      <div style="background:#0A0D12;color:#ECEEF1">Night<span>#0A0D12</span></div>
+      <div style="background:#93A8FF">Copybook 300<span>#93A8FF · 8.6:1</span></div>
+      <div style="background:#C5D1EC">Ruling<span>#C5D1EC · lines</span></div>
+      <div style="background:#F4BE4F">Gorse<span>#F4BE4F · highlight</span></div>
+    </div>
+    <div class="fn"><span><i style="background:#1D7347"></i>Success #1D7347</span><span><i style="background:#8F5A00"></i>Warning #8F5A00</span><span><i style="background:#B21F3B"></i>Error #B21F3B</span><span><i style="background:#5E6873"></i>Slate 500 #5E6873</span></div>
+  </div>
+
+  <div class="cell type">
+    <div class="l"><span>Type</span><span>all SIL OFL, self-hosted</span></div>
+    <div class="s1">Host Grotesk</div>
+    <div class="s2 fair">Newsreader, the fair copy</div>
+    <div class="s3">Atkinson Hyperlegible Mono · 58 ms · 0O 1lI 5S</div>
+    <div class="row"><span><b>Signal</b> headlines and UI on the web</span><span>600 · −4%</span><span><b>Fair copy</b> only for finished words</span><span>300 italic</span><span><b>Data</b> timings, labels, doses</span><span>500</span><span><b>Native app</b> SF Pro (system)</span><span>Liquid Glass</span></div>
+  </div>
+
+  <div class="cell logo">
+    <div class="l"><span>Mark · “the Settle”</span></div>
+    <div class="marks">
+      <div><img src="../logo/fairspoken-mark.svg" alt=""></div>
+      <div class="d"><img src="../logo/fairspoken-mark-reversed.svg" alt=""></div>
+      <div style="background:transparent;box-shadow:none"><img class="icon" src="../logo/app-icon/app-icon-1024.png" alt=""></div>
+      <div style="background:transparent;box-shadow:none"><img class="icon" src="../logo/app-icon/app-icon-dark-1024.png" alt=""></div>
+    </div>
+  </div>
+
+  <div class="cell glass">
+    <img src="assets/glass-pill.jpg" alt="">
+    <div class="txt"><div class="l">Liquid Glass · native app</div>Glass is the <b>control layer</b>: sidebar, toolbar, the dictation pill, node controls. Content stays on standard materials. Refraction bends what's beneath; the rim catches the light; tint adapts to the content behind.</div>
+  </div>
+
+  <div class="cell motion">
+    <div class="l"><span>Motion · settle, don't bounce</span></div>
+    <svg viewBox="0 0 300 150" aria-hidden="true">
+      <path d="M0 75 C10 30 20 30 30 75 S50 120 60 75 S78 40 88 75 S104 98 112 75 S124 62 132 75 S142 82 150 75 H300" fill="none" stroke="#2C4BD0" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M150 20V130" stroke="#E5512B" stroke-width="2"/>
+      <text x="0" y="146" font-family="Mono" font-size="10" fill="#5E6873">speak · rough</text>
+      <text x="158" y="146" font-family="Mono" font-size="10" fill="#5E6873">release · 58 ms · fair</text>
+      <text x="160" y="66" font-family="Newsreader" font-style="italic" font-size="15" fill="#0E1318">Review in two weeks.</text>
+    </svg>
+    <ul><li><b>Fast attack, long settle</b>: cubic-bezier(.22,1,.36,1), 420–900 ms</li><li><b>Motion means state</b>: swell = hearing you, settle = done</li><li><b>Reduced motion</b>: one still, settled frame</li></ul>
+  </div>
+
+  <div class="cell voice">
+    <div class="l"><span>Voice · plain, warm, exact</span></div>
+    <div class="do"><span class="k">Practice</span>Runs on the Mac in the room or on your own host. Your DPO can read every line.</div>
+    <div class="dont"><span class="k">Don't</span> Military-grade AI security for next-gen clinical workflows!</div>
+    <div class="do"><span class="k">Developer</span>Release to text in 58 ms. Identifiers keep their casing.</div>
+    <div class="dont"><span class="k">Don't</span> Supercharge your coding with magical voice AI ✨</div>
+  </div>
+
+  <div class="cell app"><img src="assets/dashboard-light.jpg" alt=""><img src="assets/server-dark.jpg" alt=""></div>
+</div>
+</body>
+</html>

@@ -1,0 +1,84 @@
+/* Fairspoken for macOS 26: mockup shell. Glass lives in glass.css/glass.js;
+   everything here is the content layer (standard materials, never Liquid Glass). */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--ui); -webkit-font-smoothing: antialiased; overflow: hidden; width: 1600px; height: 1000px; position: relative; }
+
+[data-theme="light"] {
+  --win: #F6F4EE; --card: #FFFFFF; --card-2: #FBFAF6; --line: rgb(14 19 24 / .08); --line-2: rgb(14 19 24 / .13);
+  --fg: #0E1318; --fg-2: #3D4752; --fg-3: #5E6873; --accent: #2C4BD0; --signal: #E5512B; --signal-text: #B23B16; --rule: #C5D1EC;
+  --chip: rgb(14 19 24 / .055);
+}
+[data-theme="dark"] {
+  --win: #0D1016; --card: #161A22; --card-2: #12161D; --line: rgb(255 255 255 / .07); --line-2: rgb(255 255 255 / .12);
+  --fg: #ECEEF1; --fg-2: #B0B8C3; --fg-3: #8B95A2; --accent: #93A8FF; --signal: #FF7148; --signal-text: #FF7148; --rule: #1B2438;
+  --chip: rgb(255 255 255 / .07); --ok: #5ED39A; --warn: #F4BE4F;
+}
+
+/* Desktop ------------------------------------------------------------- */
+canvas.wallpaper { position: absolute; inset: 0; width: 1600px; height: 1000px; }
+.menubar { position: absolute; top: 0; left: 0; right: 0; height: 30px; display: flex; align-items: center; gap: 20px; padding: 0 18px; font-size: 13.5px; font-weight: 500; color: #fff; text-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+.menubar b { font-weight: 700; }
+.menubar .right { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+.menubar svg { width: 16px; height: 16px; }
+
+/* Window --------------------------------------------------------------- */
+.window { position: absolute; left: 64px; top: 52px; width: 1472px; height: 916px; border-radius: 26px; overflow: hidden; background: var(--win); box-shadow: 0 50px 120px -30px rgb(0 0 0 / .55), 0 0 0 .5px rgb(0 0 0 / .25), inset 0 0 0 .5px rgb(255 255 255 / .2); }
+.content { position: absolute; inset: 0; overflow: hidden; }
+.scroll { position: absolute; inset: 0; padding: 0 30px 40px 282px; }
+
+/* Floating glass sidebar (concentric: window 26 − inset 10 = 16) */
+.sidebar { position: absolute; z-index: 20; left: 10px; top: 10px; bottom: 10px; width: 242px; border-radius: 16px; padding: 16px 12px 12px; display: flex; flex-direction: column; }
+.traffic { display: flex; gap: 8px; padding: 2px 6px 20px; }
+.traffic i { width: 12px; height: 12px; border-radius: 50%; background: #FF5F57; box-shadow: inset 0 0 0 .5px rgb(0 0 0 / .18); }
+.traffic i:nth-child(2) { background: #FEBC2E; } .traffic i:nth-child(3) { background: #28C840; }
+.sb-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 16px; font: 650 17px/1 "Host Grotesk", var(--ui); letter-spacing: -.02em; }
+.sb-brand svg { width: 26px; height: 26px; }
+.sb-label { font-size: 11px; font-weight: 600; color: var(--glass-label-2); padding: 14px 10px 6px; }
+.nav { display: grid; gap: 2px; }
+.nav a { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 10px; font-size: 13.5px; font-weight: 500; color: var(--glass-label); text-decoration: none; }
+.nav a svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
+.nav a .count { margin-left: auto; font-size: 12px; color: var(--glass-label-2); font-variant-numeric: tabular-nums; }
+.nav a.on { background: var(--glass-select); font-weight: 600; box-shadow: inset 0 .5px 0 rgb(255 255 255 / .6), 0 1px 2px rgb(0 0 0 / .06); }
+[data-theme="dark"] .nav a.on { box-shadow: inset 0 .5px 0 rgb(255 255 255 / .2); }
+.nav a.on svg { color: var(--accent); }
+.sb-foot { margin-top: auto; display: grid; gap: 8px; }
+.privacy-chip { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--glass-label-2); padding: 8px 10px; border-radius: 10px; background: rgb(255 255 255 / .12); }
+[data-theme="dark"] .privacy-chip { background: rgb(255 255 255 / .05); }
+.privacy-chip svg { width: 14px; height: 14px; color: var(--ok, #1D7347); flex: none; }
+.me { display: flex; gap: 10px; align-items: center; padding: 6px 8px; }
+.me .av { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #93A8FF, #2C4BD0); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.me b { display: block; font-size: 13px; } .me span { font-size: 11.5px; color: var(--glass-label-2); }
+
+/* Toolbar: grouped glass capsules over the content */
+.toolbar { position: absolute; z-index: 15; top: 12px; left: 268px; right: 14px; height: 44px; display: flex; align-items: center; gap: 10px; }
+.toolbar .title { font-size: 15px; font-weight: 700; color: var(--fg); padding-left: 16px; text-shadow: 0 1px 8px rgb(0 0 0 / .0); }
+.toolbar .title.on-art { color: #fff; text-shadow: 0 1px 10px rgb(0 0 0 / .35); }
+.toolbar .sp { flex: 1; }
+.cap { height: 40px; border-radius: 999px; display: flex; align-items: center; padding: 0 4px; gap: 2px; }
+.cap button, .cap .item { height: 32px; min-width: 32px; padding: 0 10px; border: 0; background: transparent; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: 500 13px var(--ui); color: inherit; }
+.cap button svg, .cap .item svg { width: 17px; height: 17px; }
+.cap .on { background: var(--glass-select); font-weight: 600; }
+.search { width: 250px; justify-content: flex-start; padding: 0 14px; gap: 8px; font-size: 13px; color: var(--glass-label-2); }
+.search svg { width: 15px; height: 15px; }
+.cap.prominent { padding: 0 16px 0 12px; font-weight: 650; font-size: 13.5px; gap: 8px; color: #fff; }
+.cap.prominent .rec { width: 10px; height: 10px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px rgb(255 255 255 / .28); }
+.kbd { font: 600 11px var(--mono); padding: 2px 6px; border-radius: 6px; background: rgb(255 255 255 / .22); }
+
+/* Scroll edge effect under the toolbar (standard material, not glass) */
+.edge { position: absolute; z-index: 12; left: 0; right: 0; top: 0; height: 74px; pointer-events: none; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); mask: linear-gradient(#000 35%, transparent); -webkit-mask: linear-gradient(#000 35%, transparent); background: linear-gradient(color-mix(in srgb, var(--win) 55%, transparent), transparent); }
+
+/* Content: standard-material cards ------------------------------------- */
+.card { background: var(--card); border-radius: 20px; box-shadow: 0 0 0 .5px var(--line-2), 0 1px 2px rgb(0 0 0 / .04); padding: 20px 22px; color: var(--fg); }
+[data-theme="dark"] .card { box-shadow: 0 0 0 .5px var(--line-2); }
+.card h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg-3); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.card h3 a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.big { font-size: 46px; font-weight: 700; letter-spacing: -.035em; line-height: 1; font-variant-numeric: tabular-nums; }
+.big small { font-size: 22px; font-weight: 600; color: var(--fg-3); letter-spacing: -.01em; margin: 0 6px 0 2px; }
+.sub { font-size: 13px; color: var(--fg-3); }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; background: var(--chip); font-size: 12px; font-weight: 500; color: var(--fg-2); white-space: nowrap; }
+.chip .d { width: 6px; height: 6px; border-radius: 50%; background: var(--ok, #1D7347); }
+.mono { font-family: var(--mono); }
+.fair { font-family: var(--serif); font-variation-settings: "opsz" 18; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }

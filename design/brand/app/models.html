@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8">
+<title>Fairspoken · Models (macOS 26 Liquid Glass mockup)</title>
+<link rel="stylesheet" href="glass.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .feature { position: absolute; left: 0; top: 0; width: 1472px; height: 420px; }
+  .feature canvas { position: absolute; inset: 0; }
+  .feature::after { content: ""; position: absolute; inset: auto 0 0 0; height: 110px; background: linear-gradient(transparent, var(--win)); }
+  .ft { position: absolute; left: 290px; top: 92px; color: var(--fg); z-index: 2; }
+  .ft .kicker { font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--signal-text); }
+  .ft h1 { margin: 10px 0 6px; font: 700 44px/1 var(--ui); letter-spacing: -.035em; }
+  .ft p { margin: 0; font-size: 15px; color: var(--fg-2); max-width: 34em; }
+  .chips { position: absolute; left: 290px; top: 214px; display: flex; gap: 8px; z-index: 3; }
+  .gchip { height: 34px; border-radius: 999px; display: flex; align-items: center; gap: 7px; padding: 0 14px; font-size: 12.5px; font-weight: 600; }
+  .gchip svg { width: 15px; height: 15px; }
+  .stats { position: absolute; left: 980px; top: 252px; width: 450px; height: 84px; border-radius: 26px; display: grid; grid-template-columns: repeat(3, 1fr); align-items: center; padding: 0 8px; z-index: 3; }
+  .stats div { padding: 0 14px; } .stats div + div { border-left: .5px solid rgb(127 127 127 / .3); }
+  .stats b { display: block; font-size: 22px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .stats span { font-size: 11.5px; color: var(--glass-label-2); }
+
+  .sec { position: absolute; left: 282px; right: 30px; top: 382px; display: flex; justify-content: space-between; align-items: baseline; color: var(--fg); }
+  .sec h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .sec span { font-size: 12.5px; color: var(--fg-3); }
+  .grid { position: absolute; left: 282px; right: 30px; top: 418px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .mc { position: relative; border-radius: 22px; overflow: hidden; background: var(--card); box-shadow: 0 0 0 .5px var(--line-2), 0 1px 2px rgb(0 0 0 / .04); color: var(--fg); }
+  .mc .art { position: relative; height: 196px; }
+  .mc .art canvas { position: absolute; inset: 0; }
+  .mc .badge { position: absolute; left: 12px; top: 12px; height: 28px; border-radius: 999px; display: flex; align-items: center; gap: 6px; padding: 0 11px; font-size: 12px; font-weight: 600; z-index: 3; }
+  .mc .act { position: absolute; right: 12px; bottom: 12px; height: 36px; border-radius: 999px; display: flex; align-items: center; gap: 7px; padding: 0 14px; font-size: 13px; font-weight: 650; z-index: 3; }
+  .mc .act svg { width: 15px; height: 15px; }
+  .mc .body { padding: 16px 18px 18px; display: grid; gap: 6px; }
+  .mc h3 { margin: 0; font-size: 16px; letter-spacing: -.015em; }
+  .mc .by { font-size: 12px; color: var(--fg-3); }
+  .mc p { margin: 4px 0 6px; font-size: 13px; line-height: 1.45; color: var(--fg-2); min-height: 38px; }
+  .meter { display: grid; grid-template-columns: 70px 1fr; gap: 6px 10px; align-items: center; font-size: 12px; color: var(--fg-3); }
+  .meter i { display: flex; gap: 3px; } .meter i b { width: 18px; height: 5px; border-radius: 3px; background: var(--chip); } .meter i b.on { background: var(--accent); }
+  .mc .foot { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 10px; border-top: .5px solid var(--line-2); font-size: 12px; color: var(--fg-3); }
+  .mc .foot b { color: var(--fg); font-weight: 600; }
+  .prog { position: absolute; left: 12px; right: 12px; bottom: 58px; height: 5px; border-radius: 5px; background: rgb(255 255 255 / .35); overflow: hidden; z-index: 3; }
+  .prog i { display: block; width: 64%; height: 100%; background: #fff; border-radius: 5px; box-shadow: 0 0 10px rgb(255 255 255 / .8); }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="content">
+    <div class="feature"><canvas id="feat"></canvas></div>
+    <div class="ft"><div class="kicker">In use · speech</div><h1>Parakeet TDT 0.6B v3</h1><p>NVIDIA · Core ML on the Apple Neural Engine · 25 European languages. Speech recognition runs on this Mac; nothing you say leaves it.</p></div>
+    <div class="chips">
+      <span class="gchip glass" data-glass="regular" data-bevel="11" id="c1"></span>
+      <span class="gchip glass" data-glass="regular" data-bevel="11" id="c2"></span>
+      <span class="gchip glass" data-glass="regular" data-bevel="11" id="c3"></span>
+    </div>
+    <div class="stats glass" data-glass="regular" data-bevel="20">
+      <div><b>2.27%</b><span>word error rate</span></div>
+      <div><b>128×</b><span>faster than real time</span></div>
+      <div><b>450 MB</b><span>in memory</span></div>
+    </div>
+
+    <div class="sec"><h2>Library</h2><span>3 speech models · 1 clean-up model · more on Hugging Face</span></div>
+    <div class="grid" id="grid"></div>
+    <div class="edge"></div>
+  </div>
+
+  <div class="toolbar">
+    <span class="sp"></span>
+    <div class="cap glass" data-glass="regular" data-bevel="12"><button class="on">All</button><button>Speech</button><button>Clean-up</button><button>Installed</button></div>
+    <div class="cap glass search" data-glass="regular" data-bevel="12" id="srch"></div>
+    <div class="cap glass" data-glass="regular" data-bevel="12"><button id="imp"></button></div>
+  </div>
+</div>
+
+<script src="shell.js"></script>
+<script>
+  Shell.mount({ active: 'models' });
+  const ic = Shell.icon;
+  document.getElementById('c1').innerHTML = ic('check') + 'In use';
+  document.getElementById('c2').innerHTML = ic('cpu') + 'Neural Engine';
+  document.getElementById('c3').innerHTML = ic('lock') + 'On this Mac';
+  document.getElementById('srch').innerHTML = ic('search') + 'Search Hugging Face';
+  document.getElementById('imp').innerHTML = ic('down');
+  Shell.signalArt(document.getElementById('feat'), { w: 1472, h: 420, seed: 21, mx: .64, my: .8, amp: .17, strands: 52, palette: 'sea' });
+
+  const cards = [
+    { n: 'Parakeet Ultra', by: 'Moondream · Core ML', d: 'Post-trained v3. The lowest error rate in every language, at the same speed.', badge: [ic('sparkle'), 'Most accurate'], act: [ic('down'), 'Download · 613 MB'], acc: 5, spd: 5, foot: ['WER', '2.13%'], pal: 'brand', seed: 3, prog: false },
+    { n: 'Parakeet TDT 0.6B v2', by: 'NVIDIA · Core ML', d: 'The English-only predecessor, kept for parity with the Windows and Linux app.', badge: [ic('check'), 'Installed'], act: ['', 'Use'], acc: 4, spd: 5, foot: ['Languages', 'English'], pal: 'ink', seed: 8 },
+    { n: 'SpeakoFlow Mini', by: 'Fairspoken · clean-up', d: 'Trained on dictation. Removes fillers and settles “no wait, I meant…”.', badge: [ic('sparkle'), 'Clean-up · on'], act: [ic('check'), 'Enabled'], acc: 4, spd: 4, foot: ['Runs', 'On device'], pal: 'ember', seed: 5 },
+    { n: 'Whisper large-v3 turbo', by: 'OpenAI · via Hugging Face', d: 'Broad language coverage. Slower than Parakeet; useful for rarer languages.', badge: [ic('search'), 'Hugging Face'], act: [ic('down'), 'Downloading 64%'], acc: 4, spd: 3, foot: ['Size', '1.6 GB'], pal: 'gorse', seed: 13, prog: true },
+  ];
+  const grid = document.getElementById('grid');
+  cards.forEach((m, i) => {
+    const el = document.createElement('article'); el.className = 'mc';
+    const dots = (v) => `<i>${[1, 2, 3, 4, 5].map((k) => `<b class="${k <= v ? 'on' : ''}"></b>`).join('')}</i>`;
+    el.innerHTML = `<div class="art"><canvas></canvas>
+        <span class="badge glass" data-glass="clear" data-bevel="10">${m.badge[0]}${m.badge[1]}</span>
+        ${m.prog ? '<span class="prog"><i></i></span>' : ''}
+        <span class="act glass ${i === 0 ? 'prominent' : ''}" data-glass="${i === 0 ? 'prominent' : 'clear'}" data-bevel="12">${m.act[0]}${m.act[1]}</span></div>
+      <div class="body"><h3>${m.n}</h3><span class="by">${m.by}</span><p>${m.d}</p>
+        <div class="meter"><span>Accuracy</span>${dots(m.acc)}<span>Speed</span>${dots(m.spd)}</div>
+        <div class="foot"><span>${m.foot[0]}</span><b>${m.foot[1]}</b></div></div>`;
+    grid.append(el);
+    const cv = el.querySelector('canvas');
+    Shell.signalArt(cv, { w: el.clientWidth, h: 196, seed: m.seed, mx: .66, my: .54, amp: .32, strands: 30, palette: m.pal });
+  });
+  document.querySelectorAll('.mc .badge svg, .mc .act svg').forEach((s) => s.setAttribute('width', 15));
+</script>
+<script src="glass.js"></script>
+</body>
+</html>

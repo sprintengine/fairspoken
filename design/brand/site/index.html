@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fairspoken: dictation for Mac</title>
+<meta name="description" content="Open-source, on-device dictation for Mac. Hold a key, speak, and clean finished text appears at your cursor in about 60 milliseconds.">
+<meta name="theme-color" content="#F3F1EA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0A0D12" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../logo/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../logo/apple-touch-icon.png">
+<link rel="preload" href="fonts/host-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/newsreader-latin-opsz-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="site.css">
+<script>
+  // Theme before first paint: ?theme= wins, then saved choice, then the system.
+  (function () {
+    var q = new URLSearchParams(location.search).get('theme');
+    var t = q || localStorage.getItem('fs-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 64 64">
+    <path d="M7 32 C7.28 30.49 8.1 25.05 8.65 22.91 C9.2 20.77 9.75 19.35 10.3 19.15 C10.85 18.95 11.4 20.16 11.95 21.73 C12.5 23.3 13.05 26.21 13.6 28.57 C14.15 30.93 14.7 33.94 15.25 35.89 C15.8 37.84 16.35 39.55 16.9 40.26 C17.45 40.97 18 40.79 18.55 40.15 C19.1 39.51 19.65 37.87 20.2 36.42 C20.75 34.98 21.3 32.91 21.85 31.47 C22.4 30.04 22.95 28.6 23.5 27.84 C24.05 27.08 24.6 26.81 25.15 26.91 C25.7 27.02 26.25 27.77 26.8 28.48 C27.35 29.18 27.9 30.34 28.45 31.15 C29 31.96 29.55 32.84 30.1 33.34 C30.65 33.84 31.2 34.09 31.75 34.13 C32.3 34.18 32.85 33.88 33.4 33.62 C33.95 33.37 34.5 32.89 35.05 32.61 C35.6 32.32 36.15 32.03 36.7 31.9 C37.25 31.76 37.8 31.78 38.35 31.8 C38.9 31.82 39.73 31.97 40 32 L45 32" fill="none" stroke="var(--accent)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M53 20V44" stroke="var(--signal)" stroke-width="4.5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-apple" viewBox="0 0 24 24"><path fill="currentColor" d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.9-3-.9C7 7.3 5.6 8.2 4.8 9.6c-1.6 2.8-.4 6.9 1.1 9.1.8 1.1 1.7 2.3 2.9 2.3 1.2-.1 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2.1-1.1 2.8-2.2.9-1.3 1.3-2.5 1.3-2.6-.1 0-2.5-.9-2.5-3.5zM14.1 5.8c.6-.8 1.1-1.8 1-2.8-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.7-1 2.7 1 .1 2-.5 2.7-1.3z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="3"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></g></symbol>
+  <symbol id="i-building" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 20.5h17M5.5 20.5V8l6.5-4.5L18.5 8v12.5"/><path d="M10 20.5v-5h4v5"/></g></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></g></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8.5 7.5-5 4.5 5 4.5m7-9 5 4.5-5 4.5M13.5 5l-3 14"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2m0 15v2M4.6 4.6l1.4 1.4m12 12 1.4 1.4M2.5 12h2m15 0h2M4.6 19.4 6 18M18 6l1.4-1.4"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="margin-rule" aria-hidden="true"></div>
+
+<header class="nav">
+  <a class="brand" href="#top" aria-label="Fairspoken home"><svg aria-hidden="true"><use href="#mark"/></svg><span>Fairspoken</span></a>
+  <nav class="nav-links" aria-label="Main">
+    <a href="#how">How it works</a>
+    <a href="#practices">Practices</a>
+    <a href="#developers">Developers</a>
+    <a href="#models">Models</a>
+    <a href="#source">Open source</a>
+    <button class="theme-btn" type="button" aria-label="Switch to dark appearance"><svg aria-hidden="true"><use href="#i-moon"/></svg></button>
+    <a class="cta" href="#download">Download</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<!-- HERO: voice → signal → fair copy -------------------------------------->
+<section class="hero band" id="top" aria-labelledby="hero-title">
+  <div class="hero-stage">
+    <svg class="hero-fallback" aria-hidden="true" preserveAspectRatio="none"></svg>
+    <canvas aria-hidden="true"></canvas>
+    <div class="hero-content">
+      <div class="hero-head">
+        <div class="hero-eyebrow eyebrow"><span class="dot" aria-hidden="true"></span>On-device dictation · Open source · Made in Ireland</div>
+        <h1 class="display" id="hero-title">
+          <span class="line l1"><span>Hold a key and speak.</span></span>
+          <span class="line l2"><span class="fair">Text appears at your cursor.</span></span>
+        </h1>
+      </div>
+
+      <div class="rough" aria-hidden="true"></div>
+      <p class="faircopy" aria-live="off"><span class="txt"></span></p>
+      <span class="latency" aria-hidden="true"></span>
+
+      <div class="hero-foot">
+        <div>
+          <p class="lede">Hold a key and talk. Fairspoken turns what you say into clean, finished text at your cursor, in any app. Speech recognition takes about 60&nbsp;milliseconds on the Neural Engine, and it all runs on your Mac.</p>
+          <p class="hero-hint">Hold <kbd>fn</kbd>, speak, let go. That's the whole interface.</p>
+        </div>
+        <div class="hero-ctas">
+          <a class="btn btn-primary" href="#download"><svg aria-hidden="true"><use href="#i-apple"/></svg>Download for Mac</a>
+          <a class="btn btn-ghost" href="#source"><svg aria-hidden="true"><use href="#i-git"/></svg>Source</a>
+        </div>
+      </div>
+      <div class="scroll-cue" aria-hidden="true"><i></i>Scroll</div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS ----------------------------------------------------------->
+<section class="how band ruled" id="how" aria-labelledby="how-title">
+  <div class="how-stage wrap">
+    <div>
+      <span class="sec-label">01</span>
+      <p class="eyebrow">How it works</p>
+      <h2 class="h2 split" id="how-title">Three steps. You only do the first.</h2>
+      <ol class="how-steps">
+        <li class="on" data-step="0"><span class="n">01</span><span class="t">Speak</span><span class="d">Hold <kbd>fn</kbd> anywhere and talk the way you'd talk to a colleague. Ramble, pause, change your mind.</span></li>
+        <li data-step="1"><span class="n">02</span><span class="t">Signal</span><span class="d">Let go. NVIDIA Parakeet transcribes on the Apple Neural Engine in about 40–80&nbsp;ms. Nothing is uploaded.</span></li>
+        <li data-step="2"><span class="n">03</span><span class="t fair">Clean text</span><span class="d">SpeakoFlow Mini, a small clean-up model trained on dictation, drops the ums, settles "no wait, I meant…" and types the result at your cursor.</span></li>
+      </ol>
+    </div>
+
+    <div class="demo" role="group" aria-label="Dictation example">
+      <div class="demo-top">
+        <div class="seg" role="group" aria-label="Example">
+          <button type="button" aria-pressed="true" data-ex="gp">In the practice</button>
+          <button type="button" aria-pressed="false" data-ex="dev">At the terminal</button>
+        </div>
+        <span class="pill"><span class="d" aria-hidden="true"></span>On this Mac</span>
+      </div>
+      <div class="demo-body">
+        <div class="demo-pane on" data-pane="0">
+          <canvas class="wave" aria-hidden="true"></canvas>
+          <p class="raw" data-raw></p>
+        </div>
+        <div class="demo-pane" data-pane="1">
+          <p class="raw" data-raw-marked></p>
+          <div class="tokens" data-tokens></div>
+          <div class="meta-row"><span>model <b>parakeet-tdt-0.6b-v3</b></span><span>on <b>Neural Engine</b></span><span>release → text <b data-ms>58 ms</b></span></div>
+        </div>
+        <div class="demo-pane" data-pane="2">
+          <p class="before" data-before></p>
+          <p class="fairtext" data-fair></p>
+          <div class="meta-row"><span>polish <b>SpeakoFlow Mini</b></span><span>fillers removed <b data-fillers>4</b></span><span>self-corrections <b>1</b></span><span>inserted into <b data-dest>Healthlink</b></span></div>
+          <div class="dest" aria-hidden="true"><div class="bar"><span data-dest-app>Healthlink · New referral</span><span>at cursor</span></div><div class="field"><span data-dest-text></span><span class="caret"></span></div></div>
+        </div>
+      </div>
+      <div class="demo-foot"><span>Audio processed in memory on this Mac</span><span data-stage-label>Step 1 of 3: listening</span></div>
+      <div class="demo-progress" aria-hidden="true"><i></i></div>
+    </div>
+  </div>
+</section>
+
+<!-- SPEED ------------------------------------------------------------------>
+<section class="speed band invert" id="speed" aria-labelledby="speed-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">02</span>
+        <p class="eyebrow">Speed</p>
+        <h2 class="h2 split" id="speed-title">Done before you blink.</h2>
+      </div>
+      <p class="lede rv">From the moment you let go to a finished transcript. Recognition runs on the Apple Neural Engine, so there's no upload, no queue and no round trip, and the clean-up pass follows straight after, on the same Mac.</p>
+    </div>
+    <p class="bignum rv" aria-label="40 to 80 milliseconds"><span data-count="40">40</span>–<span data-count="80">80</span><small>ms</small></p>
+    <div class="timeline" aria-hidden="true">
+      <div class="axis"></div>
+      <span class="tick first" style="left:0%">0 ms · you let go</span>
+      <span class="tick" style="left:25%">100</span>
+      <span class="tick" style="left:50%">200</span>
+      <span class="tick" style="left:75%">300</span>
+      <span class="tick last" style="left:100%">400 ms</span>
+      <div class="span us" style="left:0;width:20%">Fairspoken: speech → text</div>
+      <div class="span blink" style="left:25%;width:75%">A blink of an eye: 100–400 ms</div>
+    </div>
+    <div class="stats">
+      <div class="stat rv"><div class="v">128×</div><div class="k">faster than real time. A minute of speech takes under half a second.</div></div>
+      <div class="stat rv"><div class="v">2.27%</div><div class="k">word error rate on LibriSpeech test-clean with Parakeet v3. 2.13% with Parakeet Ultra.</div></div>
+      <div class="stat rv"><div class="v">25</div><div class="k">European languages with Parakeet v3, including English, French, German, Polish and Spanish.</div></div>
+      <div class="stat rv"><div class="v">0</div><div class="k">bytes of audio leave your network in local or host mode. The optional Fairspoken Cloud is off by default.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- PRIVACY ---------------------------------------------------------------->
+<section class="privacy band" id="privacy" aria-labelledby="privacy-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">03</span>
+        <p class="eyebrow">Privacy</p>
+        <h2 class="h2 split" id="privacy-title">Runs on hardware you own.</h2>
+      </div>
+      <p class="lede rv">Speech is turned into text on your Mac, or on a host you run on your own network.</p>
+    </div>
+    <div class="privacy-grid">
+      <div class="building rv" aria-label="Diagram: every device in the practice talks to one Mac mini inside the building. Nothing crosses the outer wall."><canvas aria-hidden="true"></canvas></div>
+      <ul class="facts">
+        <li class="rv"><svg aria-hidden="true"><use href="#i-building"/></svg><div><b>Processed on site</b><span>On your Mac, or on one Fairspoken host in the back office. No cloud speech service is involved unless you deliberately switch one on.</span></div></li>
+        <li class="rv"><svg aria-hidden="true"><use href="#i-lock"/></svg><div><b>Encrypted between your own devices</b><span>Practice devices reach the host over Tailscale, which encrypts every connection end to end with WireGuard.</span></div></li>
+        <li class="rv"><svg aria-hidden="true"><use href="#i-eye"/></svg><div><b>Private on screen, too</b><span>Hide dictation previews with one click when a patient is in the room. You choose how long history is kept.</span></div></li>
+        <li class="rv"><svg aria-hidden="true"><use href="#i-code"/></svg><div><b>Checkable, not just promised</b><span>Every line is open source under the MIT licence, so your DPO, or anyone they trust, can confirm it.</span></div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- PRACTICE HOST ---------------------------------------------------------->
+<section class="host band ruled" id="host" aria-labelledby="host-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">04</span>
+        <p class="eyebrow">The practice host</p>
+        <h2 class="h2 split" id="host-title">One Mac mini. <span class="fair">Every room.</span></h2>
+      </div>
+      <p class="lede rv">Run Fairspoken host on a Mac mini in the back office. Every Mac, Windows PC, iPad and phone in the practice dictates through it, so each room gets Neural Engine speed without a Mac on every desk.</p>
+    </div>
+    <div class="flow rv" aria-label="Live diagram: requests from practice devices flow to the host's workers and models.">
+      <canvas aria-hidden="true"></canvas>
+      <div class="flow-kpis"><span class="pill"><span class="d" aria-hidden="true"></span>host online</span><span class="pill" data-kpi-rpm>12 dictations / min</span><span class="pill" data-kpi-p50>p50 61 ms</span></div>
+      <div class="flow-log" aria-hidden="true"></div>
+    </div>
+    <div class="host-notes">
+      <div class="rv"><h4>Set up once, before the morning list</h4><p>Install the host, sign the practice devices into your tailnet and pair them. About fifteen minutes, start to finish.</p></div>
+      <div class="rv"><h4>Scales with the practice</h4><p>Add workers for a busy clinic, keep a second model loaded, and watch queue time and latency per room as it happens.</p></div>
+      <div class="rv"><h4>Works on the PCs you already have</h4><p>The Windows and Linux app can stream audio straight to your host. Nothing new to buy for the consulting rooms.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- DEVELOPERS ------------------------------------------------------------->
+<section class="dev band invert" id="developers" aria-labelledby="dev-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">05</span>
+        <p class="eyebrow">For developers</p>
+        <h2 class="h2 split" id="dev-title">Talk to your agents at the speed you think.</h2>
+      </div>
+      <p class="lede rv">Your voice is a signal; your agents need clean bits. Fairspoken sits between the two and throws away the noise, so Claude Code, Cursor and your terminal get exactly what you meant.</p>
+    </div>
+    <div class="dev-grid">
+      <div class="term rv" aria-label="Example: a dictated prompt arriving in a terminal agent session">
+        <div class="term-bar"><i></i><i></i><i></i><span>~/clinic-api · claude</span></div>
+        <div class="term-body" data-term></div>
+      </div>
+      <ul class="feat">
+        <li class="rv"><b>Lands where your cursor is</b><span>Terminal, editor, agent chat, PR description. Pasted with <code>⌘V</code> by default, typed through Accessibility if you prefer.</span></li>
+        <li class="rv"><b>Keeps your identifiers</b><span>Add <code>useEffect</code>, <code>kubectl</code> or <code>PgBouncer</code> to your vocabulary and they come out cased correctly, every time.</span></li>
+        <li class="rv"><b>Settles your corrections</b><span>"Deploy to prod, no wait, staging" arrives as <code>Deploy to staging</code>. The clean-up model was trained on exactly this.</span></li>
+        <li class="rv"><b>Hackable host</b><span>A small documented HTTP protocol with streaming events. Point any machine on your tailnet at it, or build your own client.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- GP PRACTICES ----------------------------------------------------------->
+<section class="gp band" id="practices" aria-labelledby="gp-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">06</span>
+        <p class="eyebrow">For GP practices</p>
+        <h2 class="h2 split" id="gp-title">Referral letters, finished between patients.</h2>
+      </div>
+      <p class="lede rv">Dictate notes, referrals and replies straight into your practice software, Healthlink messages or email. If you can type into it, you can speak into it. No templates to learn and no typing pool.</p>
+    </div>
+    <div class="gp-grid">
+      <div style="position:relative" class="rv">
+        <article class="letter" aria-label="Example referral letter written by dictation">
+          <p class="hd">Re: Mr Seán Ó Súilleabháin · DOB 14/03/1962 · GMS</p>
+          <p>Dear Dr Byrne,</p>
+          <p>Thank you for seeing this <span class="fresh">63-year-old man</span> with three weeks of chest tightness on exertion, relieved by rest. <span class="fresh">ECG today shows sinus rhythm with no acute changes.</span> I'd be grateful for your assessment at the rapid access clinic.</p>
+          <p>Kind regards,<br>Dr Aoife Walsh</p>
+        </article>
+        <span class="pill letter-pill" style="background:var(--bg-raised);box-shadow:0 0 0 1px var(--hair),0 12px 30px -10px #0003"><span class="d" aria-hidden="true"></span>Dictated in 41 s · polished on site</span>
+      </div>
+      <div>
+        <p class="h3">What your practice manager and DPO will ask, answered.</p>
+        <div class="dpo">
+          <details open><summary>Where does the audio go?</summary><p>To the Mac in the room, or to your own Fairspoken host in the building, over an encrypted Tailscale connection. In local and host mode it isn't sent to us or to any cloud speech service. The optional cloud service is off unless someone turns it on, and practices can leave it off.</p></details>
+          <details><summary>What's kept, and for how long?</summary><p>Audio is used to produce the text and isn't sent anywhere else. The text history stays on the device for as long as you choose, and you can clear it at any time.</p></details>
+          <details><summary>Will it get Irish names and places right?</summary><p>Add your names to the vocabulary list, from Ó Súilleabháin and Ní Bhriain to Dún Laoghaire and Clonakilty, along with your consultants, and Fairspoken spells them correctly from then on.</p></details>
+          <details><summary>Does it work with our clinical system?</summary><p>It types wherever your cursor is, so it works with any practice management system, browser or email client without an integration.</p></details>
+          <details><summary>What does it cost?</summary><p>The app and host are free and open source. The only hardware a practice might add is one Mac mini to act as the host.</p></details>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MODELS ----------------------------------------------------------------->
+<section class="models band ruled" id="models" aria-labelledby="models-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">07</span>
+        <p class="eyebrow">Models</p>
+        <h2 class="h2 split" id="models-title">Small models. <span class="fair">Serious results.</span></h2>
+      </div>
+      <p class="lede rv">Everything runs locally. Pick the speech model that suits your languages and your Mac; the clean-up model does the rest.</p>
+    </div>
+    <div class="model-grid" data-models></div>
+  </div>
+</section>
+
+<!-- OPEN SOURCE ------------------------------------------------------------>
+<section class="oss band" id="source" aria-labelledby="oss-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <span class="sec-label">08</span>
+        <p class="eyebrow">Open source</p>
+        <h2 class="h2 split" id="oss-title">Read every line that hears you.</h2>
+      </div>
+      <p class="lede rv">Fairspoken is MIT-licensed, from the Mac app to the host. Audit it, fork it, run it on your own terms. A tool that listens to you should be one you can check.</p>
+    </div>
+    <div class="oss-grid">
+      <pre class="code rv" aria-label="Example: checking a practice host from another device"><span class="c"># From any device on the practice tailnet</span>
+<span class="k">curl</span> -H <span class="s">"Authorization: Bearer $TOKEN"</span> \
+     http://practice-host:48173/v1/health
+
+<span class="s">{"ok":true,"mode":"standalone-host",
+ "backend":"parakeet","serverVersion":"0.1.0"}</span>
+
+<span class="c"># Stream PCM frames while you speak;
+# the transcript arrives as soon as you let go</span>
+<span class="k">POST</span> /v1/transcriptions/stream
+<span class="k">GET</span>  /v1/events   <span class="c"># live feed for dashboards</span></pre>
+      <div>
+        <ul class="oss-list">
+          <li class="rv"><b>MIT licence</b>Use it in the practice, in your company, in your product.</li>
+          <li class="rv"><b>Mac first</b>Native Swift app with Liquid Glass on macOS 26.</li>
+          <li class="rv"><b>Windows and Linux</b>A Tauri app that runs locally or through your host.</li>
+          <li class="rv"><b>Documented protocol</b>HTTP plus server-sent events. Build your own client.</li>
+        </ul>
+        <div class="hero-ctas" style="margin-top:30px"><a class="btn btn-ghost" href="#"><svg aria-hidden="true"><use href="#i-git"/></svg>View on GitHub</a><a class="btn btn-ghost" href="#">Read the host protocol</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DOWNLOAD --------------------------------------------------------------->
+<section class="download" id="download" aria-labelledby="dl-title">
+  <div class="lines" aria-hidden="true"></div><div class="mrule" aria-hidden="true"></div>
+  <div class="wrap">
+    <p class="eyebrow" style="color:#DCE3FF">Download</p>
+    <h2 class="display split" id="dl-title">Download <span class="fair">Fairspoken.</span></h2>
+    <div class="dl-grid">
+      <a class="dl" href="#"><span class="t">Fairspoken for Mac</span><span class="s">Apple silicon · macOS 26 Tahoe · free</span><span class="go">Download <svg width="18" height="18" aria-hidden="true"><use href="#i-arrow"/></svg></span></a>
+      <a class="dl" href="#"><span class="t">Windows and Linux</span><span class="s">Tauri app · runs locally or through your host</span><span class="go">Get the app <svg width="18" height="18" aria-hidden="true"><use href="#i-arrow"/></svg></span></a>
+      <a class="dl" href="#"><span class="t">Set up a practice host</span><span class="s">Mac mini · Tailscale · about fifteen minutes</span><span class="go">Read the guide <svg width="18" height="18" aria-hidden="true"><use href="#i-arrow"/></svg></span></a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div>
+    <img class="lock" src="../logo/fairspoken-lockup.svg" alt="Fairspoken" data-lock>
+    <small>Made in Ireland. Open source under the MIT licence. This page loads no third-party scripts, fonts or trackers.</small>
+  </div>
+  <nav aria-label="Footer"><a href="#how">How it works</a><a href="#privacy">Privacy</a><a href="#host">Practice host</a><a href="#source">GitHub</a><a href="#download">Download</a></nav>
+</footer>
+
+<script src="hero-gl.js"></script>
+<script src="site.js"></script>
+</body>
+</html>

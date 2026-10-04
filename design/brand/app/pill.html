@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8">
+<title>Fairspoken · Dictation pill over another app (macOS 26 Liquid Glass mockup)</title>
+<link rel="stylesheet" href="glass.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  /* ---- Host app: a code editor with an agent terminal (dev scene) ---- */
+  .ed { position: absolute; left: 40px; top: 44px; width: 1520px; height: 920px; border-radius: 22px; overflow: hidden; background: #0F1218; box-shadow: 0 50px 120px -30px rgb(0 0 0 / .6), 0 0 0 .5px rgb(255 255 255 / .12); font: 500 14.5px/1.72 var(--mono); color: #C9D1DC; }
+  .ed .tabs { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 90px; background: #141821; border-bottom: 1px solid #ffffff10; font: 500 12.5px var(--ui); color: #8B95A2; }
+  .ed .tabs span { padding: 7px 12px; border-radius: 8px; } .ed .tabs .on { background: #1C212C; color: #E6EAF0; }
+  .ed .traffic { position: absolute; left: 16px; top: 17px; padding: 0; }
+  .ed .files { position: absolute; left: 0; top: 46px; bottom: 0; width: 230px; background: #12151C; border-right: 1px solid #ffffff0d; padding: 14px 12px; font: 500 12.5px/2 var(--ui); color: #8B95A2; }
+  .ed .files .on { color: #E6EAF0; background: #1C212C; border-radius: 6px; padding: 0 8px; margin: 0 -8px; }
+  .ed .code { position: absolute; left: 230px; top: 46px; right: 0; bottom: 0; padding: 18px 0 0 0; display: grid; grid-template-columns: 56px 1fr; white-space: pre; }
+  .ed .ln { text-align: right; padding-right: 16px; color: #3E4654; }
+  .k { color: #C792EA; } .s { color: #C3E88D; } .f { color: #82AAFF; } .c { color: #5C6676; font-style: italic; } .n { color: #F78C6C; } .t { color: #FFCB6B; } .p { color: #89DDFF; }
+  .term { position: absolute; right: 18px; top: 64px; width: 560px; height: 520px; border-radius: 16px; background: #0A0C10; box-shadow: 0 0 0 1px #ffffff14, 0 30px 60px -20px #000c; padding: 16px 18px; font-size: 13.5px; }
+  .term .hd { color: #8B95A2; font-size: 12px; margin-bottom: 10px; display: flex; justify-content: space-between; }
+  .term .u { color: #93A8FF; } .term .ok { color: #5ED39A; } .term .dim { color: #6B7480; }
+  .term .prompt { margin-top: 12px; border: 1px solid #ffffff1c; border-radius: 10px; padding: 10px 12px; color: #fff; }
+  .term .prompt .caret { display: inline-block; width: 8px; height: 17px; vertical-align: -3px; background: #FF7148; }
+
+  /* ---- Host app: practice software with a referral form (GP scene) ---- */
+  .pm { position: absolute; left: 40px; top: 44px; width: 1520px; height: 920px; border-radius: 22px; overflow: hidden; background: #F4F6F8; box-shadow: 0 50px 120px -30px rgb(0 0 0 / .45), 0 0 0 .5px rgb(0 0 0 / .15); color: #1E2733; font-family: var(--ui); }
+  .pm .bar { height: 54px; background: linear-gradient(90deg, #0F5E6E, #127A86); display: flex; align-items: center; gap: 22px; padding: 0 22px 0 96px; color: #E8F6F7; font-size: 13.5px; font-weight: 600; }
+  .pm .bar b { font-size: 15px; letter-spacing: -.01em; }
+  .pm .traffic { position: absolute; left: 18px; top: 21px; padding: 0; }
+  .pm .pt { display: flex; gap: 26px; align-items: center; padding: 14px 28px; background: #FFF6E5; border-bottom: 1px solid #F0DDB5; font-size: 13.5px; }
+  .pm .pt .nm { font-size: 17px; font-weight: 700; } .pm .pt .al { margin-left: auto; color: #A33B1E; font-weight: 700; background: #FFE3DA; padding: 5px 10px; border-radius: 8px; }
+  .pm .side { position: absolute; left: 0; top: 108px; bottom: 0; width: 240px; background: #fff; border-right: 1px solid #E3E8ED; padding: 18px 14px; font-size: 13.5px; line-height: 2.3; color: #4A5664; }
+  .pm .side .on { color: #0F5E6E; font-weight: 700; background: #E6F3F4; border-radius: 8px; padding: 0 10px; margin: 0 -10px; }
+  .pm .form { position: absolute; left: 270px; right: 30px; top: 132px; bottom: 30px; display: grid; grid-template-columns: 1.4fr 1fr; gap: 24px; }
+  .pm .panel { background: #fff; border-radius: 14px; box-shadow: 0 0 0 1px #E3E8ED; padding: 22px 26px; }
+  .pm h2 { margin: 0 0 14px; font-size: 18px; }
+  .pm label { display: block; font-size: 12px; font-weight: 700; color: #6A7684; text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 6px; }
+  .pm .in { border: 1px solid #CDD5DD; border-radius: 9px; padding: 9px 12px; font-size: 14px; background: #FBFCFD; }
+  .pm .letter { border: 1.5px solid #127A86; box-shadow: 0 0 0 4px #127A8622; border-radius: 10px; padding: 16px 18px; min-height: 250px; font-family: var(--serif); font-size: 17.5px; line-height: 1.6; color: #1E2733; font-variation-settings: "opsz" 16; }
+  .pm .letter .new { background: linear-gradient(transparent 58%, rgb(44 75 208 / .16) 58%); }
+  .pm .letter .caret { display: inline-block; width: 2px; height: 20px; vertical-align: -4px; background: #E5512B; }
+  .pm .meds div { display: flex; justify-content: space-between; padding: 10px 0; border-top: 1px solid #EEF1F4; font-size: 14px; }
+  .pm .meds b { font-weight: 600; } .pm .meds span { color: #6A7684; }
+  .pm .tag { display: inline-block; font-size: 12px; font-weight: 700; padding: 4px 9px; border-radius: 7px; background: #E6F3F4; color: #0F5E6E; margin: 0 6px 6px 0; }
+  .pm .tag.r { background: #FFE3DA; color: #A33B1E; } .pm .tag.b { background: #E4E9FF; color: #2C4BD0; }
+
+  /* ---- The Fairspoken pill ---- */
+  .pill { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); height: 70px; border-radius: 999px; display: flex; align-items: center; gap: 16px; padding: 0 14px 0 22px; z-index: 30; }
+  .pill .live { position: relative; width: 14px; height: 14px; border-radius: 50%; background: var(--margin); box-shadow: 0 0 0 5px rgb(229 81 43 / .25), 0 0 14px rgb(229 81 43 / .8); }
+  .pill canvas { width: 190px; height: 40px; display: block; }
+  .pill .said { font-size: 15.5px; font-weight: 500; max-width: 330px; white-space: nowrap; overflow: hidden; text-overflow: clip; direction: rtl; text-align: left; mask: linear-gradient(90deg, transparent, #000 22%); -webkit-mask: linear-gradient(90deg, transparent, #000 22%); }
+  .pill .said span { direction: ltr; unicode-bidi: plaintext; }
+  .pill .tm { font: 600 13px var(--mono); color: var(--glass-label-2); font-variant-numeric: tabular-nums; }
+  .pill .key { font: 700 12px var(--mono); padding: 7px 10px; border-radius: 12px; background: rgb(255 255 255 / .2); box-shadow: inset 0 1px 0 rgb(255 255 255 / .4), inset 0 -1px 0 rgb(0 0 0 / .12); }
+  .pill .done { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #1D9F5B; color: #fff; box-shadow: inset 0 1px 1px rgb(255 255 255 / .45), 0 4px 12px -2px rgb(29 159 91 / .55); }
+  .pill .done svg { width: 18px; height: 18px; }
+  .pill .fairprev { font-family: var(--serif); font-size: 17px; max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variation-settings: "opsz" 18; }
+  .pill .ms { font: 600 12.5px var(--mono); color: var(--glass-label-2); white-space: nowrap; }
+  .target { position: absolute; left: 50%; bottom: 236px; transform: translateX(-50%); height: 32px; border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 14px; font-size: 12.5px; font-weight: 600; z-index: 30; }
+  .target svg { width: 15px; height: 15px; }
+.pill.gp { bottom: 418px; } .target.gp { bottom: 504px; }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<script src="shell.js"></script>
+<script>
+  const q = new URLSearchParams(location.search);
+  const scene = q.get('scene') || (Shell.dark ? 'dev' : 'gp');
+  const host = document.getElementById('scene');
+  const traffic = '<div class="traffic"><i></i><i></i><i></i></div>';
+
+  if (scene === 'dev') {
+    Shell.desktop({ app: 'Cursor', menus: ['File', 'Edit', 'Selection', 'View', 'Go', 'Terminal', 'Help'] });
+    const code = [
+      ['c', '// Healthlink webhook: receives referral acknowledgements'],
+      ['', '<span class="k">import</span> { <span class="t">Router</span> } <span class="k">from</span> <span class="s">"express"</span>;'],
+      ['', '<span class="k">import</span> { <span class="f">verifySignature</span>, <span class="f">parseAck</span> } <span class="k">from</span> <span class="s">"../healthlink/codec"</span>;'],
+      ['', '<span class="k">import</span> { <span class="f">log</span> } <span class="k">from</span> <span class="s">"../log"</span>;'],
+      ['', ''],
+      ['', '<span class="k">export const</span> <span class="f">healthlink</span> <span class="p">=</span> <span class="t">Router</span>();'],
+      ['', ''],
+      ['', '<span class="f">healthlink</span>.<span class="f">post</span>(<span class="s">"/webhooks/healthlink"</span>, <span class="k">async</span> (req, res) <span class="p">=></span> {'],
+      ['', '  <span class="k">if</span> (<span class="p">!</span><span class="f">verifySignature</span>(req.headers[<span class="s">"x-hl-signature"</span>], req.rawBody)) {'],
+      ['', '    <span class="k">return</span> res.<span class="f">status</span>(<span class="n">401</span>).<span class="f">end</span>();'],
+      ['', '  }'],
+      ['', '  <span class="k">const</span> ack <span class="p">=</span> <span class="f">parseAck</span>(req.body);'],
+      ['', '  <span class="k">const</span> result <span class="p">=</span> <span class="k">await</span> <span class="f">deliver</span>(ack);   <span class="c">// TODO: retries</span>'],
+      ['', '  <span class="k">if</span> (<span class="p">!</span>result.ok) {'],
+      ['', '    <span class="f">log</span>.<span class="f">warn</span>(<span class="s">"healthlink delivery failed"</span>, { id: ack.messageId });'],
+      ['', '    <span class="k">return</span> res.<span class="f">status</span>(<span class="n">502</span>).<span class="f">json</span>({ error: <span class="s">"upstream"</span> });'],
+      ['', '  }'],
+      ['', '  res.<span class="f">status</span>(<span class="n">204</span>).<span class="f">end</span>();'],
+      ['', '});'],
+      ['', ''],
+      ['', '<span class="k">async function</span> <span class="f">deliver</span>(ack: <span class="t">Ack</span>): <span class="t">Promise</span>&lt;<span class="t">Result</span>&gt; {'],
+      ['', '  <span class="k">const</span> r <span class="p">=</span> <span class="k">await</span> <span class="f">fetch</span>(<span class="t">ENDPOINT</span>, { method: <span class="s">"POST"</span>, body: <span class="f">encode</span>(ack) });'],
+      ['', '  <span class="k">return</span> { ok: r.ok, status: r.status };'],
+      ['', '}'],
+      ['', ''],
+      ['c', '/** Exponential backoff: 250 ms, 500 ms, 1 s, 2 s, 4 s. */'],
+      ['', '<span class="k">export function</span> <span class="f">backoff</span>(attempt: <span class="t">number</span>, base <span class="p">=</span> <span class="n">250</span>): <span class="t">number</span> {'],
+      ['', '  <span class="k">const</span> jitter <span class="p">=</span> <span class="t">Math</span>.<span class="f">random</span>() <span class="p">*</span> <span class="n">0.2</span> <span class="p">+</span> <span class="n">0.9</span>;'],
+      ['', '  <span class="k">return</span> <span class="t">Math</span>.<span class="f">min</span>(base <span class="p">*</span> <span class="n">2</span> <span class="p">**</span> attempt, <span class="n">8_000</span>) <span class="p">*</span> jitter;'],
+      ['', '}'],
+      ['', ''],
+      ['', '<span class="k">type</span> <span class="t">Result</span> <span class="p">=</span> { ok: <span class="t">boolean</span>; status: <span class="t">number</span> };'],
+      ['', '<span class="k">const</span> <span class="t">ENDPOINT</span> <span class="p">=</span> process.env.<span class="t">HEALTHLINK_URL</span> <span class="p">??</span> <span class="s">"https://hl.example.ie/ack"</span>;'],
+    ];
+    host.innerHTML = `<div class="ed">${traffic}<div class="tabs"><span class="on">healthlink.ts</span><span>codec.ts</span><span>log.ts</span><span>retry.test.ts</span></div>
+      <div class="files">clinic-api<br>&nbsp; src<br>&nbsp;&nbsp;&nbsp; healthlink<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; codec.ts<br>&nbsp;&nbsp;&nbsp; webhooks<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="on">healthlink.ts</span><br>&nbsp;&nbsp;&nbsp; log.ts<br>&nbsp; test<br>&nbsp;&nbsp;&nbsp; retry.test.ts<br>&nbsp; package.json</div>
+      <div class="code"><div class="ln">${code.map((_, i) => i + 1).join('<br>')}</div><div>${code.map(([k, l]) => k ? `<span class="${k}">${l}</span>` : l || '&nbsp;').join('<br>')}</div></div>
+      <div class="term"><div class="hd"><span>claude code · ~/clinic-api</span><span>sonnet</span></div>
+        <div><span class="u">&gt;</span> look at the healthlink webhook</div>
+        <div class="dim">⏺ Read src/webhooks/healthlink.ts (24 lines)</div>
+        <div>The handler calls <span class="u">deliver()</span> once and returns 502 on failure. There's a TODO for retries on line 13.</div>
+        <div class="prompt"><span class="u">&gt;</span> <span class="caret"></span></div>
+        <div class="dim" style="margin-top:8px">? for shortcuts · esc to interrupt</div></div></div>
+      <div class="target glass" data-glass="clear" data-bevel="10">${Shell.icon('chev')}Dictating into Claude Code</div>
+      <div class="pill glass" data-glass="regular" data-frost="7" data-bevel="24">
+        <span class="live"></span><canvas id="wv"></canvas>
+        <span class="said"><span>…in the healthlink webhook um add a retry with exponential backoff</span></span>
+        <span class="tm">0:06</span><span class="key">fn</span>
+      </div>`;
+  } else {
+    Shell.desktop({ app: 'Practice Manager', menus: ['File', 'Edit', 'Patient', 'Letters', 'Window', 'Help'] });
+    host.innerHTML = `<div class="pm">${traffic}<div class="bar"><b>Practice Manager</b><span>Today</span><span>Patients</span><span>Letters</span><span>Results</span><span>Messages</span></div>
+      <div class="pt"><span class="nm">Seán Ó Súilleabháin</span><span>DOB 14/03/1962 (63)</span><span>GMS · 1234567T</span><span>Dr Aoife Walsh</span><span class="al">Allergy: penicillin</span></div>
+      <div class="side"><div>Summary</div><div>Consultations</div><div class="on">Referral letters</div><div>Prescriptions</div><div>Results</div><div>Vaccinations</div><div>Documents</div></div>
+      <div class="form">
+        <div class="panel"><h2>New referral · Cardiology OPD</h2>
+          <label>To</label><div class="in">Dr Niall Byrne, Consultant Cardiologist, Cork University Hospital</div>
+          <label>Letter</label>
+          <div class="letter">Dear Dr Byrne,<br><br>Thank you for seeing this 63-year-old man with three weeks of chest tightness on exertion, relieved by rest. <span class="new">ECG today shows sinus rhythm with no acute changes. He has a family history of ischaemic heart disease and is an ex-smoker.</span><span class="caret"></span></div>
+          <div style="display:flex;gap:10px;margin-top:26px"><span style="background:#127A86;color:#fff;font-weight:700;font-size:14px;padding:10px 16px;border-radius:9px">Send via Healthlink</span><span style="background:#EEF1F4;font-weight:600;font-size:14px;padding:10px 16px;border-radius:9px">Save draft</span><span style="background:#EEF1F4;font-weight:600;font-size:14px;padding:10px 16px;border-radius:9px">Print</span></div>
+        </div>
+        <div class="panel meds"><h2>Current medication</h2>
+          <div><b>Atorvastatin 20 mg</b><span>once daily</span></div>
+          <div><b>Ramipril 5 mg</b><span>once daily</span></div>
+          <div><b>Aspirin 75 mg</b><span>once daily</span></div>
+          <h2 style="margin-top:22px">Recent</h2>
+          <span class="tag b">ECG 04/10</span><span class="tag">Lipids 21/09</span><span class="tag r">BP 152/94</span><span class="tag">HbA1c 41</span>
+          <h2 style="margin-top:22px">Blood pressure · 12 months</h2>
+          <svg viewBox="0 0 520 200" style="width:100%;height:auto;display:block">
+            <g stroke="#E3E8ED">${[20,60,100,140,180].map(y=>`<path d="M0 ${y}H520"/>`).join('')}</g>
+            <rect x="0" y="60" width="520" height="40" fill="#E6F3F4"/>
+            <polyline fill="none" stroke="#C2401E" stroke-width="3" stroke-linejoin="round" points="0,92 47,88 94,84 141,86 188,78 235,70 282,74 329,62 376,58 423,52 470,44 520,38"/>
+            <polyline fill="none" stroke="#2C4BD0" stroke-width="3" stroke-linejoin="round" points="0,150 47,148 94,146 141,149 188,142 235,138 282,140 329,132 376,130 423,126 470,121 520,118"/>
+            ${[0,47,94,141,188,235,282,329,376,423,470,520].map((x,i)=>`<circle cx="${x}" cy="${[92,88,84,86,78,70,74,62,58,52,44,38][i]}" r="4.5" fill="#C2401E"/><circle cx="${x}" cy="${[150,148,146,149,142,138,140,132,130,126,121,118][i]}" r="4.5" fill="#2C4BD0"/>`).join('')}
+          </svg>
+          <div style="display:flex;gap:16px;font-size:12.5px;color:#6A7684;margin-top:8px"><span style="color:#C2401E;font-weight:700">● Systolic</span><span style="color:#2C4BD0;font-weight:700">● Diastolic</span><span>Target band shaded</span></div>
+        </div>
+      </div></div>
+            <div class="pill glass gp" data-glass="regular" data-frost="7" data-bevel="24">
+        <span class="done">${Shell.icon('check')}</span>
+        <span class="fairprev">ECG today shows sinus rhythm with no acute changes. He has a family…</span>
+        <span class="ms">Inserted · 58 ms · 2 fillers removed</span><span class="key">⌘Z</span>
+      </div>`;
+  }
+
+  // Liquid Glass adapts to what is beneath it, not to the system appearance:
+  // dark glass over the dark editor, light glass over the light practice software.
+  document.querySelectorAll('.pill, .target').forEach((el) => { el.dataset.theme = scene === 'dev' ? 'dark' : 'light'; });
+  const glassDark = scene === 'dev';
+
+  // Live waveform inside the pill: rough on the left, settling to a line at the caret.
+  const wv = document.getElementById('wv');
+  if (wv) {
+    const s = 2, w = 190, h = 40; wv.width = w * s; wv.height = h * s;
+    const x = wv.getContext('2d'); x.scale(s, s);
+    x.lineJoin = 'round'; x.lineCap = 'round';
+    for (let k = 0; k < 3; k++) {
+      x.beginPath();
+      for (let X = 0; X <= w - 12; X += 1.5) {
+        const u = X / (w - 12), env = Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.15)), 1.1) * (1 - Math.pow(u, 6));
+        const Y = h / 2 + env * h * .42 * (Math.sin(u * 30 + k) * .55 + Math.sin(u * 77 - k * 2) * .3 + Math.sin(u * 11) * .2) * (1 - k * .3);
+        X ? x.lineTo(X, Y) : x.moveTo(X, Y);
+      }
+      x.strokeStyle = glassDark ? '#ffffff' : '#2C4BD0'; x.globalAlpha = k ? .3 : .95; x.lineWidth = k ? 1 : 2; x.stroke();
+    }
+    x.globalAlpha = 1; x.fillStyle = '#E5512B'; x.fillRect(w - 4, 8, 2.5, h - 16);
+  }
+</script>
+<script src="glass.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>Fairspoken logo</title>
+<style>
+@font-face{font-family:Host;src:url(../site/fonts/host-grotesk-latin-wght-normal.woff2);font-weight:300 800}
+@font-face{font-family:Mono;src:url(../site/fonts/atkinson-hyperlegible-mono-latin-wght-normal.woff2);font-weight:200 800}
+body{margin:0;background:#F3F1EA;color:#0E1318;font-family:Host;padding:56px 64px}
+h1{font-weight:600;font-size:34px;letter-spacing:-.02em;margin:0 0 6px}
+p{color:#3D4752;font-size:17px;margin:0 0 30px;max-width:72ch}
+.l{font:600 12px Mono;letter-spacing:.08em;color:#5E6873;text-transform:uppercase;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.c{border-radius:22px;padding:30px;display:flex;flex-direction:column;justify-content:space-between;min-height:220px;border:1px solid #C5D1EC}
+.c img{display:block}.paper{background:#FBFAF6}.night{background:#0A0D12;border-color:#1E2633}.night .l{color:#8B95A2}.blue{background:#2C4BD0;border:0}.blue .l{color:#DCE3FF}
+.big img{width:100%;height:auto;max-height:80px;object-fit:contain;object-position:left}.mid img{height:120px}
+.row{display:flex;gap:26px;align-items:end}
+.clear{display:grid;grid-template-columns:1fr;gap:16px}
+</style>
+<h1>Logo</h1><p>The mark is “the Settle”: a spoken phrase, rough at first, settling into one clean line and stopping at the caret, where your fair copy appears. Blue is the ink, the red caret is the copybook margin and the cursor.</p>
+<div class="grid">
+  <div class="c paper big"><div class="l">Primary lockup</div><img src="fairspoken-lockup.svg" alt=""></div>
+  <div class="c night big"><div class="l">Reversed</div><img src="fairspoken-lockup-reversed.svg" alt=""></div>
+  <div class="c paper big"><div class="l">Mono</div><img src="fairspoken-lockup-mono.svg" alt=""></div>
+  <div class="c paper"><div class="l">Mark · app icon · favicon</div><div class="row"><img src="fairspoken-mark.svg" style="height:84px" alt=""><img src="app-icon/app-icon-1024.png" style="height:96px" alt=""><img src="app-icon/app-icon-dark-1024.png" style="height:96px" alt=""><img src="favicon-32.png" style="height:32px;image-rendering:pixelated" alt=""><img src="favicon-16.png" style="height:16px;image-rendering:pixelated" alt=""></div></div>
+  <div class="c blue"><div class="l">Mono reversed on Copybook Blue</div><img src="fairspoken-lockup-mono-reversed.svg" style="width:80%" alt=""></div>
+  <div class="c paper"><div class="l">Clear space and minimum size</div><div class="clear"><div style="outline:1px dashed #E5512B;outline-offset:0;padding:22px;background:repeating-linear-gradient(45deg,#E5512B10 0 6px,transparent 6px 12px)"><img src="fairspoken-lockup.svg" style="height:34px;display:block;background:#F3F1EA" alt=""></div><div style="font:14px/1.5 Host;color:#3D4752">Keep clear space equal to the caret's height on every side. Lockup no smaller than 96 px wide on screen (20 mm in print); below that, use the mark alone. Mark minimum: 16 px.</div></div></div>
+</div>

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8">
+<title>Fairspoken · Server (macOS 26 Liquid Glass mockup)</title>
+<link rel="stylesheet" href="glass.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .head { position: absolute; left: 282px; top: 66px; right: 30px; display: flex; align-items: flex-end; justify-content: space-between; }
+  .head h1 { margin: 0; font: 700 30px/1 var(--ui); letter-spacing: -.025em; color: var(--fg); }
+  .head p { margin: 8px 0 0; font-size: 13.5px; color: var(--fg-3); }
+  .metrics { position: absolute; left: 282px; right: 30px; top: 138px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .metric { padding: 14px 16px; border-radius: 16px; }
+  .metric .k { font-size: 12px; color: var(--fg-3); font-weight: 500; }
+  .metric .v { font-size: 26px; font-weight: 700; letter-spacing: -.03em; margin-top: 4px; font-variant-numeric: tabular-nums; color: var(--fg); }
+  .metric .v small { font-size: 14px; color: var(--fg-3); font-weight: 600; margin-left: 2px; }
+  .metric .t { font-size: 11.5px; color: var(--fg-3); margin-top: 2px; }
+
+  .graph { position: absolute; left: 282px; right: 30px; top: 236px; height: 470px; border-radius: 26px; overflow: hidden; box-shadow: 0 0 0 .5px var(--line-2); }
+  .graph canvas { position: absolute; inset: 0; }
+  .graph .lbl { position: absolute; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); top: 16px; }
+  .node { position: absolute; transform: translate(-50%, -50%); }
+  .dev { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; }
+  .dev svg { width: 24px; height: 24px; }
+  .dev.live::marker { content: ""; }
+  .dev .ring { position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--margin); opacity: .9; box-shadow: 0 0 14px rgb(229 81 43 / .6); z-index: 4; }
+  .devlbl { position: absolute; transform: translate(0, -50%); font-size: 12px; font-weight: 600; color: var(--fg); white-space: nowrap; text-shadow: 0 1px 6px var(--win); }
+  .devlbl span { display: block; font-size: 11px; font-weight: 500; color: var(--fg-3); }
+  .q { width: 150px; height: 118px; border-radius: 26px; padding: 14px 16px; }
+  .q .k { font-size: 11.5px; font-weight: 600; color: var(--glass-label-2); }
+  .q .v { font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; }
+  .q .s { font-size: 11.5px; color: var(--glass-label-2); }
+  .wk { width: 196px; height: 74px; border-radius: 22px; padding: 12px 16px; }
+  .wk b { font-size: 13.5px; display: flex; justify-content: space-between; align-items: center; }
+  .wk b i { font-style: normal; font: 600 11px var(--mono); color: var(--glass-label-2); }
+  .wk .st { font-size: 12px; color: var(--glass-label-2); margin-top: 3px; display: flex; gap: 6px; align-items: center; }
+  .wk .bar { height: 4px; border-radius: 4px; background: rgb(127 127 127 / .2); margin-top: 8px; overflow: hidden; }
+  .wk .bar i { display: block; height: 100%; background: var(--margin); border-radius: 4px; }
+  .md { width: 232px; height: 86px; border-radius: 24px; padding: 12px 16px; display: grid; grid-template-columns: 34px 1fr; gap: 0 12px; align-items: center; }
+  .md .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: rgb(255 255 255 / .28); color: var(--accent); grid-row: span 2; }
+  [data-theme="dark"] .md .ic { background: rgb(255 255 255 / .08); }
+  .md .ic svg { width: 18px; height: 18px; }
+  .md b { font-size: 13.5px; align-self: end; }
+  .md span { font-size: 11.5px; color: var(--glass-label-2); align-self: start; }
+  .md.off { opacity: .55; }
+
+  .low { position: absolute; left: 282px; right: 30px; top: 722px; bottom: 26px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
+  .low .card { padding: 16px 20px; }
+  .spark { margin-top: 10px; }
+  .jobs { margin-top: 8px; font-size: 12.5px; }
+  .jobs div { display: grid; grid-template-columns: 62px 1fr 70px 64px; gap: 10px; padding: 6px 0; border-top: .5px solid var(--line-2); color: var(--fg-2); }
+  .jobs b { color: var(--fg); font-weight: 600; }
+  .jobs .ms { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="content">
+    <div class="head">
+      <div><h1>Server</h1><p>practice-host · Mac mini (M4, 16 GB) · v0.1.0 · up 3 d 4 h · reachable on your tailnet</p></div>
+    </div>
+    <div class="metrics">
+      <div class="card metric"><div class="k">Dictations today</div><div class="v">214</div><div class="t">↑ 12% on last Sunday</div></div>
+      <div class="card metric"><div class="k">Release → text, p50</div><div class="v">61<small>ms</small></div><div class="t">p95 94 ms</div></div>
+      <div class="card metric"><div class="k">Queue</div><div class="v">1</div><div class="t">longest wait 0.3 s</div></div>
+      <div class="card metric"><div class="k">Active streams</div><div class="v">3<small>/ 4</small></div><div class="t">from 7 devices</div></div>
+      <div class="card metric"><div class="k">Audio stored</div><div class="v">0<small>bytes</small></div><div class="t">processed in memory</div></div>
+    </div>
+
+    <div class="graph" id="graph">
+      <canvas id="flow"></canvas>
+      <span class="lbl" style="left:28px">Practice devices</span>
+      <span class="lbl" style="left:37%">Host queue</span>
+      <span class="lbl" style="left:57%">Workers</span>
+      <span class="lbl" style="left:79%">Models</span>
+    </div>
+
+    <div class="low">
+      <section class="card"><h3>Latency, last hour <span class="chip"><span class="d"></span>p50 61 ms · p95 94 ms</span></h3><svg class="spark" id="spark" viewBox="0 0 600 120" style="width:100%;height:118px"></svg></section>
+      <section class="card"><h3>Recent requests <a>All</a></h3>
+        <div class="jobs">
+          <div><span class="mono">15:42:08</span><span><b>Consult 2</b> · Windows · 6.2 s</span><span>worker 1</span><span class="ms">58 ms</span></div>
+          <div><span class="mono">15:42:03</span><span><b>Reception</b> · iPad · 3.1 s</span><span>worker 2</span><span class="ms">49 ms</span></div>
+          <div><span class="mono">15:41:55</span><span><b>Dr Walsh</b> · iPhone · 11.8 s</span><span>worker 1</span><span class="ms">72 ms</span></div>
+          <div><span class="mono">15:41:47</span><span><b>Nurse</b> · MacBook · 4.4 s</span><span>worker 3</span><span class="ms">55 ms</span></div>
+        </div>
+      </section>
+    </div>
+    <div class="edge"></div>
+  </div>
+
+  <div class="toolbar">
+    <span class="sp"></span>
+    <div class="cap glass" data-glass="regular" data-bevel="12"><span class="item"><span class="dot" style="background:#28C840;box-shadow:0 0 0 3px rgb(40 200 64 / .25)"></span>Connected · practice-host</span></div>
+    <div class="cap glass" data-glass="regular" data-bevel="12"><button class="on">My host</button><button>Demo</button></div>
+    <div class="cap glass" data-glass="regular" data-bevel="12"><button title="Reconnect" id="rf"></button><button title="Add worker" id="ad"></button></div>
+    <div class="cap glass prominent" data-glass="prominent" data-bevel="12"><span id="pair"></span>Pair a device</div>
+  </div>
+</div>
+
+<script src="shell.js"></script>
+<script>
+  Shell.mount({ active: 'server' });
+  document.getElementById('rf').innerHTML = Shell.icon('refresh');
+  document.getElementById('ad').innerHTML = Shell.icon('plus');
+  document.getElementById('pair').innerHTML = Shell.icon('plus', 'style="width:16px;height:16px"');
+  const D = Shell.dark;
+  const G = document.getElementById('graph');
+  const W = G.clientWidth, H = G.clientHeight;
+
+  const devices = [
+    ['Reception', 'iPad', 'ipad', 0], ['Consult 1', 'Windows PC', 'pc', 0], ['Consult 2', 'Windows PC', 'pc', 1], ['Consult 3', 'MacBook Air', 'laptop', 0],
+    ['Nurse', 'MacBook', 'laptop', 1], ['Dr Walsh', 'iPhone', 'phone', 1], ['Dr Byrne', 'iPhone', 'phone', 0],
+  ];
+  const dx = 64, Q = { x: W * .41, y: H * .52 };
+  const devPos = devices.map((d, i) => ({ x: dx, y: 62 + i * ((H - 104) / (devices.length - 1)) }));
+  const workers = [{ x: W * .62, y: H * .26, n: 'Worker 1', s: 'Consult 2 · 6.2 s', p: .62, busy: 1 }, { x: W * .62, y: H * .52, n: 'Worker 2', s: 'Dr Walsh · 2.4 s', p: .28, busy: 1 }, { x: W * .62, y: H * .78, n: 'Worker 3', s: 'Idle', p: 0, busy: 0 }];
+  const models = [{ x: W * .85, y: H * .3, n: 'Parakeet TDT 0.6B v3', s: 'Speech · 3 workers', ic: 'wave' }, { x: W * .85, y: H * .56, n: 'SpeakoFlow Mini', s: 'Clean-up · loaded', ic: 'sparkle' }, { x: W * .85, y: H * .82, n: 'Parakeet Ultra', s: 'Installed · not loaded', ic: 'wave', off: 1 }];
+
+  /* ---- Rich flow background: glowing request trails between nodes ---- */
+  const c = document.getElementById('flow'); const s = 2; c.width = W * s; c.height = H * s; c.style.width = W + 'px'; c.style.height = H + 'px';
+  const x = c.getContext('2d'); x.scale(s, s);
+  const bg = x.createLinearGradient(0, 0, W, H);
+  if (D) { bg.addColorStop(0, '#0B1024'); bg.addColorStop(.6, '#0E1430'); bg.addColorStop(1, '#1C1226'); } else { bg.addColorStop(0, '#EEF1FB'); bg.addColorStop(.6, '#F4F1EC'); bg.addColorStop(1, '#FBEDE6'); }
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  const blob = (cx, cy, r, col) => { const g = x.createRadialGradient(cx, cy, 0, cx, cy, r); g.addColorStop(0, col); g.addColorStop(1, 'transparent'); x.fillStyle = g; x.fillRect(0, 0, W, H); };
+  blob(Q.x, Q.y, 340, D ? 'rgba(44,75,208,.45)' : 'rgba(44,75,208,.18)');
+  blob(W * .85, H * .4, 300, D ? 'rgba(255,113,72,.28)' : 'rgba(229,81,43,.14)');
+  // ruling
+  x.strokeStyle = D ? 'rgba(147,168,255,.07)' : 'rgba(44,75,208,.08)'; x.lineWidth = 1;
+  for (let y = 16; y < H; y += 24) { x.beginPath(); x.moveTo(0, y + .5); x.lineTo(W, y + .5); x.stroke(); }
+  const bez = (a, b) => { const mx = (a.x + b.x) / 2; return [a.x, a.y, mx, a.y, mx, b.y, b.x, b.y]; };
+  const at = (p, u) => { const v = 1 - u; return [v*v*v*p[0] + 3*v*v*u*p[2] + 3*v*u*u*p[4] + u*u*u*p[6], v*v*v*p[1] + 3*v*v*u*p[3] + 3*v*u*u*p[5] + u*u*u*p[7]]; };
+  const R = Shell.rng(11);
+  function bundle(a, b, n, col, width, alpha, spread) {
+    for (let k = 0; k < n; k++) {
+      const o = (k - (n - 1) / 2) * spread;
+      const p = bez({ x: a.x, y: a.y + o * .3 }, { x: b.x, y: b.y + o });
+      x.strokeStyle = col; x.globalAlpha = alpha * (.4 + R() * .6); x.lineWidth = width * (.5 + R());
+      x.beginPath(); x.moveTo(p[0], p[1]); x.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]); x.stroke();
+    }
+    x.globalAlpha = 1;
+  }
+  x.globalCompositeOperation = D ? 'lighter' : 'source-over';
+  const BLUE = D ? '#93A8FF' : '#2C4BD0', RED = D ? '#FF7148' : '#E5512B', INK = D ? '#FFFFFF' : '#0E1318';
+  const out = (p) => ({ x: p.x + 175, y: p.y });
+  devPos.forEach((p, i) => { x.strokeStyle = devices[i][3] ? RED : BLUE; x.globalAlpha = .35; x.lineWidth = 1; x.setLineDash([2, 5]); x.beginPath(); x.moveTo(p.x + 34, p.y + 22); x.lineTo(p.x + 175, p.y + 22); x.stroke(); x.setLineDash([]); x.globalAlpha = 1; bundle({ x: p.x + 175, y: p.y + 22 }, Q, devices[i][3] ? 7 : 3, devices[i][3] ? RED : BLUE, 1.1, devices[i][3] ? .55 : .3, 2.2); });
+  workers.forEach((w) => bundle(Q, w, 9, BLUE, 1.2, .4, 2));
+  workers.forEach((w, i) => { bundle(w, models[0], 6, w.busy ? RED : BLUE, 1, w.busy ? .45 : .2, 2); bundle(w, models[1], 4, BLUE, 1, .25, 2); });
+  // packets with comet tails on the active paths
+  function comet(a, b, u, col) {
+    const p = bez(a, b);
+    for (let k = 0; k < 26; k++) { const uu = Math.max(0, u - k * .012); const [px, py] = at(p, uu); x.fillStyle = col; x.globalAlpha = (1 - k / 26) * .8; x.beginPath(); x.arc(px, py, 3.4 * (1 - k / 30), 0, 7); x.fill(); }
+    const [hx, hy] = at(p, u); x.globalAlpha = 1; x.shadowColor = col; x.shadowBlur = 16; x.fillStyle = D ? '#fff' : col; x.beginPath(); x.arc(hx, hy, 3.6, 0, 7); x.fill(); x.shadowBlur = 0;
+  }
+  const o2 = (p) => ({ x: p.x + 175, y: p.y + 22 });
+  comet(o2(devPos[2]), Q, .72, RED); comet(o2(devPos[4]), Q, .45, RED); comet(o2(devPos[5]), Q, .86, RED);
+  comet(Q, workers[0], .55, RED); comet(Q, workers[1], .3, RED); comet(workers[0], models[0], .5, RED); comet(workers[1], models[1], .7, BLUE);
+  comet({ x: Q.x, y: Q.y }, o2(devPos[0]), .4, BLUE);
+  x.globalCompositeOperation = 'source-over';
+
+  /* ---- Glass nodes ---- */
+  const add = (html, cls, p, glass = 'clear', bevel = 16) => { const el = document.createElement('div'); el.className = `node glass ${cls}`; el.dataset.glass = glass; el.dataset.bevel = bevel; el.style.left = p.x + 'px'; el.style.top = p.y + 'px'; el.innerHTML = html; G.append(el); return el; };
+  devices.forEach((d, i) => {
+    add(Shell.icon(d[2]) + (d[3] ? '<span class="ring"></span>' : ''), 'dev', devPos[i], 'clear', 18);
+    const l = document.createElement('div'); l.className = 'devlbl'; l.style.left = (devPos[i].x + 40) + 'px'; l.style.top = devPos[i].y + 'px'; l.innerHTML = `${d[0]}<span>${d[1]}${d[3] ? ' · speaking' : ''}</span>`; G.append(l);
+  });
+  add('<div class="k">Queue</div><div class="v">1</div><div class="s">3 live · 1 waiting</div>', 'q', Q, 'regular', 22);
+  workers.forEach((w) => add(`<b>${w.n}<i>${w.busy ? 'ANE' : '—'}</i></b><div class="st">${w.busy ? '<span class="dot" style="background:var(--margin)"></span>' : ''}${w.s}</div><div class="bar"><i style="width:${w.p * 100}%"></i></div>`, 'wk', w, 'regular', 18));
+  models.forEach((m) => add(`<span class="ic">${Shell.icon(m.ic)}</span><b>${m.n}</b><span>${m.s}</span>`, 'md' + (m.off ? ' off' : ''), m, 'regular', 20));
+
+  /* ---- Latency sparkline ---- */
+  const sp = document.getElementById('spark'); const r2 = Shell.rng(5);
+  const p50 = Array.from({ length: 60 }, (_, i) => 52 + 10 * Math.sin(i / 6) + r2() * 8), p95 = p50.map((v) => v + 26 + r2() * 14);
+  const line = (arr, col, w) => `<polyline fill="none" stroke="${col}" stroke-width="${w}" stroke-linejoin="round" points="${arr.map((v, i) => `${i * 10.1},${118 - v}`).join(' ')}"/>`;
+  sp.innerHTML = `<g stroke="var(--line-2)">${[18, 58, 98].map((y) => `<path d="M0 ${y}H600"/>`).join('')}</g>` + line(p95, 'color-mix(in srgb, var(--accent) 40%, transparent)', 2) + line(p50, 'var(--accent)', 2.4) + `<text x="2" y="14" font-size="11" fill="var(--fg-3)" font-family="var(--mono)">100 ms</text>`;
+</script>
+<script src="glass.js"></script>
+</body>
+</html>

@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en-IE">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>Home</title>
+<!-- Instrument Sans (UI + numbers) and Fraunces (greeting and card titles only), both SIL OFL 1.1.
+     Pinned CDN for the prototype; the app would self-host via @fontsource-variable. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/instrument-sans@5.3.0/index.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/fraunces@5.3.0/index.css" />
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js" } }</script>
+<style>
+/* ───────────────────────────── Direction C · Murmur ─────────────────────────────
+   Warm, personal, quietly luxurious. Porcelain and terracotta by day, espresso
+   and apricot by night. The voice is a soft particle bloom that breathes while
+   idle and blooms outward as you speak. Editorial voice, sentence-first stats. */
+:root {
+  --font-ui: "Instrument Sans Variable", "Instrument Sans", -apple-system, "SF Pro Text", system-ui, sans-serif;
+  --font-display: "Fraunces Variable", "Fraunces", Georgia, serif;
+
+  --bg-a: #f8f4ef;
+  --bg-b: #efe6dc;
+  --ink-1: #241c17;     /* 16.2:1 */
+  --ink-2: #4b4038;     /* 9.6:1 */
+  --ink-3: #6e6158;     /* 5.9:1 on white, ≥ 5.1:1 on glass */
+  --ink-4: #a39589;
+  --accent: #ad4526;    /* terracotta, 5.7:1 with white */
+  --accent-strong: #8f3519;
+  --accent-soft: rgba(173, 69, 38, 0.09);
+  --on-accent: #fffaf6;
+  --good: #2c7a4b;
+  --glass: rgba(255, 252, 248, 0.62);
+  --glass-strong: rgba(255, 252, 248, 0.86);
+  --glass-edge: rgba(255, 255, 255, 0.95);
+  --hairline: rgba(36, 28, 23, 0.08);
+  --hairline-strong: rgba(36, 28, 23, 0.14);
+  --shadow: 0 1px 2px rgba(60, 35, 20, 0.05), 0 14px 40px -18px rgba(90, 45, 20, 0.28);
+  --bar: #e3d6ca;
+  --halo: radial-gradient(closest-side, rgba(240, 160, 122, 0.30), rgba(240, 160, 122, 0) 70%);
+  --ease: cubic-bezier(0.25, 1, 0.3, 1);
+}
+:root[data-mode="dark"] {
+  --bg-a: #110d0b;
+  --bg-b: #1c1512;
+  --ink-1: #f6eee8;
+  --ink-2: #d6c8bd;
+  --ink-3: #ab9b8f;     /* 6.6:1 on dark glass */
+  --ink-4: #6e6158;
+  --accent: #f2a27c;    /* apricot, 8.6:1 on #1d1613 */
+  --accent-strong: #f7b996;
+  --accent-soft: rgba(242, 162, 124, 0.12);
+  --on-accent: #2a130a;
+  --good: #7fd8a2;
+  --glass: rgba(32, 25, 22, 0.56);
+  --glass-strong: rgba(36, 28, 24, 0.86);
+  --glass-edge: rgba(255, 240, 230, 0.07);
+  --hairline: rgba(246, 238, 232, 0.07);
+  --hairline-strong: rgba(246, 238, 232, 0.13);
+  --shadow: 0 18px 50px -22px rgba(0, 0, 0, 0.85);
+  --bar: #3a2e28;
+  --halo: radial-gradient(closest-side, rgba(242, 130, 100, 0.20), rgba(242, 130, 100, 0) 70%);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font-ui); font-size: 13.5px; line-height: 1.45; color: var(--ink-1);
+  background: radial-gradient(90% 80% at 78% 18%, var(--bg-b), var(--bg-a) 70%);
+  -webkit-font-smoothing: antialiased; overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.num { font-variant-numeric: tabular-nums; }
+.serif { font-family: var(--font-display); font-optical-sizing: auto; }
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4);
+  border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow);
+}
+@media (prefers-reduced-transparency: reduce) { .glass { background: var(--glass-strong); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+
+.traffic { position: absolute; top: 18px; left: 20px; display: flex; gap: 8px; z-index: 5; }
+.traffic i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,.18); }
+.traffic i:nth-child(2) { background: #febc2e; } .traffic i:nth-child(3) { background: #28c840; }
+
+.window { position: relative; height: 100%; display: grid; grid-template-rows: 56px minmax(0, 1fr); }
+
+/* ── Title bar with centred segmented navigation ── */
+.top { position: relative; z-index: 3; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 16px 0 92px; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14.5px; letter-spacing: -0.01em; }
+.brand svg { width: 24px; height: 24px; }
+.seg { display: flex; gap: 2px; padding: 3px; border-radius: 999px; }
+.seg button { height: 30px; padding: 0 14px; border-radius: 999px; color: var(--ink-2); font-weight: 500; display: inline-flex; align-items: center; gap: 7px; transition: background 160ms var(--ease), color 160ms var(--ease); }
+.seg button svg { width: 15px; height: 15px; color: var(--ink-3); }
+.seg button:hover { color: var(--ink-1); }
+.seg button[aria-current="page"] { background: var(--glass-strong); color: var(--ink-1); box-shadow: 0 1px 2px rgba(60,35,20,.10), inset 0 0 0 1px var(--hairline); }
+.seg button[aria-current="page"] svg { color: var(--accent); }
+.top-right { justify-self: end; display: flex; align-items: center; gap: 4px; }
+.icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; color: var(--ink-3); }
+.icon-btn:hover { color: var(--ink-1); background: var(--accent-soft); }
+.icon-btn svg { width: 17px; height: 17px; }
+.icon-btn .sun, [data-mode="dark"] .icon-btn .moon { display: none; }
+[data-mode="dark"] .icon-btn .sun { display: block; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--hairline-strong); margin-left: 4px; }
+
+/* ── Content ── */
+.content { position: relative; min-height: 0; overflow: auto; padding: 0 28px 24px 32px; scrollbar-width: none; }
+.hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 300px; }
+.hero-copy { position: relative; z-index: 2; padding: 30px 0 0 4px; max-width: 520px; }
+.greet { font-family: var(--font-display); font-size: 44px; line-height: 1.04; font-weight: 400; letter-spacing: -0.02em; font-variation-settings: "SOFT" 60, "WONK" 0; }
+.greet em { font-style: italic; color: var(--accent); font-variation-settings: "SOFT" 100, "WONK" 1; }
+.lede { font-size: 16px; line-height: 1.55; color: var(--ink-2); margin-top: 14px; max-width: 44ch; }
+.lede b { color: var(--ink-1); font-weight: 600; }
+.lede .up { color: var(--good); font-weight: 600; white-space: nowrap; }
+.cta { display: flex; align-items: center; gap: 14px; margin-top: 22px; }
+.btn { display: inline-flex; align-items: center; gap: 9px; height: 42px; padding: 0 20px 0 16px; border-radius: 999px; font-weight: 600; font-size: 14px; background: var(--accent); color: var(--on-accent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 10px 24px -12px var(--accent); transition: background 160ms var(--ease), transform 160ms var(--ease); }
+.btn:hover { background: var(--accent-strong); }
+.btn:active { transform: scale(0.98); }
+.btn svg { width: 18px; height: 18px; }
+.hint { color: var(--ink-3); font-size: 13px; }
+kbd { font: 600 11.5px var(--font-ui); display: inline-grid; place-items: center; min-width: 24px; height: 21px; padding: 0 6px; border-radius: 6px; background: var(--glass-strong); border: 1px solid var(--hairline-strong); box-shadow: 0 1px 0 var(--hairline-strong); color: var(--ink-1); vertical-align: 1px; }
+.ready { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; font-size: 12.5px; color: var(--ink-3); }
+.ready i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 18%, transparent); }
+
+/* The orb lives in its own small canvas (cheaper than full-window) and bleeds under the cards. */
+.orb-wrap { position: relative; z-index: 1; }
+.orb-wrap::before { content: ""; position: absolute; left: 50%; top: 50%; width: 460px; height: 460px; transform: translate(-50%, -48%) scale(calc(1 + var(--level, 0) * 0.12)); background: var(--halo); pointer-events: none; }
+/* The canvas never extends under a blurred card: it stops at the hero's edge and fades. */
+#orb { position: absolute; left: 50%; top: -40px; width: 460px; height: calc(100% + 40px); transform: translateX(-50%); display: block;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 80%, transparent); mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 80%, transparent); }
+.orb-caption.glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--glass-strong); }
+.orb-caption { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); white-space: nowrap; z-index: 2; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; border-radius: 999px; font-size: 12px; color: var(--ink-2); }
+.orb-caption b { font-weight: 600; color: var(--ink-1); }
+
+/* Recording state */
+.live { display: none; }
+[data-state="recording"] .idle { display: none; }
+[data-state="recording"] .live { display: block; }
+.live-label { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.live-label i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.live-text { font-family: var(--font-display); font-size: 26px; line-height: 1.32; letter-spacing: -0.01em; margin-top: 12px; height: 104px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(transparent, #000 40%); mask-image: linear-gradient(transparent, #000 40%); }
+.live-text .tail { color: var(--ink-3); }
+
+/* Cards */
+.cards { position: relative; z-index: 2; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 2px; }
+.card { border-radius: 20px; padding: 15px 18px 16px; min-width: 0; display: flex; flex-direction: column; min-height: 254px; }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.card-head h2 { font-family: var(--font-display); font-weight: 500; font-size: 18px; letter-spacing: -0.01em; }
+.card-head .meta { font-size: 12px; color: var(--ink-3); }
+.link { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.note { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 12px; padding: 8px 8px; margin: 0 -8px; border-radius: 10px; border-top: 1px solid var(--hairline); }
+.note:first-of-type { border-top-color: transparent; }
+.note:hover { background: var(--accent-soft); }
+.note p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note time { font-size: 12px; color: var(--ink-3); text-align: right; }
+.note small { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); }
+
+.figure { font-size: 34px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; }
+.figure small { font-size: 15px; font-weight: 500; color: var(--ink-3); margin-left: 4px; letter-spacing: 0; }
+.sub { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
+.sub b { color: var(--good); font-weight: 600; }
+.chart { margin-top: auto; display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; align-items: end; height: 96px; border-bottom: 1px solid var(--hairline-strong); }
+.col { position: relative; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.bar { width: min(20px, 100%); border-radius: 4px 4px 0 0; background: var(--bar); }
+.col:hover .bar { filter: brightness(0.94); }
+[data-mode="dark"] .col:hover .bar { filter: brightness(1.25); }
+.col.today .bar { background: var(--accent); }
+.col .cap { position: absolute; font-size: 11px; font-weight: 600; color: var(--ink-2); }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; text-align: center; margin-top: 6px; font-size: 11px; color: var(--ink-3); }
+.days .today { color: var(--ink-1); font-weight: 700; }
+.streak { display: flex; gap: 3px; margin-top: 12px; }
+.streak i { flex: 1; height: 4px; border-radius: 2px; background: var(--accent); opacity: .85; }
+.streak i.off { background: var(--bar); opacity: 1; }
+
+.engine { display: grid; gap: 0; }
+.eng { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--hairline); }
+.eng:first-child { border-top: 0; padding-top: 2px; }
+.eng .k { font-size: 12px; color: var(--ink-3); }
+.eng .v { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eng .s { grid-row: 1 / 3; grid-column: 2; font-size: 12px; font-weight: 600; color: var(--good); display: inline-flex; align-items: center; gap: 5px; }
+.eng .s::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.eng .s.n { color: var(--ink-3); }
+.eng .s.n::before { background: var(--ink-4); }
+
+.tip { position: fixed; z-index: 50; pointer-events: none; padding: 6px 9px; border-radius: 9px; font-size: 12px; background: var(--glass-strong); border: 1px solid var(--hairline-strong); box-shadow: var(--shadow); color: var(--ink-1); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.hud { position: fixed; right: 10px; bottom: 10px; z-index: 60; font: 11px/1.4 ui-monospace, monospace; padding: 6px 8px; border-radius: 6px; background: rgba(0,0,0,.75); color: #ffe6da; display: none; }
+.hud.on { display: block; }
+</style>
+</head>
+<body>
+<div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="window">
+  <header class="top">
+    <div class="brand">
+      <!-- Mark: "bloom" — sound radiating as dots, growing toward the listener. -->
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <defs><linearGradient id="bl" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#c2577a"/><stop offset=".55" stop-color="#d9633a"/><stop offset="1" stop-color="#f2a27c"/></linearGradient></defs>
+        <g fill="url(#bl)"><circle cx="16" cy="16" r="2.4"/><circle cx="17.03" cy="10.90" r="1.20"/><circle cx="20.63" cy="13.63" r="1.29"/><circle cx="20.74" cy="18.14" r="1.29"/><circle cx="17.28" cy="21.04" r="1.21"/><circle cx="12.86" cy="20.14" r="1.10"/><circle cx="10.80" cy="16.13" r="1.05"/><circle cx="12.66" cy="12.01" r="1.09"/><circle cx="16.00" cy="6.60" r="1.15"/><circle cx="20.70" cy="7.86" r="1.27"/><circle cx="24.14" cy="11.30" r="1.37"/><circle cx="25.40" cy="16.00" r="1.40"/><circle cx="24.14" cy="20.70" r="1.37"/><circle cx="20.70" cy="24.14" r="1.27"/><circle cx="16.00" cy="25.40" r="1.15"/><circle cx="11.30" cy="24.14" r="1.03"/><circle cx="7.86" cy="20.70" r="0.93"/><circle cx="6.60" cy="16.00" r="0.90"/><circle cx="7.86" cy="11.30" r="0.93"/><circle cx="11.30" cy="7.86" r="1.02"/><circle cx="18.66" cy="2.87" r="0.91"/><circle cx="23.23" cy="4.72" r="1.01"/><circle cx="26.81" cy="8.09" r="1.09"/><circle cx="28.94" cy="12.53" r="1.14"/><circle cx="29.32" cy="17.44" r="1.15"/><circle cx="27.90" cy="22.15" r="1.12"/><circle cx="24.88" cy="26.04" r="1.05"/><circle cx="20.65" cy="28.57" r="0.95"/><circle cx="15.80" cy="29.40" r="0.85"/><circle cx="10.97" cy="28.42" r="0.74"/><circle cx="6.82" cy="25.76" r="0.64"/><circle cx="3.92" cy="21.79" r="0.58"/><circle cx="2.64" cy="17.03" r="0.55"/><circle cx="3.17" cy="12.14" r="0.56"/><circle cx="5.43" cy="7.76" r="0.61"/><circle cx="9.12" cy="4.50" r="0.70"/><circle cx="13.74" cy="2.79" r="0.80"/></g>
+      </svg>
+      <span data-brand>MultiVoice</span>
+    </div>
+    <nav class="seg glass" aria-label="Primary">
+      <button type="button" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4.8l8 6.4V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Z" fill="currentColor" fill-opacity=".14"/></svg>Home</button>
+      <button type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3.6" width="14" height="16.8" rx="3" fill="currentColor" fill-opacity=".14"/><path d="M8.6 9h6.8M8.6 12.6h4.6"/></svg>Notes</button>
+      <button type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4" fill="currentColor" fill-opacity=".14"/><path d="M7.6 12h2l1.4-3 2 6 1.4-3h2"/></svg>Activity</button>
+      <button type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.8 8 4.4-8 4.4-8-4.4 8-4.4Z" fill="currentColor" fill-opacity=".14"/><path d="m4 12.2 8 4.4 8-4.4M4 16.2l8 4.4 8-4.4"/></svg>Models</button>
+    </nav>
+    <div class="top-right">
+      <button class="icon-btn" id="modeBtn" type="button" aria-label="Toggle appearance"><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M5.5 18.5l1.4-1.4M17.1 6.9l1.4-1.4"/></svg></button>
+      <button class="icon-btn" type="button" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l1.9-1.5-1.9-3.3-2.3.9a7.6 7.6 0 0 0-2.6-1.5L14.1 2.6h-4.2l-.4 2.5a7.6 7.6 0 0 0-2.6 1.5l-2.3-.9-1.9 3.3 1.9 1.5a7.6 7.6 0 0 0 0 3l-1.9 1.5 1.9 3.3 2.3-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4.2l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.3.9 1.9-3.3-1.9-1.5Z"/></svg></button>
+      <button class="avatar" type="button" aria-label="Profile, on this Mac">You</button>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="hero" id="hero" data-state="idle">
+      <div class="hero-copy">
+        <div class="idle">
+          <h1 class="greet" id="greeting">Good afternoon.</h1>
+          <p class="lede">You've given yourself back <b>14 hours 8 minutes</b> by speaking instead of typing. This week: <b>6,110 words</b>, <span class="up">up 18%</span>.</p>
+          <div class="cta">
+            <button class="btn" id="startBtn" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg>Start dictation</button>
+            <span class="hint">or hold <kbd>fn</kbd> anywhere</span>
+          </div>
+        </div>
+        <div class="live" aria-live="polite">
+          <div class="live-label"><i></i>Listening · <span class="num" id="clock">0:00</span></div>
+          <div class="live-text"><p id="liveText"></p></div>
+          <div class="cta">
+            <button class="btn" id="stopBtn" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2.5"/></svg>Stop and insert</button>
+            <span class="hint"><kbd>esc</kbd> to cancel</span>
+          </div>
+        </div>
+      </div>
+      <div class="orb-wrap" id="orbWrap">
+        <canvas id="orb" aria-hidden="true"></canvas>
+        <div class="orb-caption glass"><span class="ready" style="margin:0"><i></i></span><span id="caption"><b>Parakeet v3</b> ready on this Mac</span></div>
+      </div>
+    </section>
+
+    <section class="cards">
+      <article class="card glass" aria-labelledby="recentTitle">
+        <div class="card-head"><h2 id="recentTitle">Lately</h2><button class="link" type="button">All notes</button></div>
+        <div class="note"><p>Draft to Priya: happy to move our Thursday call to the afternoon if that works better for you.</p><time class="num">14:32</time><small>Mail · 38 words</small></div>
+        <div class="note"><p>Chapter three opens on the ferry, fog lifting, and she still hasn't opened the letter.</p><time class="num">13:05</time><small>Pages · 212 words</small></div>
+        <div class="note"><p>Shopping: oat milk, lemons, the good olive oil, birthday card for Dad.</p><time class="num">11:48</time><small>Notes · 16 words</small></div>
+        <div class="note"><p>Quick reply: yes, I'll bring the slides, see you at ten.</p><time class="num">09:20</time><small>Messages · 12 words</small></div>
+      </article>
+
+      <article class="card glass" aria-labelledby="weekTitle">
+        <div class="card-head"><h2 id="weekTitle">Your week</h2><span class="meta">words a day</span></div>
+        <div class="figure">6,110</div>
+        <div class="sub"><b>↑ 18%</b> on last week · 9-day streak</div>
+        <div class="streak" role="img" aria-label="9-day streak, best 23"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i></div>
+        <div class="chart" id="weekChart" role="img" aria-label="Words per day: Monday 820, Tuesday 1,460, Wednesday 640, Thursday 1,980, Friday 1,210, Saturday 0, Sunday 0 so far"></div>
+        <div class="days" id="weekDays" aria-hidden="true"></div>
+      </article>
+
+      <article class="card glass" aria-labelledby="engTitle">
+        <div class="card-head"><h2 id="engTitle">Engine</h2><button class="link" type="button">Models</button></div>
+        <div class="engine">
+          <div class="eng"><span class="k">Speech</span><span class="s">Loaded</span><span class="v">Parakeet TDT 0.6B v3</span></div>
+          <div class="eng"><span class="k">Polish</span><span class="s">On</span><span class="v">SpeakoFlow Mini, on device</span></div>
+          <div class="eng"><span class="k">Last dictation</span><span class="s n">typical</span><span class="v num">0.6 s to text</span></div>
+          <div class="eng"><span class="k">Where it runs</span><span class="s n">offline ready</span><span class="v">This Mac</span></div>
+        </div>
+      </article>
+    </section>
+  </main>
+</div>
+<div class="hud" id="hud"></div>
+
+<script type="module">
+/* ─────────────── Brand placeholder: the ONE place the product name lives ─────────────── */
+// Placeholder while the name is under review (candidates: Fairspoken, Glinn, the Voicewave family).
+// Try ?brand=Glinn to preview a candidate.
+const BRAND_NAME = new URLSearchParams(location.search).get("brand") || "MultiVoice";
+for (const node of document.querySelectorAll("[data-brand]")) node.textContent = BRAND_NAME;
+document.title = `${BRAND_NAME} — Home`;
+
+const params = new URLSearchParams(location.search);
+const capture = params.has("capture");
+const root = document.documentElement;
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+let modePref = params.get("mode") || "system";
+let orb = null;
+function applyMode() {
+  root.dataset.mode = modePref === "system" ? (systemDark.matches ? "dark" : "light") : modePref;
+  orb?.setTheme(root.dataset.mode);
+  window.wake?.();
+}
+applyMode();
+systemDark.addEventListener("change", applyMode);
+document.getElementById("modeBtn").addEventListener("click", () => { modePref = root.dataset.mode === "dark" ? "light" : "dark"; applyMode(); });
+
+{
+  const now = capture ? new Date("2026-10-04T14:40:00") : new Date();
+  const h = now.getHours();
+  document.getElementById("greeting").innerHTML = h < 12 ? "Good <em>morning</em>." : h < 18 ? "Good <em>afternoon</em>." : "Good <em>evening</em>.";
+}
+
+/* Weekly chart: one series, today in the accent, the peak labelled, every bar has a tooltip. */
+{
+  const week = [["Mon", 820], ["Tue", 1460], ["Wed", 640], ["Thu", 1980], ["Fri", 1210], ["Sat", 0], ["Sun", 0]];
+  const todayIdx = 6, peak = 3, max = 1980;
+  const chart = document.getElementById("weekChart"), days = document.getElementById("weekDays");
+  const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; document.body.append(tip);
+  week.forEach(([d, w], i) => {
+    const col = document.createElement("div"); col.className = "col" + (i === todayIdx ? " today" : "");
+    const h = w ? Math.max(4, (w / max) * 100) : 0;
+    const bar = document.createElement("div"); bar.className = "bar"; bar.style.height = w ? `${h}%` : (i === todayIdx ? "2px" : "0");
+    col.append(bar);
+    if (i === peak) { const c = document.createElement("span"); c.className = "cap num"; c.style.bottom = `calc(${h}% + 4px)`; c.textContent = "1,980"; col.append(c); }
+    col.addEventListener("pointerenter", () => { tip.textContent = `${d} · ${w.toLocaleString("en-IE")} words${i === todayIdx ? " so far" : ""}`; tip.hidden = false; });
+    col.addEventListener("pointermove", (e) => { tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 32}px`; });
+    col.addEventListener("pointerleave", () => { tip.hidden = true; });
+    chart.append(col);
+    const s = document.createElement("span"); s.textContent = d[0]; if (i === todayIdx) s.className = "today"; days.append(s);
+  });
+}
+
+/* ═════════════ Simulated mic level (stands in for the `audio-level` event) ═════════════ */
+const METER_GATE_RMS = 0.004, METER_FULL_RMS = 0.026;
+const meterLevelFromRms = (rms) => Math.sqrt(Math.min(1, Math.max(0, (rms - METER_GATE_RMS) / (METER_FULL_RMS - METER_GATE_RMS))));
+function createVoiceSim() {
+  let speaking = false, until = 0;
+  return (s) => {
+    if (s > until) { speaking = !speaking; until = s + (speaking ? 1.2 + Math.random() * 2.4 : 0.25 + Math.random() * 0.8); }
+    if (!speaking) return 0.002 + Math.random() * 0.002;
+    const syl = Math.max(0, Math.sin(s * Math.PI * 2 * 4.2 + Math.sin(s * 1.3) * 2.2));
+    return 0.006 + 0.024 * Math.pow(syl, 0.7) * (0.75 + Math.random() * 0.25);
+  };
+}
+
+/* ═════════════ Ambient: particle bloom (three.js Points, one draw call) ═════════════
+   2,400 points on a Fibonacci sphere, displaced by 3D noise in the vertex shader.
+   Idle: breathes (inhale 4 s / exhale 6 s). Voice: noise amplitude, radius and
+   point size follow the level, and a ring "bloom" travels outward on syllables. */
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+async function createOrb(canvas) {
+  const THREE = await import("three");
+  const COUNT = 3600, MAX_DPR = 2;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true, powerPreference: "low-power", depth: false, stencil: false, premultipliedAlpha: true });
+  renderer.setClearColor(0x000000, 0);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
+  camera.position.set(0, 0, 5.6);
+  const pos = new Float32Array(COUNT * 3), seed = new Float32Array(COUNT);
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < COUNT; i++) {
+    const y = 1 - (i / (COUNT - 1)) * 2, r = Math.sqrt(1 - y * y), th = golden * i;
+    pos[i * 3] = Math.cos(th) * r; pos[i * 3 + 1] = y; pos[i * 3 + 2] = Math.sin(th) * r; seed[i] = Math.random();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
+  const uniforms = {
+    uTime: { value: 0 }, uLevel: { value: 0 }, uBreath: { value: 0 }, uPx: { value: 1 },
+    uColA: { value: new THREE.Color() }, uColB: { value: new THREE.Color() }, uColC: { value: new THREE.Color() }, uAlpha: { value: 1 },
+  };
+  const mat = new THREE.ShaderMaterial({
+    uniforms, transparent: true, depthTest: false, depthWrite: false,
+    vertexShader: /* glsl */`
+      uniform float uTime, uLevel, uBreath, uPx;
+      attribute float aSeed;
+      varying float vMix; varying float vFade; varying float vSeed;
+      // 3D value noise (cheap; 2.4k vertices)
+      float h(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+      float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(mix(h(i), h(i+vec3(1,0,0)), f.x), mix(h(i+vec3(0,1,0)), h(i+vec3(1,1,0)), f.x), f.y),
+                   mix(mix(h(i+vec3(0,0,1)), h(i+vec3(1,0,1)), f.x), mix(h(i+vec3(0,1,1)), h(i+vec3(1,1,1)), f.x), f.y), f.z); }
+      void main() {
+        vec3 d = normalize(position);
+        float t = uTime;
+        float n = n3(d * 2.2 + vec3(0.0, t * 0.12, t * 0.07)) - 0.5;
+        float n2 = n3(d * 5.0 - vec3(t * 0.2)) - 0.5;
+        float r = 1.0 + uBreath * 0.05 + n * (0.34 + uLevel * 0.5) + n2 * 0.07 * (1.0 + uLevel * 2.0);
+        // Syllable bloom: a latitude ring that travels outward with the voice.
+        float ring = exp(-pow((d.y - sin(t * 2.6)) * 5.0, 2.0)) * uLevel * 0.18;
+        r += ring + uLevel * 0.07;
+        // Loose particles drift a little off the shell, more when speaking.
+        r += aSeed * aSeed * (0.06 + uLevel * 0.35) * step(0.85, aSeed);
+        vec3 p = d * r;
+        float a = t * 0.08;
+        p.xz = mat2(cos(a), -sin(a), sin(a), cos(a)) * p.xz;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float depth = clamp((p.z + 1.3) / 2.6, 0.0, 1.0);        // 0 back .. 1 front
+        gl_PointSize = uPx * (1.5 + 2.6 * depth + aSeed * 1.2) * (1.0 + uLevel * 0.5);
+        vMix = clamp(0.5 + n * 1.6 + d.y * 0.35, 0.0, 1.0);
+        vFade = 0.25 + 0.75 * depth;
+        vSeed = aSeed;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uColA, uColB, uColC; uniform float uAlpha;
+      varying float vMix; varying float vFade; varying float vSeed;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        float a = smoothstep(0.5, 0.15, d);
+        vec3 c = mix(uColA, uColB, smoothstep(0.0, 0.6, vMix));
+        c = mix(c, uColC, smoothstep(0.55, 1.0, vMix));
+        gl_FragColor = vec4(c, a * vFade * uAlpha * (0.7 + 0.3 * vSeed));
+      }`,
+  });
+  scene.add(new THREE.Points(geo, mat));
+  const THEMES = {
+    light: { a: 0x7a5bb8, b: 0xc0507a, c: 0xd9643a, alpha: 0.85, blend: THREE.NormalBlending },
+    dark: { a: 0x9a7cf0, b: 0xf07a8e, c: 0xffb07a, alpha: 0.9, blend: THREE.AdditiveBlending },
+  };
+  function setTheme(mode) {
+    const t = THEMES[mode] || THEMES.light;
+    uniforms.uColA.value.setHex(t.a); uniforms.uColB.value.setHex(t.b); uniforms.uColC.value.setHex(t.c);
+    uniforms.uAlpha.value = t.alpha; mat.blending = t.blend; mat.needsUpdate = true;
+  }
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, MAX_DPR);
+    renderer.setPixelRatio(dpr); renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+    camera.aspect = canvas.clientWidth / canvas.clientHeight; camera.updateProjectionMatrix();
+    uniforms.uPx.value = dpr;
+  }
+  return {
+    setTheme, resize,
+    render(time, level, breath) { uniforms.uTime.value = time; uniforms.uLevel.value = level; uniforms.uBreath.value = breath; renderer.render(scene, camera); },
+  };
+}
+
+/* ═════════════ Frame scheduler: the performance budget ═════════════
+   hidden → none · blurred → stop (30 fps if dictating) · idle focused → 24 fps,
+   resting after 45 s without input · dictating → 60 fps · off-screen (scrolled) → stop
+   · reduced motion → one still frame. */
+const canvas = document.getElementById("orb");
+const hero = document.getElementById("hero");
+const orbWrap = document.getElementById("orbWrap");
+const hud = document.getElementById("hud");
+const sim = createVoiceSim();
+let recording = false, focused = capture || document.hasFocus(), onscreen = true, lastInput = performance.now();
+let raf = 0, lastFrame = 0, level = 0, time = capture ? 12 : 0, frames = 0, fpsT = 0, fps = 0;
+try { orb = await createOrb(canvas); orb.setTheme(root.dataset.mode); orb.resize(); } catch (e) { console.warn("ambient disabled", e); }
+
+// Idle ambient runs slowly; ?idleFps= lets you compare. After REST_AFTER_MS without input it stops.
+const IDLE_FPS = Number(params.get("idleFps")) || 15, REST_AFTER_MS = Number(params.get("restMs")) || 10000;
+function targetFps() {
+  if (document.hidden || !onscreen) return 0;
+  if (recording) return focused ? 60 : 30;
+  if (!focused || reduceMotion.matches) return 0;
+  return performance.now() - lastInput > REST_AFTER_MS ? 0 : IDLE_FPS;
+}
+// Below ~50 fps, sleep between frames on a timer instead of waking on every vsync.
+function schedule(cap) {
+  if (cap >= 50) { raf = requestAnimationFrame(frame); return; }
+  raf = -1;
+  setTimeout(() => { raf = requestAnimationFrame(frame); }, Math.max(0, 1000 / cap - 6));
+}
+function frame(now) {
+  raf = 0;
+  const cap = targetFps();
+  if (!cap) { draw(); return; }
+  schedule(cap);
+  const dt = lastFrame ? now - lastFrame : 1000 / cap;
+  lastFrame = now;
+  time += Math.min(dt, 100) / 1000;
+  const target = recording ? (capture ? 0.75 : meterLevelFromRms(sim(time))) : 0;
+  level += (target - level) * (target > level ? 0.45 : 0.12);
+  draw();
+  frames++; if (now - fpsT > 1000) { fps = frames; frames = 0; fpsT = now; }
+  if (hud.classList.contains("on")) hud.textContent = `${fps} fps · cap ${cap} · ${recording ? "dictating" : "idle"} · ${level.toFixed(2)}`;
+}
+// Breath: 4 s in, 6 s out (asymmetric, like a resting breath).
+function breath(t) { const c = t % 10; return c < 4 ? Math.sin((c / 4) * Math.PI / 2) : Math.cos(((c - 4) / 6) * Math.PI / 2); }
+function draw() {
+  const still = reduceMotion.matches;
+  orb?.render(still ? 12 : time, still ? 0 : level, still ? 0.5 : breath(time));
+  orbWrap.style.setProperty("--level", level.toFixed(3));
+}
+function wake() { lastInput = performance.now(); if (!raf) { lastFrame = 0; raf = requestAnimationFrame(frame); } }
+window.wake = wake;
+if (orb) new ResizeObserver(() => { orb.resize(); draw(); }).observe(canvas);
+new IntersectionObserver(([e]) => { onscreen = e.isIntersecting; wake(); }).observe(canvas);
+document.addEventListener("visibilitychange", wake);
+addEventListener("focus", () => { focused = true; wake(); });
+addEventListener("blur", () => { if (!capture) focused = false; });
+for (const type of ["pointermove", "keydown", "wheel"]) addEventListener(type, () => { if (!raf) wake(); else lastInput = performance.now(); }, { passive: true });
+reduceMotion.addEventListener("change", wake);
+
+/* Simulated dictation: button, or hold Space (stands in for fn). */
+const words = "Dear Sam, thank you so much for dinner on Friday. The garden looked wonderful and I still can't stop thinking about that lemon tart. Let's do it again before the clocks change.".split(" ");
+const liveText = document.getElementById("liveText"), clock = document.getElementById("clock");
+let timer = 0, startAt = 0;
+function setRecording(on) {
+  recording = on; hero.dataset.state = on ? "recording" : "idle"; clearInterval(timer);
+  document.getElementById("caption").innerHTML = on ? "Listening on <b>MacBook Pro Mic</b>" : "<b>Parakeet v3</b> ready on this Mac";
+  if (on) {
+    let i = capture ? 24 : 0; startAt = performance.now() - (capture ? 9000 : 0);
+    const tick = () => {
+      const s = Math.floor((performance.now() - startAt) / 1000); clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      i = Math.min(words.length, i + 1);
+      liveText.innerHTML = `${words.slice(0, Math.max(0, i - 3)).join(" ")} <span class="tail">${words.slice(Math.max(0, i - 3), i).join(" ")}</span>`;
+    };
+    tick(); timer = setInterval(tick, 320);
+  }
+  wake();
+}
+document.getElementById("startBtn").addEventListener("click", () => setRecording(true));
+document.getElementById("stopBtn").addEventListener("click", () => setRecording(false));
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") setRecording(false);
+  if (e.code === "Space" && !e.repeat && e.target === document.body) { e.preventDefault(); setRecording(true); }
+  if (e.key === "p" && e.target === document.body) hud.classList.toggle("on");
+});
+addEventListener("keyup", (e) => { if (e.code === "Space" && e.target === document.body) setRecording(false); });
+if (params.get("state") === "recording") { setRecording(true); if (capture) level = 0.75; }
+wake();
+</script>
+</body>
+</html>
