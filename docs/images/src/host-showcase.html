@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- Frames the REAL host dashboard (src-tauri/src/host/dashboard.html, served by
+     host-mock.mjs) in a browser window over the shared README backdrop.
+     Open as  host-showcase.html?theme=dark&host=http://127.0.0.1:48199/
+     The "multivoice host" wordmark inside the screenshot comes from
+     dashboard.html itself, so a rename there flows into the next render. -->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>Host dashboard showcase</title>
+<link rel="stylesheet" href="showcase.css">
+<style>
+  .canvas { --w: 1120px; --h: 1156px; }
+  .window { left: 64px; top: 60px; width: 992px; }
+  #dash { height: 988px; background: #0d0d0f; }
+</style>
+</head>
+<body>
+  <div class="canvas" id="shot">
+    <div class="window">
+      <div class="browser-bar">
+        <span class="lights"><i></i><i></i><i></i></span>
+        <span class="url">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8.2 10.5V7.8a3.8 3.8 0 0 1 7.6 0v2.7"/></svg>
+          <span>mac-mini.tail1234.ts.net<span class="dim">/?token=••••</span></span>
+        </span>
+      </div>
+      <iframe id="dash" title="Host dashboard"></iframe>
+    </div>
+  </div>
+<script>
+  const params = new URLSearchParams(location.search);
+  document.documentElement.dataset.theme = params.get("theme") || "light";
+  document.getElementById("dash").src = params.get("host") || "http://127.0.0.1:48199/";
+</script>
+</body>
+</html>
