@@ -46,6 +46,9 @@ Guidelines:
 
 - Keep pull requests focused: one change per PR, with a description of what
   changed and how you verified it (screenshots for UI changes).
+- Title the pull request as a Conventional Commit (`feat: …`, `fix(host): …`).
+  Pull requests are squash-merged with that title, and the release workflow
+  reads it to pick the next version, so `main` never takes merge commits.
 - Add or update tests for behavior changes in the Rust backend.
 - Local transcription must keep working with no network and no account. Cloud
   features are optional and must stay off by default.
