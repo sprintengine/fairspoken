@@ -383,6 +383,88 @@
 
   .foot { display: flex; justify-content: center; gap: 8px; color: var(--text-3); font-size: 11.5px; padding-top: 4px; }
 
+  /* ── Update button: sync / spinning / download + "1" / progress ring /
+     restart + dot / warning dot (one control, state in data-state) ── */
+  .upd-btn { position: relative; }
+  .upd-btn[hidden] { display: none; }
+  .upd-btn[disabled] { cursor: default; }
+  .upd-ico { display: grid; place-items: center; width: 15px; height: 15px; }
+  .upd-ico svg { width: 15px; height: 15px; }
+  .upd-btn[data-state="checking"] .upd-ico, .upd-btn[data-state="restarting"] .upd-ico { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .upd-btn[data-state="available"] { color: var(--accent); border-color: var(--accent-ring); background: var(--accent-soft); }
+  .upd-btn[data-state="ready"] { color: var(--done); border-color: color-mix(in srgb, var(--done) 35%, transparent); }
+  .upd-btn[data-state="downloading"] { color: var(--accent); border-color: transparent; }
+  .upd-badge, .upd-dot, .upd-ring { display: none; }
+  .upd-badge {
+    position: absolute; top: -5px; right: -6px; min-width: 15px; height: 15px; padding: 0 4px;
+    border-radius: 999px; font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center;
+    color: #fff; background: var(--accent); box-shadow: 0 0 0 2px var(--field-b);
+  }
+  :root[data-theme="dark"] .upd-badge { color: #062226; }
+  .upd-dot { position: absolute; top: -1px; right: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--done); box-shadow: 0 0 0 2px var(--field-b); }
+  .upd-btn[data-state="error"] .upd-dot { background: var(--warn); }
+  .upd-btn[data-state="available"] .upd-badge { display: block; }
+  .upd-btn[data-state="ready"] .upd-dot, .upd-btn[data-state="error"] .upd-dot { display: block; }
+  .icon-btn.upd-btn svg.upd-ring { position: absolute; top: -1px; left: -1px; width: calc(100% + 2px); height: calc(100% + 2px); transform: rotate(-90deg); pointer-events: none; }
+  .icon-btn.upd-btn[data-state="downloading"] svg.upd-ring { display: block; }
+  .upd-ring circle { fill: none; stroke-width: 2; }
+  .upd-ring .track { stroke: var(--hairline-strong); }
+  .upd-ring .bar { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 300ms var(--ease); }
+
+  /* ── Updates panel ── */
+  .col { display: grid; gap: 18px; min-width: 0; align-content: start; }
+  .card[hidden] { display: none; }
+  .nav-badge { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; color: #fff; background: var(--accent); }
+  :root[data-theme="dark"] .nav-badge { color: #062226; }
+  .nav-badge[hidden] { display: none; }
+  .kv .v .tag { margin-left: 8px; }
+  .tag.nightly { color: var(--load); background: var(--load-soft); }
+  .tag.stable { color: var(--done); background: var(--done-soft); }
+  .kv .v.err { color: var(--err); white-space: normal; text-align: right; }
+  .upd-settings { display: grid; gap: 10px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--hairline); }
+  .upd-settings .form-row > span, .upd-settings .form-row > label { color: var(--text-2); }
+  .upd-settings label small { display: block; color: var(--text-3); font-size: 11.5px; }
+  .seg { display: inline-grid; grid-auto-flow: column; gap: 2px; padding: 2px; border-radius: 10px; background: var(--hairline); }
+  .seg button {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    height: 26px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 550; color: var(--text-2);
+    transition: background 140ms var(--ease), color 140ms var(--ease);
+  }
+  .seg button[aria-checked="true"] { background: var(--glass-strong); color: var(--text); box-shadow: 0 1px 2px rgba(16, 38, 43, 0.12); }
+  .seg button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .seg[aria-disabled="true"] button { cursor: default; opacity: 0.6; }
+  .upd-hint { color: var(--text-3); font-size: 12px; margin-top: -4px; }
+  .upd-note { font-size: 12px; padding: 8px 11px; border-radius: 10px; background: var(--load-soft); color: var(--text-2); }
+  .upd-note[hidden] { display: none; }
+  .upd-note b { color: var(--text); font-weight: 600; }
+  .upd-cta { display: grid; gap: 8px; margin-top: 14px; }
+  .upd-cta:empty { display: none; }
+  .upd-cta .row { display: flex; align-items: center; gap: 10px; }
+  .upd-cta .row .grow { flex: 1; min-width: 0; color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upd-progress { height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; }
+  .upd-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 300ms var(--ease); }
+  .upd-error { color: var(--err); font-size: 12px; }
+
+  /* ── Toasts ── */
+  .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 40; display: grid; gap: 10px; width: min(360px, calc(100vw - 40px)); }
+  .toast {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 12px; align-items: start;
+    padding: 12px 12px 12px 14px; border-radius: 14px;
+    background: var(--glass-strong); border: 1px solid var(--glass-edge); box-shadow: var(--shadow-lift);
+    -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%);
+    animation: toast-in 260ms var(--ease);
+  }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+  .toast-ico { grid-row: span 3; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .toast-ico svg { width: 15px; height: 15px; }
+  .toast[data-tone="done"] .toast-ico { background: var(--done-soft); color: var(--done); }
+  .toast-title { font-weight: 650; padding-top: 1px; }
+  .toast-body { grid-column: 2; color: var(--text-2); font-size: 12px; }
+  .toast-actions { grid-column: 2; display: flex; gap: 8px; margin-top: 8px; }
+  .toast-x { grid-column: 3; grid-row: 1; appearance: none; border: 0; background: transparent; color: var(--text-3); cursor: pointer; width: 22px; height: 22px; border-radius: 6px; font-size: 15px; line-height: 1; }
+  .toast-x:hover { background: var(--hairline); color: var(--text); }
+
   @media (max-width: 1000px) {
     .brand-sub { display: none; }
   }
@@ -415,6 +497,12 @@
     <span class="host-chip" id="hostChip" title="Bind address and version">—</span>
     <div class="top-right">
       <span class="pill conn" id="conn" data-state="connecting"><span class="dot"></span><span id="connLabel" role="status" aria-live="polite">Connecting…</span></span>
+      <button class="icon-btn upd-btn" id="updBtn" type="button" data-state="idle" aria-label="Check for updates" hidden>
+        <svg class="upd-ring" viewBox="0 0 32 32" aria-hidden="true"><circle class="track" cx="16" cy="16" r="15"/><circle class="bar" id="updRingBar" cx="16" cy="16" r="15"/></svg>
+        <span class="upd-ico" id="updIco" aria-hidden="true"></span>
+        <span class="upd-badge" aria-hidden="true">1</span>
+        <span class="upd-dot" aria-hidden="true"></span>
+      </button>
       <button class="icon-btn" id="themeBtn" type="button" aria-label="Theme"></button>
     </div>
   </header>
@@ -451,6 +539,7 @@
     </section>
 
     <section class="grid-2">
+      <div class="col">
       <div class="card glass live" aria-labelledby="configTitle">
         <div class="card-head">
           <h2 id="configTitle">Configuration</h2>
@@ -469,6 +558,32 @@
             <button class="btn primary" id="applyConfig" type="submit">Apply</button>
           </div>
         </form>
+      </div>
+      <div class="card glass" id="updatesCard" aria-labelledby="updatesTitle" hidden>
+        <div class="card-head">
+          <h2 id="updatesTitle">Updates</h2>
+          <span class="nav-badge" id="updatesBadge" title="An update is pending" hidden>1</span>
+          <span class="grow"></span>
+          <button class="btn" id="updCheck" type="button">Check for updates</button>
+        </div>
+        <div class="kv" id="updView"></div>
+        <div class="upd-settings">
+          <div class="form-row">
+            <span id="updChannelLabel">Channel</span>
+            <div class="seg" id="updSeg" role="radiogroup" aria-labelledby="updChannelLabel">
+              <button type="button" role="radio" data-channel="stable" aria-checked="false">Stable</button>
+              <button type="button" role="radio" data-channel="nightly" aria-checked="false">Nightly</button>
+            </div>
+          </div>
+          <p class="upd-hint" id="updHint"></p>
+          <p class="upd-note" id="updNote" hidden></p>
+          <div class="form-row">
+            <label for="updAuto">Install updates automatically<small>Only after a scheduled check; restarts when no one is dictating</small></label>
+            <input id="updAuto" class="switch" type="checkbox">
+          </div>
+        </div>
+        <div class="upd-cta" id="updCta"></div>
+      </div>
       </div>
       <div class="card glass live" aria-labelledby="modelsTitle">
         <div class="card-head">
@@ -499,6 +614,8 @@
       <div class="card-head"><h2 id="recentTitle">Recent transcriptions</h2><span class="count" id="recentCount"></span></div>
       <div class="table-wrap" id="recentTable"><p class="placeholder">Connecting to host…</p></div>
     </section>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
 
     <footer class="foot"><span id="footVersion">—</span><span>·</span><span>up <span id="footUptime">—</span></span><span>·</span><span id="footMode">—</span></footer>
   </main>
@@ -2037,7 +2154,358 @@
     return { start, snapshot, applyConfig, download };
   })();
 
+  /* ══════════════════ Updates ══════════════════ */
+  // GET /v1/update drives the header button, the toast and the Updates card.
+  // Hosts without a self-updater (older builds, the Swift host) answer 404
+  // and the controls stay hidden.
+  const UPD_ICONS = {
+    sync: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.3 6.4A5.5 5.5 0 0 0 3.1 5"/><path d="M2.7 9.6A5.5 5.5 0 0 0 12.9 11"/><path d="M2.8 2.2V5h2.8"/><path d="M13.2 13.8V11h-2.8"/></svg>',
+    download: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2v7.3"/><path d="M5 6.7l3 3 3-3"/><path d="M2.5 10.3v1.9c0 .7.6 1.3 1.3 1.3h8.4c.7 0 1.3-.6 1.3-1.3v-1.9"/></svg>',
+    restart: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 8.4A5.2 5.2 0 1 1 11.6 4.3"/><path d="M12.4 1.6v3h-3"/></svg>',
+    check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.4l2.9 2.9 6.1-6.6"/></svg>',
+  };
+  const CHANNEL_HINT = {
+    stable: "Stable: tested releases. Recommended for a host people rely on.",
+    nightly: "Nightly: built every night from the latest code. Newest fixes, less tested.",
+  };
+  const U = { status: null, unsupported: false, manual: false, timer: 0, restarting: null, busy: false, toasted: localStorage.getItem("fs-host-update-toasted") || "" };
+  const channelLabel = (c) => (c === "nightly" ? "Nightly" : "Stable");
+  const offerTitle = (a) => (a.switchToStable ? `Switch to stable ${a.version}` : `Fairspoken host ${a.version} (${channelLabel(a.channel)})`);
+
+  const updateApi = async (method, path, body) => {
+    if (DEMO) return demoUpdate.call(method, path, body);
+    const init = { method, headers: authHeaders(method === "POST"), cache: "no-store" };
+    if (method === "POST") init.body = JSON.stringify(body || {});
+    const res = await fetch(path, init);
+    if (res.status === 401) { setConn("unauthorized", "Unauthorized"); throw Object.assign(new Error("Unauthorized"), { status: 401 }); }
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw Object.assign(new Error((data && data.error) || `Host answered ${res.status}`), { status: res.status });
+    return data;
+  };
+
+  /* Toasts: one per available version, dismissible; "up to date" only after a manual check. */
+  const toast = ({ title, body, icon = "download", tone, actions = [], timeout = 0 }) => {
+    const el = h("div", "toast glass");
+    el.setAttribute("role", "status");
+    if (tone) el.dataset.tone = tone;
+    const ico = h("span", "toast-ico");
+    ico.innerHTML = UPD_ICONS[icon];
+    const close = () => el.remove();
+    const x = h("button", "toast-x", "×");
+    x.type = "button";
+    x.setAttribute("aria-label", "Dismiss");
+    x.addEventListener("click", close);
+    el.append(ico, h("div", "toast-title", title), x);
+    if (body) el.appendChild(h("div", "toast-body", body));
+    if (actions.length) {
+      const row = h("div", "toast-actions");
+      for (const [label, primary, run] of actions) {
+        const b = h("button", primary ? "btn primary" : "btn", label);
+        b.type = "button";
+        b.addEventListener("click", () => { close(); if (run) run(); });
+        row.appendChild(b);
+      }
+      el.appendChild(row);
+    }
+    $("toasts").appendChild(el);
+    if (timeout) setTimeout(close, timeout);
+    return el;
+  };
+
+  const applyUpdateStatus = (next) => {
+    const prev = U.status;
+    U.status = next;
+    U.unsupported = false;
+    const settled = next.state !== "checking";
+    if (U.manual && settled) {
+      U.manual = false;
+      if (next.state === "idle") toast({ title: "Fairspoken host is up to date", body: `Version ${next.currentVersion} is the latest on the ${channelLabel(next.channel)} channel.`, icon: "check", tone: "done", timeout: 4000 });
+    }
+    const a = next.available;
+    if (next.state === "available" && a && U.toasted !== a.version) {
+      U.toasted = a.version;
+      localStorage.setItem("fs-host-update-toasted", a.version);
+      toast({
+        title: a.switchToStable ? `Stable ${a.version} is available` : `Fairspoken host ${a.version} is available`,
+        body: a.switchToStable ? "This host runs a nightly; switching installs the latest stable release." : `${channelLabel(a.channel)} channel · you have ${next.currentVersion}`,
+        actions: [["Update", true, () => updateAction()], ["Later", false, null]],
+      });
+    }
+    if (prev && prev.state === "downloading" && next.state === "ready") {
+      toast({ title: `Fairspoken host ${next.installedVersion} is installed`, body: "Restart the host to finish. In-flight dictations finish first.", icon: "restart", tone: "done", actions: [["Restart now", true, () => restartHost()], ["Later", false, null]] });
+    }
+    renderUpdate();
+  };
+
+  const refreshUpdate = async () => {
+    clearTimeout(U.timer);
+    if (U.restarting) return;
+    try {
+      applyUpdateStatus(await updateApi("GET", "/v1/update"));
+    } catch (err) {
+      if (err.status === 404) { U.unsupported = true; renderUpdate(); return; }
+    }
+    scheduleUpdatePoll();
+  };
+  const scheduleUpdatePoll = () => {
+    clearTimeout(U.timer);
+    const s = U.status;
+    const busy = s && ["checking", "downloading", "restarting"].includes(s.state);
+    U.timer = setTimeout(refreshUpdate, busy ? 800 : 60000);
+  };
+
+  const runUpdateCall = async (path, body) => {
+    if (U.busy) return;
+    U.busy = true;
+    try {
+      applyUpdateStatus(await updateApi("POST", path, body));
+    } catch (err) {
+      if (U.status) applyUpdateStatus({ ...U.status, state: "error", error: err instanceof TypeError ? "Host unreachable." : err.message });
+    } finally {
+      U.busy = false;
+      scheduleUpdatePoll();
+    }
+  };
+  const checkForUpdates = () => { U.manual = true; return runUpdateCall("/v1/update/check"); };
+  const installUpdate = () => runUpdateCall("/v1/update/install");
+  const saveUpdateSettings = (body) => {
+    if (body.channel !== undefined) U.manual = true;
+    return runUpdateCall("/v1/update/settings", body);
+  };
+
+  // Restart: the host drains in-flight work, exits, and comes back as the
+  // new version (service manager or re-exec); the page then reloads.
+  const restartHost = async () => {
+    const s = U.status;
+    if (!s || s.state !== "ready" || U.restarting) return;
+    try {
+      applyUpdateStatus(await updateApi("POST", "/v1/update/restart"));
+    } catch (err) {
+      applyUpdateStatus({ ...s, state: "error", error: err.message });
+      return;
+    }
+    if (DEMO) { scheduleUpdatePoll(); return; }
+    U.restarting = { from: s.currentVersion, to: s.installedVersion, since: Date.now(), wentDown: false };
+    renderUpdate();
+    const poll = async () => {
+      const r = U.restarting;
+      try {
+        const res = await fetch("/v1/health", { headers: authHeaders(false), cache: "no-store" });
+        const body = res.ok ? await res.json() : null;
+        if (body && (body.serverVersion !== r.from || r.wentDown)) { location.reload(); return; }
+      } catch { r.wentDown = true; }
+      if (Date.now() - r.since > 180000) {
+        U.restarting = null;
+        applyUpdateStatus({ ...s, state: "error", error: "The host did not come back after restarting. Check its logs." });
+        return;
+      }
+      setTimeout(poll, 1000);
+    };
+    setTimeout(poll, 1200);
+  };
+
+  const updateAction = () => {
+    const s = U.status;
+    if (!s || U.restarting) return;
+    if (s.state === "available") installUpdate();
+    else if (s.state === "ready") restartHost();
+    else if (s.state === "idle" || s.state === "error") checkForUpdates();
+  };
+  $("updBtn").addEventListener("click", updateAction);
+  $("updCheck").addEventListener("click", checkForUpdates);
+  $("updAuto").addEventListener("change", (e) => saveUpdateSettings({ autoUpdate: e.target.checked }));
+  for (const b of $("updSeg").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      const s = U.status;
+      if (!s || s.channelSource === "env" || b.dataset.channel === s.channel) return;
+      saveUpdateSettings({ channel: b.dataset.channel });
+    });
+  }
+  $("updSeg").addEventListener("keydown", (e) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const s = U.status;
+    if (!s || s.channelSource === "env") return;
+    const next = s.channel === "stable" ? "nightly" : "stable";
+    saveUpdateSettings({ channel: next });
+    $("updSeg").querySelector(`[data-channel="${next}"]`).focus();
+  });
+
+  const renderUpdate = () => {
+    const btn = $("updBtn"), card = $("updatesCard");
+    const s = U.status;
+    btn.hidden = card.hidden = U.unsupported || !s;
+    if (!s || U.unsupported) return;
+    const state = U.restarting ? "restarting" : s.state;
+    const a = s.available;
+    const pct = s.progress && s.progress.percentage != null ? s.progress.percentage : null;
+    const current = `Fairspoken host ${s.currentVersion} (${channelLabel(s.channel)})`;
+    const label = {
+      idle: s.lastCheckedMs ? `${current} is up to date — click to check for updates` : `${current} — click to check for updates`,
+      checking: "Checking for updates…",
+      available: a ? `Update available: ${offerTitle(a)} — click to install` : "Update available — click to install",
+      downloading: `Downloading ${a ? offerTitle(a) : "the update"}${pct != null ? ` — ${pct}%` : "…"}`,
+      ready: `Fairspoken host ${s.installedVersion || ""} is installed — click to restart into it`,
+      restarting: "Restarting the host into the new version…",
+      error: `Update problem: ${s.error || "unknown error"} — click to retry`,
+    }[state] || current;
+    btn.dataset.state = state;
+    btn.disabled = ["checking", "downloading", "restarting"].includes(state);
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    $("updIco").innerHTML = state === "available" || state === "downloading" ? UPD_ICONS.download : state === "ready" ? UPD_ICONS.restart : UPD_ICONS.sync;
+    const C = 2 * Math.PI * 15;
+    const bar = $("updRingBar");
+    bar.style.strokeDasharray = `${C}`;
+    bar.style.strokeDashoffset = `${C * (1 - (pct == null ? 0.08 : Math.max(0.03, pct / 100)))}`;
+
+    // Settings → Updates
+    $("updatesBadge").hidden = !(state === "available" || state === "ready");
+    const view = $("updView");
+    view.replaceChildren();
+    const versionRow = h("div", "kv-row");
+    const v = h("span", "v");
+    v.append(s.currentVersion, h("span", `tag ${s.defaultChannel}`, `${channelLabel(s.defaultChannel)} build`));
+    versionRow.append(h("span", "k", "Version"), v);
+    view.appendChild(versionRow);
+    const statusText = {
+      idle: s.lastCheckedMs ? "Up to date" : "Not checked yet",
+      checking: "Checking…",
+      available: a ? (a.switchToStable ? `Stable ${a.version} available` : `${a.version} available`) : "Update available",
+      downloading: `Downloading${pct != null ? ` · ${pct}%` : "…"}`,
+      ready: `${s.installedVersion || "Update"} installed · restart to finish`,
+      restarting: "Restarting…",
+      error: "Problem",
+    }[state];
+    const statusRow = h("div", "kv-row");
+    statusRow.append(h("span", "k", "Status"), h("span", state === "error" ? "v err" : "v", statusText));
+    view.appendChild(statusRow);
+    const checkedRow = h("div", "kv-row");
+    const checked = h("span", "v", s.lastCheckedMs ? fmtAgo(Date.now() - s.lastCheckedMs) : "Never");
+    if (s.lastCheckedMs) checked.title = new Date(s.lastCheckedMs).toLocaleString();
+    if (!s.checksEnabled) checked.appendChild(h("small", null, "auto-checks off"));
+    checkedRow.append(h("span", "k", "Last checked"), checked);
+    view.appendChild(checkedRow);
+
+    const pinned = s.channelSource === "env";
+    $("updSeg").setAttribute("aria-disabled", String(pinned));
+    for (const b of $("updSeg").querySelectorAll("button")) {
+      const on = b.dataset.channel === s.channel;
+      b.setAttribute("aria-checked", String(on));
+      b.tabIndex = on ? 0 : -1;
+      b.disabled = pinned;
+    }
+    $("updHint").textContent = pinned ? `${CHANNEL_HINT[s.channel]} Pinned by FAIRSPOKEN_HOST_UPDATE_CHANNEL.` : CHANNEL_HINT[s.channel];
+    const note = $("updNote");
+    const runsNightly = /-nightly\./.test(s.currentVersion);
+    note.hidden = !(s.channel === "stable" && runsNightly);
+    if (!note.hidden) {
+      note.replaceChildren("This host runs a nightly build. On Stable it is offered the latest stable release even though its version number is lower",
+        ...(a && a.switchToStable ? [": ", h("b", null, `Switch to stable ${a.version}`), "."] : ["."]));
+    }
+    $("updAuto").checked = !!s.autoUpdate;
+    $("updCheck").disabled = btn.disabled || state === "ready";
+
+    const cta = $("updCta");
+    cta.replaceChildren();
+    if (state === "available" && a) {
+      const row = h("div", "row");
+      const go = h("button", "btn primary", a.switchToStable ? `Switch to stable ${a.version}` : `Update to ${a.version}`);
+      go.type = "button";
+      go.addEventListener("click", installUpdate);
+      const grow = h("span", "grow");
+      if (a.notes) {
+        const link = h("a", null, "Release notes");
+        link.href = a.notes; link.target = "_blank"; link.rel = "noopener";
+        link.style.color = "var(--accent)";
+        grow.appendChild(link);
+      }
+      row.append(go, grow);
+      cta.appendChild(row);
+    } else if (state === "downloading") {
+      const bar = h("div", "upd-progress");
+      const fill = h("i");
+      fill.style.width = `${pct || 0}%`;
+      bar.appendChild(fill);
+      const row = h("div", "row");
+      row.append(h("span", "grow", `Downloading and verifying ${a ? a.version : "the update"}…`));
+      cta.append(bar, row);
+    } else if (state === "ready") {
+      const row = h("div", "row");
+      const go = h("button", "btn primary", "Restart now");
+      go.type = "button";
+      go.addEventListener("click", restartHost);
+      row.append(go, h("span", "grow", s.restartMode === "service" ? "The service manager starts the new version." : "The host restarts itself with the same settings."));
+      cta.appendChild(row);
+    } else if (state === "restarting") {
+      cta.appendChild(h("div", "row")).appendChild(h("span", "grow", "Waiting for the host to come back…"));
+    } else if (state === "error" && s.error) {
+      cta.appendChild(h("p", "upd-error", s.error));
+    }
+  };
+  // "Last checked … ago" advances.
+  setInterval(() => { if (U.status && !document.hidden) renderUpdate(); }, 30000);
+
+  // ?demo=1 simulates the updater too; &update=available|checking|downloading|ready|error|nightly|idle
+  // picks the starting state.
+  const demoUpdate = (() => {
+    if (!DEMO) return null;
+    const now = Date.now();
+    const offer = (channel) => (channel === "nightly"
+      ? { version: "0.3.0-nightly.20261005.4", channel: "nightly", notes: "https://github.com/sprintengine/fairspoken/releases/tag/v0.3.0-nightly.20261005.4", pubDate: "2026-10-05T12:00:00Z", switchToStable: false }
+      : { version: "0.3.0", channel: "stable", notes: "https://github.com/sprintengine/fairspoken/releases/tag/v0.3.0", pubDate: "2026-10-01T12:00:00Z", switchToStable: false });
+    const st = { currentVersion: "0.2.0", channel: "stable", channelSource: "version", defaultChannel: "stable", autoUpdate: false, checksEnabled: true, platform: "linux-x86_64", state: "available", available: offer("stable"), progress: null, error: null, lastCheckedMs: now - 42 * 60000, installedVersion: null, restartMode: "service" };
+    const start = params.get("update") || "available";
+    if (start === "idle") { st.state = "idle"; st.available = null; }
+    if (start === "checking") { st.state = "checking"; st.available = null; }
+    if (start === "downloading") { st.state = "downloading"; st.progress = { downloadedBytes: 31e6, totalBytes: 50e6, percentage: 62 }; }
+    if (start === "ready") { st.state = "ready"; st.installedVersion = "0.3.0"; }
+    if (start === "error") { st.state = "error"; st.available = null; st.error = "Could not reach the update feed: operation timed out"; }
+    if (start === "nightly") {
+      Object.assign(st, { currentVersion: "0.3.0-nightly.20261004.2", channel: "stable", channelSource: "saved", defaultChannel: "nightly" });
+      st.available = { ...offer("stable"), version: "0.2.0", switchToStable: true };
+    }
+    let ticker = 0;
+    const check = () => {
+      st.state = "checking"; st.error = null;
+      setTimeout(() => {
+        st.lastCheckedMs = Date.now();
+        const o = offer(st.channel);
+        const runsNightly = st.currentVersion.includes("-nightly.");
+        if (st.channel === "stable" && runsNightly) { st.available = { ...o, version: "0.2.0", switchToStable: true }; st.state = "available"; }
+        else if (o.version !== st.currentVersion && !st.installedVersion) { st.available = o; st.state = "available"; }
+        else { st.available = null; st.state = "idle"; }
+      }, 1100);
+    };
+    const call = (method, path, body) => {
+      if (method === "POST" && path.endsWith("/check")) check();
+      if (method === "POST" && path.endsWith("/install") && st.available) {
+        st.state = "downloading"; st.progress = { downloadedBytes: 0, totalBytes: 50e6, percentage: 0 };
+        clearInterval(ticker);
+        ticker = setInterval(() => {
+          const p = Math.min(100, st.progress.percentage + 9);
+          st.progress = { downloadedBytes: 50e6 * p / 100, totalBytes: 50e6, percentage: p };
+          if (p >= 100) { clearInterval(ticker); st.state = "ready"; st.installedVersion = st.available.version; st.progress = null; }
+        }, 350);
+      }
+      if (method === "POST" && path.endsWith("/restart") && st.state === "ready") {
+        st.state = "restarting";
+        setTimeout(() => {
+          Object.assign(st, { currentVersion: st.installedVersion, defaultChannel: st.installedVersion.includes("-nightly.") ? "nightly" : "stable", state: "idle", available: null, installedVersion: null, lastCheckedMs: Date.now() });
+          if (st.channelSource === "version") st.channel = st.defaultChannel;
+        }, 2500);
+      }
+      if (method === "POST" && path.endsWith("/settings")) {
+        if (body && "autoUpdate" in body) st.autoUpdate = !!body.autoUpdate;
+        if (body && "channel" in body) { st.channel = body.channel || st.defaultChannel; st.channelSource = body.channel ? "saved" : "version"; st.available = null; check(); }
+      }
+      return JSON.parse(JSON.stringify(st));
+    };
+    return { call };
+  })();
+
   applyTheme();
+  refreshUpdate();
   if (DEMO) demo.start();
   else {
     // The event stream opens with a snapshot; polling (and its first fetch)
