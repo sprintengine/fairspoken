@@ -11,6 +11,7 @@ const ROUTES = [
   ['GET', '/v1/events'],
   ['POST', '/v1/config'],
   ['POST', '/v1/models/download'],
+  ['GET', '/v1/update'],
   ['POST', '/v1/transcriptions'],
   ['POST', '/v1/transcriptions/stream'],
   ['GET', '/v1/does-not-exist'],
