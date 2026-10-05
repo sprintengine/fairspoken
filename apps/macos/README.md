@@ -21,7 +21,7 @@ scripts/setup-signing.sh              # once per machine: a stable signing ident
 scripts/build.sh                      # Debug, both apps → build/Build/Products/Debug/{Fairspoken,Fairspoken Server}.app
 scripts/build.sh release              # Release, both apps
 scripts/build.sh --app server         # one app: client | server | all
-scripts/test.sh                       # unit tests: FairspokenCore (46) and FairspokenHost (42)
+scripts/test.sh                       # unit tests: FairspokenCore (46), FairspokenHost (42), FairspokenUpdates (18)
 scripts/install.sh                    # Release Fairspoken → ~/Applications, then launches it
 scripts/install.sh --app server       # the same for Fairspoken Server (--app all for both)
 scripts/release.sh                    # Developer ID + notarized → build/release/Fairspoken-<version>-macos-arm64.{zip,dmg}
@@ -159,6 +159,52 @@ connection button and a status line such as "Using host: practice-mini.local:481
 (one `GET /v1/health` when Settings or Home opens, or on Test; no background polling). Monitoring a
 host is Fairspoken Server's job (or the web dashboard at the host's `/`); the client has no Server view.
 
+## Updates
+
+Both apps update themselves with [Sparkle 2](https://sparkle-project.org) (2.10.0, SPM), behind
+`Packages/FairspokenUpdates`: an `UpdateController` with a custom Sparkle user driver, so updates show
+in the app's own UI rather than Sparkle's windows.
+
+- **Where:** the update button at the foot of the sidebar (sync → spinning while checking → download
+  with a `1` badge → progress ring → restart with a dot; a warning dot after an error), a toast once
+  per version ("Fairspoken 0.3.0 is available" · Later · Update), app menu › Check for Updates…, the
+  menu bar item, and Settings › Updates (Fairspoken) / Configuration › Updates (Fairspoken Server),
+  whose sidebar item carries a badge while an update waits. Nothing downloads until you click Update;
+  a restart installs it.
+- **When:** about 30 s after launch, then every 6 hours (`SUScheduledCheckInterval` 21600), and on
+  demand. Headless Fairspoken Server (`--headless`) never checks: update the app it runs from.
+- **Channels:** `stable` and `nightly`, saved as `updateChannel` in the app's defaults. With none
+  saved, a build follows its own version (`-nightly.` in `CFBundleShortVersionString` → nightly).
+  Changing it checks at once. Nightly allows the appcast's `<sparkle:channel>nightly</sparkle:channel>`
+  items; stable only the default channel. Sparkle never downgrades, so a nightly switched to Stable
+  stays put until the next stable release (Settings says so).
+- **Feeds** (one appcast per app, both channels in it, on the rolling `update-feeds` release):
+  - Fairspoken: `https://github.com/sprintengine/fairspoken/releases/download/update-feeds/appcast-fairspoken.xml`
+  - Fairspoken Server: `https://github.com/sprintengine/fairspoken/releases/download/update-feeds/appcast-fairspoken-server.xml`
+- **Versions:** Sparkle compares `CFBundleVersion` = `CURRENT_PROJECT_VERSION`, which releases set to the
+  UTC build timestamp `YYYYMMDDHHMM` (`xcodebuild … CURRENT_PROJECT_VERSION=202610051200`). Local builds
+  keep `1`. Updates must be EdDSA-signed with the key whose public half is `SUPublicEDKey` in both
+  Info.plists.
+- **Signing:** neither app is sandboxed, so Sparkle's XPC services aren't needed. The *Sign Sparkle
+  helpers* build phase (`scripts/sign-sparkle.sh`) removes them and signs Sparkle's `Autoupdate` and
+  `Updater.app` with the build's identity, the hardened runtime and `OTHER_CODE_SIGN_FLAGS`, which
+  notarization needs (Sparkle ships them ad-hoc signed).
+
+**Testing against a local appcast (Debug builds only).** Release builds always use `SUFeedURL`.
+
+```sh
+# An appcast with sparkle:version above 1, served from this Mac (ATS allows plain HTTP to localhost):
+python3 -m http.server 18765 --bind 127.0.0.1 --directory /path/to/appcast-dir &
+"build/Build/Products/Debug/Fairspoken.app/Contents/MacOS/Fairspoken" \
+  -FAIRSPOKEN_APPCAST_URL http://127.0.0.1:18765/appcast.xml -updateChannel nightly
+# or persist it:  defaults write ie.fairspoken.mac.dev FAIRSPOKEN_APPCAST_URL http://127.0.0.1:18765/appcast.xml
+```
+
+The launch check runs after ~30 s; `log stream --info --predicate 'category == "updates"'` shows what
+was found. To look at the UI without a feed, `-FAIRSPOKEN_UPDATE_STATE idle|checking|available|downloading|ready|error`
+(plus `-FAIRSPOKEN_UPDATE_TOAST YES`) shows that state and never starts Sparkle (Debug builds), and
+`--screenshots <dir> --updates` captures every state in light and dark.
+
 ## Developer switches
 
 Run as `…/Contents/MacOS/<name> <flags>`:
@@ -167,6 +213,7 @@ Run as `…/Contents/MacOS/<name> <flags>`:
 |---|---|---|
 | both | `--demo` | Sample data: the client's dictations and stats; the server window on the simulated practice server |
 | both | `--screenshots <dir>` | Renders every screen in light and dark into `<dir>` and quits (`scripts/screenshots.sh`). The server uses a sample configuration and binds nothing |
+| both | `--screenshots <dir> --updates` | Captures the update UI instead: every update state, the toast and the Updates settings (simulated, no Sparkle) |
 | client | `--selftest <wav> [--model id] [--host URL --token T]` | Headless end-to-end check of the engine, the streaming client and the SSE feed, with no microphone or TCC |
 | client | `--show-dashboard` | Opens the dashboard at launch |
 | server | `--headless` | Serve with no UI (see Run modes) |
@@ -221,7 +268,7 @@ address may bring up macOS's Local Network prompt the first time another device 
 ## Layout
 
 ```
-project.yml                      XcodeGen spec: two app targets, KeyboardShortcuts 1.10.0, local packages
+project.yml                      XcodeGen spec: two app targets, KeyboardShortcuts 1.10.0, Sparkle 2.10.0, local packages
 Config/                          Base/Debug/Release (client), Server*.xcconfig, entitlements
 Fairspoken/                      Fairspoken
   Sources/App/                   main, AppDelegate, AppModel (composition root), windows, status item, screenshots, self-test
@@ -244,6 +291,8 @@ Packages/
   FairspokenHost/                the server runtime + tests: HTTP/1.1 on Network.framework, routing and auth, queue,
                                  workers, metrics, SSE fan-out, config file; `fairspoken-host-dev` (stub engine)
   FairspokenUI/                  shared SwiftUI: palette, cards, chips, tags, brand mark, formatting
+  FairspokenUpdates/             Sparkle 2 updater (UpdateController, custom user driver), update channel,
+                                 sidebar button, toast and Settings section + tests (FairspokenUpdateModel)
 scripts/                         build, test, install, release, screenshots, setup-signing, server-agent, make-*-icon
 ```
 
