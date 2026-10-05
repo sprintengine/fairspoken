@@ -137,8 +137,11 @@ if [[ "$MODE" == "notarize" ]]; then
     NOTARY_AUTH=(--keychain-profile "${NOTARY_PROFILE:-fairspoken-notary}")
     echo "Notarizing with the notarytool keychain profile ${NOTARY_PROFILE:-fairspoken-notary}."
   fi
-  xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1 ||
+  # Apple's answer names the cause (wrong password, unknown team, agreement not accepted); keep it.
+  if ! NOTARY_CHECK="$(xcrun notarytool history "${NOTARY_AUTH[@]}" 2>&1 >/dev/null)"; then
+    echo "$NOTARY_CHECK" >&2
     die "notarytool cannot sign in. Create the profile (see --help), set APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID, or pass --no-notarize."
+  fi
 fi
 
 notarize() {
