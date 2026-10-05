@@ -47,7 +47,18 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+# Standalone transcription host self-update: verify the archive's minisign
+# signature (the same key as the desktop updater), compare versions, and
+# swap the running executable (which needs special handling on Windows).
+minisign-verify = "0.2"
+base64 = "0.22"
 semver = "1"
+self-replace = "1"
+
+[dev-dependencies]
+# Host self-update tests sign throwaway archives with a generated keypair.
+minisign = "0.7"
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25.0"
