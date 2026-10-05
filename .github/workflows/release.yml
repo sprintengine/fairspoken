@@ -243,6 +243,12 @@ jobs:
             hostBinary: src-tauri/target/release/transcription-host
             hostTarget: linux-arm64
 
+    # Windows runners default to pwsh, where "${VERSION}" is an empty
+    # PowerShell variable rather than the job's env; steps that want pwsh say so.
+    defaults:
+      run:
+        shell: bash
+
     env:
       VERSION: ${{ needs.validate.outputs.version }}
       TAG: ${{ needs.validate.outputs.tag }}
