@@ -4,11 +4,12 @@
 #                    simulator, settings/history compatibility, audio gating
 #   FairspokenHost   the server: HTTP codec, routing and auth, queue and workers, SSE fan-out,
 #                    config validation, stream errors, a real TCP listener
+#   FairspokenUpdates  update channel resolution, the update states and how each one shows
 # Extra arguments go to every `swift test` (e.g. --filter).
 set -euo pipefail
 cd "$(dirname "$0")/../Packages"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-for package in FairspokenCore FairspokenHost; do
+for package in FairspokenCore FairspokenHost FairspokenUpdates; do
   echo "== $package"
   (cd "$package" && swift test "$@")
 done

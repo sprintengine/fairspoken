@@ -11,6 +11,13 @@ MV_DISPLAY_NAME = Fairspoken
 // id AND the code-signing identity. Changing either later makes every user re-grant them.
 MV_BUNDLE_ID_BASE = ie.fairspoken.mac
 
+// VERSIONS (both apps; the update contract §1):
+//   MARKETING_VERSION        → CFBundleShortVersionString: X.Y.Z or X.Y.Z-nightly.YYYYMMDD.N, whole.
+//                              A "-nightly." version makes Nightly the default update channel.
+//   CURRENT_PROJECT_VERSION  → CFBundleVersion, what Sparkle compares (sparkle:version). Releases
+//                              pass the UTC build timestamp YYYYMMDDHHMM (12 digits) on the
+//                              xcodebuild command line. Local builds keep 1, so any published
+//                              update counts as newer (handy for testing a local appcast).
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 

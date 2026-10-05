@@ -1,12 +1,14 @@
 import FairspokenHost
 import FairspokenUI
 import FairspokenCore
+import FairspokenUpdates
 import SwiftUI
 
 /// Main window: Liquid Glass sidebar and toolbar (the control layer) over a limestone /
 /// night page; content sits on opaque surfaces, per design/brand/README.md §8.
 struct ServerWindowView: View {
     @Environment(ServerController.self) private var controller
+    @Environment(UpdateController.self) private var updates
 
     var body: some View {
         NavigationSplitView {
@@ -17,6 +19,7 @@ struct ServerWindowView: View {
                 detail.transition(.opacity)
             }
             .animation(.smooth(duration: 0.25), value: controller.section)
+            .updateToast(updates, style: .server)
             .toolbar { toolbar }
         }
         .frame(minWidth: 1120, minHeight: 760)
@@ -26,7 +29,12 @@ struct ServerWindowView: View {
         List(selection: Binding<ServerController.Section?>(get: { controller.section }, set: { if let s = $0 { controller.section = s } })) {
             Section {
                 ForEach(ServerController.Section.allCases) { section in
-                    Label(section.title, systemImage: section.symbol).tag(section)
+                    // Configuration holds Updates, so it wears the pending-update badge.
+                    let updatePending = section == .configuration && updates.isUpdatePending
+                    Label(section.title, systemImage: section.symbol)
+                        .badge(updatePending ? 1 : 0)
+                        .tag(section)
+                        .accessibilityLabel(updatePending ? "\(section.title), update available" : section.title)
                 }
             }
         }
@@ -45,7 +53,12 @@ struct ServerWindowView: View {
             .padding(.bottom, 10)
         }
         .safeAreaInset(edge: .bottom) {
-            SidebarServerStatus().padding(12)
+            VStack(spacing: 10) {
+                SidebarServerStatus()
+                UpdateSidebarButton(updates: updates, style: .server)
+                    .padding(.horizontal, 4)
+            }
+            .padding(12)
         }
     }
 
@@ -275,4 +288,9 @@ enum ServerFormat {
     static func clock(_ epochMs: Double) -> String {
         Date(timeIntervalSince1970: epochMs / 1000).formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits))
     }
+}
+
+extension UpdateStyle {
+    /// Copybook Blue for actions, Gorse for warnings (Margin Red is the signal only).
+    static let server = UpdateStyle(accent: .fsBlue, warning: .fsGorse)
 }

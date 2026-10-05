@@ -1,6 +1,7 @@
 import FairspokenCore
 import FairspokenHost
 import FairspokenUI
+import FairspokenUpdates
 import SwiftUI
 
 /// Edits host-config.json. Limits, the accelerator and model assignments apply at once
@@ -8,6 +9,7 @@ import SwiftUI
 /// the server.
 struct ConfigurationView: View {
     @Environment(ServerController.self) private var controller
+    @Environment(UpdateController.self) private var updates
     @State private var draft = HostConfiguration()
     @State private var loaded = false
     @State private var showToken = false
@@ -34,6 +36,8 @@ struct ConfigurationView: View {
                 workers
                 limits
                 thisMac
+                // Applies at once, like This Mac; Save and Revert are for the host's file only.
+                UpdateSettingsSection(updates: updates, style: .server)
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)

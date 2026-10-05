@@ -1,10 +1,12 @@
 import FairspokenUI
+import FairspokenUpdates
 import AppKit
 import FairspokenCore
 import SwiftUI
 
 /// `--screenshots <dir>`: renders the real windows (demo data)
-/// in light and dark, captures each window's own pixels and quits. Capturing our *own*
+/// in light and dark, captures each window's own pixels and quits. `--screenshots <dir> --updates`
+/// captures the update UI instead: every update state, the toast and Settings › Updates. Capturing our *own*
 /// windows needs no Screen Recording permission, so this works from the command line.
 @MainActor
 final class ScreenshotHarness {
@@ -35,6 +37,11 @@ final class ScreenshotHarness {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             try? await Task.sleep(for: .seconds(1))
+            if AppInfo.arguments.contains("--updates") {
+                await updateShots()
+                NSApp.terminate(nil)
+                return
+            }
             // Let the engine finish warming so status chips read "Ready".
             for _ in 0..<150 where !model.models.engineState.isReady {
                 try? await Task.sleep(for: .milliseconds(100))
@@ -75,6 +82,29 @@ final class ScreenshotHarness {
         await freshFrame()
         if let window = windows.dashboard { capture(window, as: "settings-transcription-\(suffix)") }
         windows.dashboard?.orderOut(nil)
+    }
+
+    /// The sidebar update button in each state (the window, Home), the available toast, and
+    /// Settings › Updates with an update ready. Simulated: Sparkle is never started here.
+    private func updateShots() async {
+        for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+            NSApp.appearance = NSAppearance(named: appearance)
+            for name in UpdateState.sampleNames {
+                guard let state = UpdateState.sample(named: name) else { continue }
+                model.updates.simulate(state, toast: name == "available")
+                windows.showDashboard(.home)
+                try? await Task.sleep(for: .milliseconds(900))
+                await freshFrame()
+                if let window = windows.dashboard { capture(window, as: "update-\(name)-\(suffix)") }
+                model.updates.dismissToast()
+            }
+            model.updates.simulate(.available(version: "0.3.0"))
+            model.settingsTab = .updates
+            windows.showDashboard(.settings)
+            try? await Task.sleep(for: .milliseconds(1000))
+            await freshFrame()
+            if let window = windows.dashboard { capture(window, as: "settings-updates-\(suffix)") }
+        }
     }
 
     private func onboardingShots(suffix: String) async {
