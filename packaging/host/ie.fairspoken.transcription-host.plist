@@ -4,6 +4,14 @@
   Runs the Fairspoken transcription host as a per-user launch agent.
   Install: see "Running the host on a Tailscale network" in README.md.
   Replace __BINARY__, __TOKEN__ and __LOG_DIR__ before loading.
+
+  Updates: the host updates itself in place (dashboard → Updates, or
+  `transcription-host --update`), so __BINARY__ must be writable by the user
+  this agent runs as (e.g. ~/.local/bin/transcription-host, not /usr/local/bin
+  owned by root). After installing an update it exits with status 75;
+  KeepAlive starts the new binary. FAIRSPOKEN_HOST_SERVICE tells the host a
+  service manager will restart it. The replaced binary is kept next to it as
+  transcription-host.previous for a manual rollback.
 -->
 <plist version="1.0">
 <dict>
@@ -19,9 +27,12 @@
     <string>127.0.0.1:48173</string>
     <key>FAIRSPOKEN_HOST_TOKEN</key>
     <string>__TOKEN__</string>
+    <key>FAIRSPOKEN_HOST_SERVICE</key>
+    <string>launchd</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
+  <!-- Restart on every exit, including the update restart (status 75). -->
   <key>KeepAlive</key>
   <true/>
   <key>ProcessType</key>

@@ -84,6 +84,7 @@ still accept the former `MULTIVOICE_HOST_*` names when the new ones are unset.
 | `stream` | Streamed transcription with zero-count frames, release-to-text latency (median of three real-time runs), 48 kHz frames, and the error statuses: rate change 413, bad rate / oversized frame / truncated body 4xx, empty 400, over-duration 413, aborted upload (job ends with `Stream upload aborted`, host keeps serving). |
 | `capacity` | 429 past `maxActiveStreams`; 429 plus `job_failed` (worker `null`, `Transcription queue is full`) when every worker is busy and the queue is full, for a stream and a batch upload. |
 | `download` | 400 for unknown models and bad bodies; re-requesting an installed model answers 202 and ends in a `ready` event; 409 for a concurrent request when the first is still running. |
+| `update` | Optional self-updater (`/v1/update…`; skipped when the host answers 404): 401 on every update route without a token or with `?token=` on POST, the status shape and its consistency with `/v1/health`, 4xx for bad settings with nothing changed, 409 for a restart with nothing installed. Never checks, installs or restarts. |
 | `events.audit` | One subscriber held for the whole run: every frame well formed, every job has exactly one terminal event, `worker_state` only on change, no transcript text, and the snapshot plus every event matches the final `/v1/stats`. |
 
 ## Checks that need a model

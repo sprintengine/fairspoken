@@ -18,6 +18,7 @@ import batch from './checks/batch.mjs';
 import stream from './checks/stream.mjs';
 import capacity from './checks/capacity.mjs';
 import download from './checks/download.mjs';
+import update from './checks/update.mjs';
 import audit from './checks/audit.mjs';
 
 const byName = (list, ...names) => names.map((n) => list.find((c) => c.name === n));
@@ -54,6 +55,7 @@ const CHECKS = [
   eventsBatch,
   ...capacity,
   ...download,
+  ...update,
   ...audit,
 ];
 

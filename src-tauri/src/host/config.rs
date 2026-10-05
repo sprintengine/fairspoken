@@ -1,3 +1,4 @@
+use super::update::UpdatePrefs;
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -102,6 +103,10 @@ pub(super) struct PersistedHostConfig {
     pub(super) max_recording_seconds: u16,
     pub(super) use_gpu: bool,
     pub(super) worker_models: Vec<SttModel>,
+    /// `updateChannel` / `autoUpdate`, edited from the dashboard's Updates
+    /// panel or `--set-update-channel`.
+    #[serde(flatten)]
+    pub(super) update: UpdatePrefs,
 }
 
 pub(super) fn default_host_config_path() -> PathBuf {
@@ -178,17 +183,27 @@ pub(super) fn overlay_persisted_config(
 }
 
 pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<(), String> {
-    let persisted = PersistedHostConfig {
-        max_active_streams: live.max_active_streams(),
-        max_recording_seconds: live.max_recording_seconds(),
-        use_gpu: live.use_gpu(),
-        worker_models: live.worker_models(),
-    };
+    write_persisted_config(
+        path,
+        &PersistedHostConfig {
+            max_active_streams: live.max_active_streams(),
+            max_recording_seconds: live.max_recording_seconds(),
+            use_gpu: live.use_gpu(),
+            worker_models: live.worker_models(),
+            update: live.update_prefs(),
+        },
+    )
+}
+
+pub(super) fn write_persisted_config(
+    path: &Path,
+    persisted: &PersistedHostConfig,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("Failed to create host config directory: {err}"))?;
     }
-    let payload = serde_json::to_string_pretty(&persisted)
+    let payload = serde_json::to_string_pretty(persisted)
         .map_err(|err| format!("Failed to serialize host config: {err}"))?;
     fs::write(path, payload).map_err(|err| format!("Failed to write host config: {err}"))
 }
@@ -202,6 +217,7 @@ pub(super) struct HostLiveConfig {
     pub(super) max_recording_seconds: AtomicU32,
     pub(super) use_gpu: AtomicBool,
     worker_models: Mutex<Vec<SttModel>>,
+    update_prefs: Mutex<UpdatePrefs>,
 }
 
 impl HostLiveConfig {
@@ -211,7 +227,22 @@ impl HostLiveConfig {
             max_recording_seconds: AtomicU32::new(u32::from(config.max_recording_seconds)),
             use_gpu: AtomicBool::new(config.use_gpu),
             worker_models: Mutex::new(config.worker_models.clone()),
+            update_prefs: Mutex::new(UpdatePrefs::default()),
         }
+    }
+
+    pub(super) fn update_prefs(&self) -> UpdatePrefs {
+        self.update_prefs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(super) fn set_update_prefs(&self, prefs: UpdatePrefs) {
+        *self
+            .update_prefs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = prefs;
     }
 
     pub(super) fn max_active_streams(&self) -> u32 {

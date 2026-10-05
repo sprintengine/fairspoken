@@ -1,6 +1,8 @@
 mod catalog;
+mod cli;
 mod config;
 mod events;
+mod update;
 
 use crate::audio::{AudioFrame, Recording};
 use crate::models::{ModelService, SttModel};
@@ -31,6 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{HTTPVersion, Header, Method, Request, Response, Server, StatusCode};
+use update::{UpdateSettingsRequest, Updater, UpdaterOptions, RESTARTED_ENV};
 
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DASHBOARD_HTML: &str = include_str!("dashboard.html");
@@ -46,6 +49,25 @@ const WORKER_IDLE_POLL: Duration = Duration::from_millis(250);
 
 pub fn run_transcription_host() -> Result<(), String> {
     crate::app_dirs::migrate_legacy_dirs();
+    let args: Vec<String> = env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    match cli::parse_args(&args) {
+        Ok(cli::HostCommand::Serve) => {}
+        Ok(command) => {
+            let code = cli::run(command)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            return Ok(());
+        }
+        Err(message) => {
+            eprintln!("{message}\n\n{}", cli::USAGE);
+            std::process::exit(2);
+        }
+    }
+
     let addr = crate::app_dirs::env_var("FAIRSPOKEN_HOST_ADDR")
         .unwrap_or_else(|| "127.0.0.1:48173".to_string());
     let token = crate::app_dirs::env_var("FAIRSPOKEN_HOST_TOKEN");
@@ -53,12 +75,17 @@ pub fn run_transcription_host() -> Result<(), String> {
     // Dashboard edits are the durable configuration; the environment only
     // seeds the first boot (or a deleted config file).
     let config_path = default_host_config_path();
-    if let Some(persisted) = load_persisted_config(&config_path)? {
+    let persisted = load_persisted_config(&config_path)?;
+    let update_prefs = persisted
+        .as_ref()
+        .map(|persisted| persisted.update.clone())
+        .unwrap_or_default();
+    if let Some(persisted) = persisted {
         overlay_persisted_config(&mut config, persisted);
     }
-    let server = Server::http(&addr)
-        .map_err(|err| format!("Failed to start transcription host on {addr}: {err}"))?;
-    println!("Fairspoken transcription host listening on http://{addr}");
+    let update_options = UpdaterOptions::from_env(SERVER_VERSION)?;
+    let server = bind_server(&addr)?;
+    println!("Fairspoken transcription host {SERVER_VERSION} listening on http://{addr}");
 
     let models = ModelService::default();
     let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
@@ -68,6 +95,37 @@ pub fn run_transcription_host() -> Result<(), String> {
         Arc::clone(&metrics),
         config_path,
     )?);
+    runtime.live.set_update_prefs(update_prefs);
+
+    let idle_metrics = Arc::clone(&metrics);
+    let updater = Arc::new(Updater::new(
+        update_options,
+        Arc::clone(&runtime.live),
+        runtime.config_path.clone(),
+        Box::new(move || {
+            idle_metrics
+                .lock()
+                .map(|metrics| metrics.is_idle())
+                .unwrap_or(true)
+        }),
+    ));
+    let update_status = updater.status();
+    println!(
+        "Updates: {} channel ({:?}), automatic checks {}, auto-install {}",
+        update_status.channel.as_str(),
+        update_status.channel_source,
+        if update_status.checks_enabled {
+            "on"
+        } else {
+            "off"
+        },
+        if update_status.auto_update {
+            "on"
+        } else {
+            "off"
+        },
+    );
+    updater.spawn_periodic_checks();
 
     for request in server.incoming_requests() {
         let response = handle_request(
@@ -75,6 +133,7 @@ pub fn run_transcription_host() -> Result<(), String> {
             token.as_deref(),
             Arc::clone(&runtime),
             Arc::clone(&metrics),
+            &updater,
             &addr,
         );
         if let Err(err) = response {
@@ -85,11 +144,32 @@ pub fn run_transcription_host() -> Result<(), String> {
     Ok(())
 }
 
+/// A host re-executed after an update may start before the old process has
+/// released the port (Windows); it retries briefly instead of failing.
+fn bind_server(addr: &str) -> Result<Server, String> {
+    let deadline = crate::app_dirs::env_var_os(RESTARTED_ENV)
+        .map(|_| Instant::now() + Duration::from_secs(15));
+    loop {
+        match Server::http(addr) {
+            Ok(server) => return Ok(server),
+            Err(_) if deadline.is_some_and(|deadline| Instant::now() < deadline) => {
+                thread::sleep(Duration::from_millis(250));
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Failed to start transcription host on {addr}: {err}"
+                ))
+            }
+        }
+    }
+}
+
 fn handle_request(
     request: Request,
     token: Option<&str>,
     runtime: Arc<HostRuntime>,
     metrics: Arc<Mutex<HostMetrics>>,
+    updater: &Arc<Updater>,
     bind_addr: &str,
 ) -> Result<(), String> {
     let path = request_path(request.url());
@@ -141,6 +221,20 @@ fn handle_request(
         (&Method::Get, "/v1/events") => spawn_event_stream(request, runtime, bind_addr),
         (&Method::Post, "/v1/config") => handle_config_update(request, runtime),
         (&Method::Post, "/v1/models/download") => handle_model_download(request, runtime),
+        (&Method::Get, "/v1/update") => respond_update_status(request, StatusCode(200), updater),
+        (&Method::Post, "/v1/update/check") => match updater.begin_check(false) {
+            Ok(()) => respond_update_status(request, StatusCode(202), updater),
+            Err(message) => respond_error(request, StatusCode(409), &message),
+        },
+        (&Method::Post, "/v1/update/install") => match updater.begin_install(false) {
+            Ok(()) => respond_update_status(request, StatusCode(202), updater),
+            Err(message) => respond_error(request, StatusCode(409), &message),
+        },
+        (&Method::Post, "/v1/update/restart") => match updater.begin_restart() {
+            Ok(()) => respond_update_status(request, StatusCode(202), updater),
+            Err(message) => respond_error(request, StatusCode(409), &message),
+        },
+        (&Method::Post, "/v1/update/settings") => handle_update_settings(request, updater),
         (&Method::Post, "/v1/transcriptions") => {
             spawn_transcription_request(request, runtime, TranscriptionRequestKind::Batch)
         }
@@ -401,6 +495,42 @@ fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Resu
     })
     .to_string();
     respond_json(request, StatusCode(200), body)
+}
+
+fn respond_update_status(
+    request: Request,
+    status: StatusCode,
+    updater: &Updater,
+) -> Result<(), String> {
+    let body = serde_json::to_string(&updater.status())
+        .map_err(|err| format!("Failed to serialize update status: {err}"))?;
+    respond_json(request, status, body)
+}
+
+fn handle_update_settings(mut request: Request, updater: &Arc<Updater>) -> Result<(), String> {
+    let body = match read_limited_body(&mut request.as_reader(), MAX_CONFIG_BODY_BYTES) {
+        Ok(body) => body,
+        Err(err) => return respond_error(request, StatusCode(413), &err),
+    };
+    let settings: UpdateSettingsRequest = match serde_json::from_slice(&body) {
+        Ok(settings) => settings,
+        Err(err) => {
+            return respond_error(
+                request,
+                StatusCode(400),
+                &format!("Invalid update settings: {err}"),
+            )
+        }
+    };
+    if let Err(message) = updater.apply_settings(&settings) {
+        let status = if message.starts_with("Saving") {
+            500
+        } else {
+            400
+        };
+        return respond_error(request, StatusCode(status), &message);
+    }
+    respond_update_status(request, StatusCode(200), updater)
 }
 
 #[derive(Deserialize)]
@@ -1550,6 +1680,11 @@ impl HostMetrics {
 
     fn running_job_count(&self) -> u32 {
         self.workers.iter().filter(|w| w.job.is_some()).count() as u32
+    }
+
+    /// Nothing streaming, queued or running: safe to restart for an update.
+    fn is_idle(&self) -> bool {
+        self.active_streams.is_empty() && self.queued.is_empty() && self.running_job_count() == 0
     }
 
     fn begin_stream(&mut self, client: Option<String>) -> u64 {
@@ -2796,6 +2931,7 @@ mod tests {
                 use_gpu: false,
                 // Written when the host ran three workers; now it runs two.
                 worker_models: vec![SttModel::Parakeet, SttModel::Parakeet, SttModel::Parakeet],
+                update: Default::default(),
             },
         );
         assert_eq!(config.max_active_streams, 32);
@@ -3097,6 +3233,7 @@ mod tests {
         let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
         let (job_tx, _job_rx) = mpsc::sync_channel(1);
         let runtime = Arc::new(test_runtime(config, job_tx, Arc::clone(&metrics)));
+        let updater = test_updater(&runtime, "0.2.0", "http://127.0.0.1:9/");
         let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
         let addr = server.server_addr().to_ip().expect("ip address");
         let accept_metrics = Arc::clone(&metrics);
@@ -3107,6 +3244,7 @@ mod tests {
                 Some("secret"),
                 runtime,
                 accept_metrics,
+                &updater,
                 "127.0.0.1:0",
             )
             .expect("handled");
@@ -3176,8 +3314,14 @@ mod tests {
             super::settings_from_headers(&request)
         };
 
-        assert_eq!(parse("x-fairspoken-language: de\r\n").unwrap().language, "de");
-        assert_eq!(parse("x-multivoice-language: fr\r\n").unwrap().language, "fr");
+        assert_eq!(
+            parse("x-fairspoken-language: de\r\n").unwrap().language,
+            "de"
+        );
+        assert_eq!(
+            parse("x-multivoice-language: fr\r\n").unwrap().language,
+            "fr"
+        );
         assert_eq!(
             parse("x-multivoice-language: fr\r\nx-fairspoken-language: de\r\n")
                 .unwrap()
@@ -3187,5 +3331,278 @@ mod tests {
         assert!(parse("x-fairspoken-backend: nonsense\r\n").is_err());
         assert!(parse("x-multivoice-backend: nonsense\r\n").is_err());
         assert_eq!(parse("").unwrap().language, "en");
+    }
+
+    fn test_updater(
+        runtime: &HostRuntime,
+        current_version: &str,
+        feed_base: &str,
+    ) -> Arc<super::Updater> {
+        test_updater_with(
+            runtime,
+            current_version,
+            feed_base,
+            super::update::UPDATER_PUBLIC_KEY,
+            std::env::temp_dir().join("transcription-host-never-replaced"),
+        )
+    }
+
+    fn test_updater_with(
+        runtime: &HostRuntime,
+        current_version: &str,
+        feed_base: &str,
+        public_key: &str,
+        exe_path: std::path::PathBuf,
+    ) -> Arc<super::Updater> {
+        Arc::new(super::Updater::new(
+            super::UpdaterOptions {
+                current_version: current_version.to_string(),
+                feed_base: feed_base.to_string(),
+                public_key: public_key.to_string(),
+                exe_path,
+                restart_mode: super::update::RestartMode::Reexec,
+                checks_enabled: false,
+                env_channel: None,
+            },
+            Arc::clone(&runtime.live),
+            runtime.config_path.clone(),
+            Box::new(|| true),
+        ))
+    }
+
+    fn updater_runtime(config_path: std::path::PathBuf) -> HostRuntime {
+        let config = test_config();
+        let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
+        let (job_tx, _job_rx) = mpsc::sync_channel(1);
+        let mut runtime = test_runtime(config, job_tx, metrics);
+        runtime.config_path = config_path;
+        runtime
+    }
+
+    /// Serves files from `routes` (path → body) until the test ends.
+    fn serve_files(routes: Vec<(String, Vec<u8>)>) -> String {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind feed");
+        let addr = server.server_addr().to_ip().expect("ip address");
+        thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let found = routes
+                    .iter()
+                    .find(|(path, _)| path == request.url())
+                    .map(|(_, body)| body.clone());
+                let _ = match found {
+                    Some(body) => request.respond(tiny_http::Response::from_data(body)),
+                    None => request
+                        .respond(tiny_http::Response::from_string("missing").with_status_code(404)),
+                };
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    fn wait_for_state(
+        updater: &super::Updater,
+        busy: &[super::update::UpdatePhase],
+    ) -> super::update::UpdateStatus {
+        let started = Instant::now();
+        loop {
+            let status = updater.status();
+            if !busy.contains(&status.state) {
+                return status;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "updater stuck in {:?}",
+                status.state
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn host_manifest(version: &str, channel: &str, asset: serde_json::Value) -> Vec<u8> {
+        let platform = super::update::current_platform_key().unwrap_or("linux-x86_64");
+        serde_json::json!({
+            "version": version,
+            "channel": channel,
+            "pub_date": "2026-10-05T12:00:00Z",
+            "notes": format!("https://github.com/sprintengine/fairspoken/releases/tag/v{version}"),
+            "platforms": { platform: asset },
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn update_settings_persist_and_resolve_the_channel() {
+        use super::update::{ChannelSource, UpdateChannel, UpdateSettingsRequest};
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = updater_runtime(dir.path().join("host-config.json"));
+        let updater = test_updater(&runtime, "0.3.0-nightly.20261005.4", "http://127.0.0.1:9/");
+
+        let status = updater.status();
+        assert_eq!(status.channel, UpdateChannel::Nightly);
+        assert_eq!(status.channel_source, ChannelSource::Version);
+        assert!(!status.auto_update);
+
+        let settings: UpdateSettingsRequest =
+            serde_json::from_str(r#"{"channel":"stable","autoUpdate":true}"#).unwrap();
+        updater.apply_settings(&settings).expect("settings apply");
+        let status = updater.status();
+        assert_eq!(status.channel, UpdateChannel::Stable);
+        assert_eq!(status.channel_source, ChannelSource::Saved);
+        assert!(status.auto_update);
+
+        let persisted = super::load_persisted_config(&runtime.config_path)
+            .unwrap()
+            .expect("saved");
+        assert_eq!(persisted.update.update_channel, Some(UpdateChannel::Stable));
+        assert!(persisted.update.auto_update);
+        // The dashboard configuration is saved alongside, unchanged.
+        assert_eq!(persisted.max_active_streams, 1);
+
+        // A config edit keeps the update settings.
+        super::persist_live_config(&runtime.config_path, &runtime.live).unwrap();
+        let persisted = super::load_persisted_config(&runtime.config_path)
+            .unwrap()
+            .unwrap();
+        assert!(persisted.update.auto_update);
+
+        let bad: UpdateSettingsRequest = serde_json::from_str(r#"{"channel":"beta"}"#).unwrap();
+        assert!(updater.apply_settings(&bad).is_err());
+        assert_eq!(updater.status().channel, UpdateChannel::Stable);
+
+        // null follows the running version again.
+        let follow: UpdateSettingsRequest = serde_json::from_str(r#"{"channel":null}"#).unwrap();
+        updater.apply_settings(&follow).unwrap();
+        assert_eq!(updater.status().channel_source, ChannelSource::Version);
+        let _ = wait_for_state(&updater, &[super::update::UpdatePhase::Checking]);
+    }
+
+    #[test]
+    fn update_check_reads_the_channel_feed_and_offers_switch_to_stable() {
+        use super::update::UpdatePhase;
+        let asset = serde_json::json!({
+            "url": "https://example.test/h.tar.gz",
+            "sha256": "a".repeat(64),
+            "signature": "c2ln",
+            "format": "tar.gz",
+        });
+        let feed = serve_files(vec![
+            (
+                "/host-stable.json".to_string(),
+                host_manifest("0.2.0", "stable", asset.clone()),
+            ),
+            (
+                "/host-nightly.json".to_string(),
+                host_manifest("0.3.0-nightly.20261005.4", "nightly", asset),
+            ),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+
+        // A stable build on the stable feed: up to date.
+        let runtime = updater_runtime(dir.path().join("a.json"));
+        let updater = test_updater(&runtime, "0.2.0", &feed);
+        updater.begin_check(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Checking]);
+        assert_eq!(status.state, UpdatePhase::Idle, "{:?}", status.error);
+        assert!(status.last_checked_ms.is_some());
+
+        // A nightly build switched to stable: the lower stable is offered.
+        let runtime = updater_runtime(dir.path().join("b.json"));
+        runtime.live.set_update_prefs(super::update::UpdatePrefs {
+            update_channel: Some(super::update::UpdateChannel::Stable),
+            auto_update: false,
+        });
+        let updater = test_updater(&runtime, "0.2.1-nightly.20261001.1", &feed);
+        updater.begin_check(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Checking]);
+        assert_eq!(status.state, UpdatePhase::Available, "{:?}", status.error);
+        let available = status.available.expect("offer");
+        assert_eq!(available.version, "0.2.0");
+        assert!(available.switch_to_stable);
+
+        // A stable build on the nightly channel gets the nightly.
+        let runtime = updater_runtime(dir.path().join("c.json"));
+        runtime.live.set_update_prefs(super::update::UpdatePrefs {
+            update_channel: Some(super::update::UpdateChannel::Nightly),
+            auto_update: false,
+        });
+        let updater = test_updater(&runtime, "0.2.0", &feed);
+        updater.begin_check(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Checking]);
+        assert_eq!(
+            status.available.map(|update| update.version).as_deref(),
+            Some("0.3.0-nightly.20261005.4")
+        );
+
+        // No feed published yet (404 before the first release): up to date.
+        let runtime = updater_runtime(dir.path().join("e.json"));
+        let updater = test_updater(&runtime, "0.2.0", &serve_files(Vec::new()));
+        updater.begin_check(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Checking]);
+        assert_eq!(status.state, UpdatePhase::Idle, "{:?}", status.error);
+        assert!(status.available.is_none() && status.error.is_none());
+
+        // Nothing to install yet → install refuses; a dead feed is an error.
+        let runtime = updater_runtime(dir.path().join("d.json"));
+        let updater = test_updater(&runtime, "0.2.0", "http://127.0.0.1:9/");
+        assert!(updater.begin_install(false).is_err());
+        updater.begin_check(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Checking]);
+        assert_eq!(status.state, UpdatePhase::Error);
+        assert!(status.error.is_some());
+        assert!(updater.begin_restart().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_installs_end_to_end_from_a_local_feed() {
+        use super::update::test_support::{script, sha256_hex, sign, tar_gz, test_key};
+        use super::update::UpdatePhase;
+        let key = test_key();
+        let archive = tar_gz(&[
+            (
+                "fairspoken-0.3.0-transcription-host-linux-x64/LICENSE",
+                b"mit",
+            ),
+            (
+                "fairspoken-0.3.0-transcription-host-linux-x64/transcription-host",
+                &script("0.3.0", true),
+            ),
+        ]);
+        let base = serve_files(vec![("/h.tar.gz".to_string(), archive.clone())]);
+        let asset = serde_json::json!({
+            "url": format!("{base}h.tar.gz"),
+            "sha256": sha256_hex(&archive),
+            "signature": sign(&key, &archive),
+            "format": "tar.gz",
+        });
+        let feed = serve_files(vec![(
+            "/host-stable.json".to_string(),
+            host_manifest("0.3.0", "stable", asset),
+        )]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("transcription-host");
+        std::fs::write(&exe, script("0.2.0", true)).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let runtime = updater_runtime(dir.path().join("host-config.json"));
+        let updater = test_updater_with(&runtime, "0.2.0", &feed, &key.public_base64, exe.clone());
+
+        updater.begin_check(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Checking]);
+        assert_eq!(status.state, UpdatePhase::Available, "{:?}", status.error);
+        updater.begin_install(false).unwrap();
+        let status = wait_for_state(&updater, &[UpdatePhase::Downloading]);
+        assert_eq!(status.state, UpdatePhase::Ready, "{:?}", status.error);
+        assert_eq!(status.installed_version.as_deref(), Some("0.3.0"));
+        super::update::smoke_check(&exe, "0.3.0").expect("new binary installed");
+        super::update::smoke_check(&dir.path().join("transcription-host.previous"), "0.2.0")
+            .expect("previous kept");
+        // Ready: a further check or install is refused until the restart.
+        assert!(updater.begin_check(false).is_err());
+        assert!(updater.begin_install(false).is_err());
     }
 }
