@@ -37,6 +37,8 @@ elsewhere are `{"error": "<message>"}` with a 4xx/5xx status.
 | POST | `/v1/models/download` | Install a model on the host |
 | POST | `/v1/transcriptions` | Transcribe a complete WAV upload |
 | POST | `/v1/transcriptions/stream` | Transcribe PCM frames while the client speaks |
+| GET | `/v1/update` | Self-update status (optional, below) |
+| POST | `/v1/update/check`, `/v1/update/install`, `/v1/update/restart`, `/v1/update/settings` | Drive the self-updater (optional) |
 
 ### POST /v1/transcriptions
 
@@ -81,6 +83,61 @@ workerModels}`. Worker count and queue capacity are restart-only.
 Body `{"model": "<id>"}`. Answers `202 {model, status: "downloading"}`;
 `409` if a download is already running. Progress appears as
 `modelDownload` in `/v1/stats` and as `model_download` events.
+
+### Self-update (optional): /v1/update…
+
+Implemented by the standalone Rust host, which updates itself from the
+`host-<channel>.json` feeds. A host updated some other way (the Swift host
+ships inside a Sparkle-updated Mac app) answers `404` and the dashboard hides
+its update controls. All routes need the token like any other.
+
+`GET /v1/update`:
+
+```jsonc
+{
+  "currentVersion": "0.2.0",
+  "channel": "stable",            // stable | nightly
+  "channelSource": "version",     // env (FAIRSPOKEN_HOST_UPDATE_CHANNEL) | saved | version
+  "defaultChannel": "stable",     // derived from currentVersion
+  "autoUpdate": false,
+  "checksEnabled": true,          // false with FAIRSPOKEN_HOST_UPDATE_CHECKS=0
+  "platform": "linux-x86_64",     // the feed's platform key, null if unpublished
+  "state": "available",           // idle | checking | available | downloading | ready | restarting | error
+  "available": {                  // null unless an update is offered
+    "version": "0.3.0", "channel": "stable",
+    "notes": "https://github.com/…/releases/tag/v0.3.0", "pubDate": "2026-10-05T12:00:00Z",
+    "switchToStable": false       // true: nightly build on the stable channel, offered a lower stable
+  },
+  "progress": null,               // {downloadedBytes, totalBytes|null, percentage|null} while downloading
+  "error": null,
+  "lastCheckedMs": 1791200000000, // null before the first check
+  "installedVersion": null,       // set in "ready"
+  "restartMode": "service"        // service: exit 75 for launchd/systemd; reexec: re-executes itself
+}
+```
+
+- `POST /v1/update/check` starts a check: `202` + status (`state:
+  "checking"`); `409` while installing or when an update awaits a restart.
+- `POST /v1/update/install` downloads, verifies (sha256 and minisign) and
+  installs the offered update: `202` + status (`downloading`, then `ready` or
+  `error`); `409` with nothing offered or while busy.
+- `POST /v1/update/restart` restarts into the installed update once in-flight
+  work has finished (at most 60 s): `202` + status (`restarting`); `409`
+  unless `ready`. The connection drops; poll `GET /v1/health` until
+  `serverVersion` changes.
+- `POST /v1/update/settings` body `{channel?: "stable" | "nightly" | null,
+  autoUpdate?: bool}` (`deny_unknown_fields`; `null` follows the running
+  version). Persists to the host config file as `updateChannel` /
+  `autoUpdate`, answers `200` + status, `400` for invalid values. A channel
+  change starts a check.
+
+A feed that does not exist yet (404: `host-stable.json` appears with the
+first stable release, `host-nightly.json` with the first nightly) counts as
+up to date, not as an error. The host binary is found in the archive by file
+name (`transcription-host`, `transcription-host.exe` on Windows) at any depth.
+The host checks ~30 s after start and every 6 h. A check only records the
+offer; it installs on its own only with `autoUpdate`, and then restarts
+when no stream, queued or running job remains.
 
 ### GET /v1/stats
 

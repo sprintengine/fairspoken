@@ -1,5 +1,12 @@
 # Runs the Fairspoken transcription host as a systemd user service.
 # Install: see "Running the host on a Tailscale network" in README.md.
+#
+# Updates: the host updates itself in place (dashboard -> Updates, or
+# `transcription-host --update`), so the binary must be writable by the user
+# the service runs as (~/.local/bin is). After installing an update it exits
+# with status 75 and Restart= starts the new binary. FAIRSPOKEN_HOST_SERVICE
+# tells the host a service manager will restart it. The replaced binary is
+# kept as ~/.local/bin/transcription-host.previous for a manual rollback.
 [Unit]
 Description=Fairspoken transcription host
 Wants=network-online.target
@@ -8,8 +15,12 @@ After=network-online.target
 [Service]
 ExecStart=%h/.local/bin/transcription-host
 Environment=FAIRSPOKEN_HOST_ADDR=127.0.0.1:48173
+Environment=FAIRSPOKEN_HOST_SERVICE=systemd
 EnvironmentFile=%h/.config/fairspoken/host.env
+# on-failure covers the update restart (exit status 75); listing it keeps the
+# update restart working if Restart= is ever narrowed.
 Restart=on-failure
+RestartForceExitStatus=75
 RestartSec=2
 
 [Install]

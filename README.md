@@ -155,6 +155,42 @@ To keep the host running across logins and reboots:
   `systemctl --user enable --now fairspoken-transcription-host` (and
   `loginctl enable-linger $USER` to start it without logging in).
 
+### Updating the host
+
+A host installed from a release archive updates itself. About 30 seconds
+after it starts, and every 6 hours, it reads the update feed for its channel
+and records whether a newer build exists; it does not install anything on
+its own unless you turn on **Install updates automatically**. The dashboard
+shows an update button in its top bar and an **Updates** panel (version,
+Stable/Nightly channel, last check, automatic install). From a shell:
+
+```bash
+transcription-host --check-update               # exit 0: up to date, 10: update available
+transcription-host --update                     # asks before installing; --yes skips the question
+transcription-host --update --channel nightly   # also saves the channel
+transcription-host --set-update-channel stable
+transcription-host --version
+```
+
+The channel defaults to the one the running build came from (nightly builds
+follow nightlies). A saved choice overrides that, and
+`FAIRSPOKEN_HOST_UPDATE_CHANNEL=stable|nightly` overrides both. A nightly
+host switched to Stable is offered the latest stable release even though its
+version number is lower. `FAIRSPOKEN_HOST_UPDATE_CHECKS=0` turns the
+automatic checks off; `FAIRSPOKEN_HOST_UPDATE_FEED_URL` points them at a
+mirror of the feeds.
+
+Every update is checked against the sha256 in the feed and the release
+signing key built into the host before anything changes. The new binary must
+answer `--version` before it replaces the old one, the old one is kept next
+to it as `transcription-host.previous`, and it is restored automatically if
+the installed binary fails the same check. The host's folder must be writable
+by the user it runs as. After installing, the host restarts once in-flight
+dictations finish: under the packaged launchd agent or systemd unit it exits
+with status 75 and the service manager starts the new version; otherwise it
+restarts itself with the same arguments. An update installed with `--update`
+takes effect the next time the host starts.
+
 ## Privacy
 
 - **Local mode** (the default): audio and text stay on your computer.
