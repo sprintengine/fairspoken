@@ -432,9 +432,16 @@ jobs:
           codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$identity" "$HOST_BINARY"
           codesign --verify --strict --verbose=2 "$HOST_BINARY"
           ditto -c -k "$HOST_BINARY" "$RUNNER_TEMP/host-notarize.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/host-notarize.zip" --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 45m --output-format json > "$RUNNER_TEMP/host-notarize.json" || true
+          # No submission id means the upload itself failed (Apple's 5xx); retry
+          # that, but a verdict on a submission is final.
+          for attempt in 1 2 3; do
+            xcrun notarytool submit "$RUNNER_TEMP/host-notarize.zip" --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+              --wait --timeout 45m --output-format json > "$RUNNER_TEMP/host-notarize.json" || true
+            if plutil -extract id raw -o - "$RUNNER_TEMP/host-notarize.json" >/dev/null 2>&1 || [ "$attempt" = 3 ]; then break; fi
+            echo "The notary upload got no submission id (attempt $attempt of 3); retrying in $((attempt * 60)) s." >&2
+            sleep $((attempt * 60))
+          done
           status="$(plutil -extract status raw -o - "$RUNNER_TEMP/host-notarize.json" 2>/dev/null || echo "no answer")"
           security delete-keychain "$keychain"
           if [ "$status" != "Accepted" ]; then
