@@ -59,10 +59,12 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust build outputs
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
 
@@ -79,6 +81,11 @@ jobs:
 
       - name: Test release scripts
         run: npm run test:release
+
+      # scripts/test-*.mjs: the frontend logic tests that need only Node and
+      # TypeScript (the .cjs ones drive a browser against a dev server).
+      - name: Test frontend scripts
+        run: npm run test:scripts
 
       # --all-targets includes the transcription-host bin, so the host's
       # Linux x64 build is checked here too.
@@ -110,10 +117,12 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust build outputs
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
 
@@ -153,10 +162,12 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust build outputs
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
 
@@ -201,10 +212,12 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust build outputs
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
 
@@ -288,7 +301,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Check Rust dependency licenses
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: src-tauri/Cargo.toml
           command: check licenses
