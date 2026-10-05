@@ -32,6 +32,19 @@
 	<string>NSApplication</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 SprintEngine</string>
+	<!-- Sparkle 2 (Packages/FairspokenUpdates). One appcast holds both channels: nightly items carry
+	     <sparkle:channel>nightly</sparkle:channel>. Debug builds may override the feed with the
+	     FAIRSPOKEN_APPCAST_URL default (apps/macos/README.md › Updates). -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/sprintengine/fairspoken/releases/download/update-feeds/appcast-fairspoken.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>SPGwzOHQk1H5lvqePdjg11xTC8LT3/AX3kILlbOIxp0=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>21600</integer>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>$(MV_DISPLAY_NAME) listens only while you hold or toggle your dictation shortcut, and turns your speech into text on this Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>

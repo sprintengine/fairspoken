@@ -4,6 +4,9 @@
 # Two apps share the packages under Packages/:
 #   Fairspoken        → Fairspoken.app         (dictation client, ie.fairspoken.mac)
 #   FairspokenServer  → Fairspoken Server.app  (transcription server, ie.fairspoken.server)
+#
+# Both update with Sparkle 2 (Packages/FairspokenUpdates). CFBundleVersion is CURRENT_PROJECT_VERSION
+# (Config/Base.xcconfig); releases set it to the UTC build timestamp YYYYMMDDHHMM.
 name: Fairspoken
 options:
   deploymentTarget:
@@ -20,6 +23,10 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: 1.10.0
+  # In-app updates (both apps). Keep in step with Packages/FairspokenUpdates/Package.swift.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.0
   FairspokenCore:
     path: Packages/FairspokenCore
   FairspokenSpeech:
@@ -28,6 +35,8 @@ packages:
     path: Packages/FairspokenUI
   FairspokenHost:
     path: Packages/FairspokenHost
+  FairspokenUpdates:
+    path: Packages/FairspokenUpdates
 targets:
   Fairspoken:
     type: application
@@ -41,6 +50,19 @@ targets:
       - package: FairspokenCore
       - package: FairspokenSpeech
       - package: FairspokenUI
+      - package: FairspokenUpdates
+      - package: Sparkle
+    settings:
+      # The Sparkle signing phase rewrites the embedded framework in place.
+      ENABLE_USER_SCRIPT_SANDBOXING: NO
+    postBuildScripts:
+      - name: Sign Sparkle helpers
+        script: '"${SRCROOT}/scripts/sign-sparkle.sh"'
+        basedOnDependencyAnalysis: false
+        # The input orders this after Xcode embeds the package's framework (that copy is not a
+        # build phase, so without it the two can run in parallel).
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Sparkle.framework
   FairspokenServer:
     type: application
     platform: macOS
@@ -61,6 +83,16 @@ targets:
       - package: FairspokenSpeech
       - package: FairspokenUI
       - package: FairspokenHost
+      - package: FairspokenUpdates
+      - package: Sparkle
+    settings:
+      ENABLE_USER_SCRIPT_SANDBOXING: NO
+    postBuildScripts:
+      - name: Sign Sparkle helpers
+        script: '"${SRCROOT}/scripts/sign-sparkle.sh"'
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Sparkle.framework
 schemes:
   Fairspoken:
     build:
@@ -72,6 +104,7 @@ schemes:
       config: Debug
       targets:
         - package: FairspokenCore/FairspokenCoreTests
+        - package: FairspokenUpdates/FairspokenUpdateModelTests
     archive:
       config: Release
   FairspokenServer:
@@ -86,5 +119,6 @@ schemes:
       config: Debug
       targets:
         - package: FairspokenHost/FairspokenHostTests
+        - package: FairspokenUpdates/FairspokenUpdateModelTests
     archive:
       config: Release
