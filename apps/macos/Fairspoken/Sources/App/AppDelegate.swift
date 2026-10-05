@@ -1,4 +1,5 @@
 import AppKit
+import FairspokenUpdates
 import OSLog
 
 @MainActor
@@ -59,6 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windows.showDashboard(.settings)
     }
 
+    /// App menu › Check for Updates…: opens the window so the answer (a toast) is visible.
+    @objc func checkForUpdates() {
+        windows.showDashboard()
+        model.updates.checkForUpdates()
+    }
+
     private static func buildMainMenu(target: AppDelegate) -> NSMenu {
         let main = NSMenu()
         let name = AppInfo.displayName
@@ -67,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let about = NSMenuItem(title: "About \(name)", action: #selector(showAbout), keyEquivalent: "")
         about.target = target
         appMenu.addItem(about)
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.target = target
+        appMenu.addItem(updates)
         appMenu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = target

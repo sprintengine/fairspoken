@@ -1,5 +1,6 @@
 import FairspokenUI
 import FairspokenCore
+import FairspokenUpdates
 import SwiftUI
 
 /// Main window: Liquid Glass sidebar (system NavigationSplitView) over an aurora backdrop
@@ -19,6 +20,7 @@ struct DashboardView: View {
                     .transition(.opacity)
             }
             .animation(.smooth(duration: 0.25), value: model.section)
+            .updateToast(model.updates, style: .client)
         }
         .frame(minWidth: 1080, minHeight: 740)
         .onAppear { if model.settings.settings.transcriptionLocation == .remoteHost { model.hostStatus.refresh() } }
@@ -28,9 +30,11 @@ struct DashboardView: View {
         List(selection: Binding<AppModel.Section?>(get: { model.section }, set: { if let s = $0 { model.section = s } })) {
             Section {
                 ForEach(AppModel.Section.allCases) { section in
+                    let updatePending = section == .settings && model.updates.isUpdatePending
                     Label(section.title, systemImage: section.symbol)
+                        .badge(updatePending ? 1 : 0)
                         .tag(section)
-                        .accessibilityLabel(section.title)
+                        .accessibilityLabel(updatePending ? "\(section.title), update available" : section.title)
                 }
             }
         }
@@ -46,8 +50,12 @@ struct DashboardView: View {
             .padding(.bottom, 8)
         }
         .safeAreaInset(edge: .bottom) {
-            SidebarStatus()
-                .padding(12)
+            VStack(spacing: 10) {
+                SidebarStatus()
+                UpdateSidebarButton(updates: model.updates, style: .client)
+                    .padding(.horizontal, 4)
+            }
+            .padding(12)
         }
     }
 
@@ -87,4 +95,9 @@ private struct SidebarStatus: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .accessibilityElement(children: .combine)
     }
+}
+
+extension UpdateStyle {
+    /// The client's teal look (Brand), amber for warnings.
+    static let client = UpdateStyle(accent: .mvTeal, warning: .mvAmber)
 }

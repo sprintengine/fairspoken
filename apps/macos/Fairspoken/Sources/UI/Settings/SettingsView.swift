@@ -1,12 +1,13 @@
 import FairspokenSpeech
 import FairspokenUI
+import FairspokenUpdates
 import KeyboardShortcuts
 import FairspokenCore
 import SwiftUI
 
 struct SettingsView: View {
     enum Tab: String, CaseIterable, Identifiable {
-        case general, shortcut, audio, transcription, vocabulary, about
+        case general, shortcut, audio, transcription, vocabulary, updates, about
         var id: String { rawValue }
         var title: String { rawValue.capitalized }
         var symbol: String {
@@ -16,6 +17,7 @@ struct SettingsView: View {
             case .audio: "mic"
             case .transcription: "waveform"
             case .vocabulary: "character.book.closed"
+            case .updates: "arrow.triangle.2.circlepath"
             case .about: "info.circle"
             }
         }
@@ -39,6 +41,7 @@ struct SettingsView: View {
                 case .audio: AudioSettings()
                 case .transcription: TranscriptionSettings()
                 case .vocabulary: VocabularySettings()
+                case .updates: Form { UpdateSettingsSection(updates: model.updates, style: .client) }
                 case .about: AboutSettings()
                 }
             }
@@ -58,6 +61,7 @@ struct SettingsView: View {
             HStack(spacing: 4) {
                 ForEach(Tab.allCases) { tab in
                     let selected = selection.wrappedValue == tab
+                    let badged = tab == .updates && model.updates.isUpdatePending
                     Button {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { selection.wrappedValue = tab }
                     } label: {
@@ -68,6 +72,12 @@ struct SettingsView: View {
                             .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
+                    .overlay(alignment: .topTrailing) {
+                        if badged {
+                            Circle().fill(Color.mvTeal).frame(width: 7, height: 7).offset(x: -6, y: 5).accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityLabel(badged ? "\(tab.title), update available" : tab.title)
                     .foregroundStyle(selected ? Color.primary : .secondary)
                     .glassEffect(selected ? .regular.tint(Color.mvTeal.opacity(0.22)).interactive() : .identity, in: .capsule)
                     .glassEffectID(tab, in: tabGlass)

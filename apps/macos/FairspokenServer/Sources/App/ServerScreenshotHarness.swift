@@ -1,4 +1,5 @@
 import FairspokenUI
+import FairspokenUpdates
 import AppKit
 import FairspokenHost
 import FairspokenCore
@@ -7,14 +8,17 @@ import SwiftUI
 /// `--screenshots <dir>`: renders every section in light and dark with the demo simulator,
 /// a sample configuration and sample addresses (no port is bound), captures the window's
 /// own pixels and quits. Capturing our own window needs no Screen Recording permission.
+/// `--screenshots <dir> --updates` captures the update UI instead (simulated states).
 @MainActor
 final class ServerScreenshotHarness {
     private let controller: ServerController
+    private let updates: UpdateController
     private let delegate: ServerAppDelegate
     private let output: URL
 
-    init(controller: ServerController, delegate: ServerAppDelegate, output: URL) {
+    init(controller: ServerController, updates: UpdateController, delegate: ServerAppDelegate, output: URL) {
         self.controller = controller
+        self.updates = updates
         self.delegate = delegate
         self.output = output
     }
@@ -32,6 +36,11 @@ final class ServerScreenshotHarness {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             try? await Task.sleep(for: .seconds(1))
+            if ServerInfo.arguments.contains("--updates") {
+                await updateShots()
+                NSApp.terminate(nil)
+                return
+            }
             for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
                 NSApp.appearance = NSAppearance(named: appearance)
                 for section in ServerController.Section.allCases {
@@ -43,6 +52,32 @@ final class ServerScreenshotHarness {
                 }
             }
             NSApp.terminate(nil)
+        }
+    }
+
+    /// Every update state on the sidebar button (Activity), the available toast, and
+    /// Configuration › Updates (the window made tall enough to show it).
+    private func updateShots() async {
+        for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+            NSApp.appearance = NSAppearance(named: appearance)
+            for name in UpdateState.sampleNames {
+                guard let state = UpdateState.sample(named: name) else { continue }
+                updates.simulate(state, toast: name == "available")
+                delegate.showWindow(.clients)
+                try? await Task.sleep(for: .milliseconds(900))
+                await freshFrame()
+                if let window = delegate.mainWindow { capture(window, as: "update-\(name)-\(suffix)") }
+                updates.dismissToast()
+            }
+            updates.simulate(.ready(version: "0.3.0"))
+            delegate.showWindow(.configuration)
+            guard let window = delegate.mainWindow else { continue }
+            let frame = window.frame
+            window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 1900, width: frame.width, height: 1900), display: true)
+            try? await Task.sleep(for: .milliseconds(1200))
+            await freshFrame()
+            capture(window, as: "configuration-updates-\(suffix)")
+            window.setFrame(frame, display: true)
         }
     }
 

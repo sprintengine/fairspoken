@@ -1,4 +1,5 @@
 import FairspokenSpeech
+import FairspokenUpdates
 import AppKit
 import FairspokenCore
 import Observation
@@ -34,6 +35,7 @@ final class AppModel {
     let models: ModelLibrary
     let dictation: DictationController
     let hostStatus: HostStatus
+    let updates: UpdateController
     @ObservationIgnored let hotkeys: HotkeyController
 
     @ObservationIgnored var openDashboard: ((Section?) -> Void)?
@@ -46,6 +48,11 @@ final class AppModel {
         models = ModelLibrary()
         dictation = DictationController(settings: settings, models: models, history: history, permissions: permissions)
         hostStatus = HostStatus(settings: settings)
+        var updateConfig = UpdateController.Configuration(appName: AppInfo.displayName, version: AppInfo.version, build: AppInfo.build)
+        #if DEBUG
+        updateConfig.feedOverride = UpdateController.Configuration.debugFeedOverride()
+        #endif
+        updates = UpdateController(configuration: updateConfig)
         hotkeys = HotkeyController()
         dictation.hotkeys = hotkeys
 
@@ -66,6 +73,12 @@ final class AppModel {
         }
         applyFnSetting()
         if settings.settings.transcriptionLocation == .remoteHost { hostStatus.refresh() }
+        #if DEBUG
+        // -FAIRSPOKEN_UPDATE_STATE available|checking|downloading|ready|error|idle shows that state
+        // without Sparkle (README › Updates).
+        if updates.simulateFromDefaults() { return }
+        #endif
+        updates.start()
     }
 
     func applyFnSetting() {

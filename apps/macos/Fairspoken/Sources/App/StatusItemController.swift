@@ -1,4 +1,5 @@
 import FairspokenUI
+import FairspokenUpdates
 import AppKit
 import FairspokenCore
 
@@ -10,6 +11,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let windows: WindowCoordinator
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "Start Dictation", action: #selector(toggleDictation), keyEquivalent: "")
+    private let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(updateAction), keyEquivalent: "")
 
     init(model: AppModel, windows: WindowCoordinator) {
         self.model = model
@@ -29,6 +31,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(entry("Settings…", #selector(openSettings), ","))
         menu.addItem(.separator())
         menu.addItem(entry("Setup & Permissions…", #selector(openOnboarding), ""))
+        updateItem.target = self
+        menu.addItem(updateItem)
         menu.addItem(.separator())
         menu.addItem(entry("Quit \(AppInfo.displayName)", #selector(quit), "q"))
         item.menu = menu
@@ -61,6 +65,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let engine = remote ? "Your host" : "\(model.models.activeModel.shortName) · \(state.isReady ? "Ready" : state.label)"
         statusLine.title = "\(AppInfo.displayName) — \(engine)"
         toggleItem.title = model.dictation.phase.isListening ? "Stop Dictation" : "Start Dictation   \(HotkeyController.currentShortcutSymbols)"
+        let update = model.updates.presentation
+        updateItem.title = update.menuTitle
+        updateItem.setAccessibilityLabel(update.accessibilityLabel)
     }
 
     @objc private func toggleDictation() { model.dictation.toggleFromUI() }
@@ -68,5 +75,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func openModels() { windows.showDashboard(.models) }
     @objc private func openSettings() { windows.showDashboard(.settings) }
     @objc private func openOnboarding() { windows.showOnboarding() }
+    /// Check, install or restart, by state; the window shows the progress and the answer.
+    @objc private func updateAction() {
+        windows.showDashboard()
+        model.updates.performPrimaryAction()
+    }
     @objc private func quit() { NSApp.terminate(nil) }
+}
+
+extension StatusItemController: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem == updateItem ? model.updates.presentation.isEnabled : true
+    }
 }

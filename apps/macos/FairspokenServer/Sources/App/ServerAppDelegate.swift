@@ -1,32 +1,41 @@
 import FairspokenUI
 import FairspokenCore
 import FairspokenHost
+import FairspokenUpdates
 import AppKit
 import SwiftUI
 
 @MainActor
-final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSMenuItemValidation {
     private var controller: ServerController!
+    private var updates: UpdateController!
     private var window: NSWindow?
     private var statusItem: NSStatusItem?
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let addressLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "", action: #selector(toggleServing), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
+    private let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(updateAction), keyEquivalent: "")
     private var harness: ServerScreenshotHarness?
     private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         controller = ServerController()
+        var updateConfig = UpdateController.Configuration(appName: ServerInfo.displayName, version: ServerInfo.version, build: ServerInfo.build)
+        #if DEBUG
+        updateConfig.feedOverride = UpdateController.Configuration.debugFeedOverride()
+        #endif
+        updates = UpdateController(configuration: updateConfig)
         NSApp.mainMenu = buildMainMenu()
         installStatusItem()
 
         if let dir = ServerInfo.screenshotDirectory {
-            harness = ServerScreenshotHarness(controller: controller, delegate: self, output: dir)
+            harness = ServerScreenshotHarness(controller: controller, updates: updates, delegate: self, output: dir)
             harness?.run()
             return
         }
+        startUpdates()
         Task {
             await controller.start()
             if controller.configIssue != nil || !controller.runState.isRunning { showWindow() }
@@ -55,12 +64,21 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
         return .terminateLater
     }
 
+    private func startUpdates() {
+        #if DEBUG
+        // -FAIRSPOKEN_UPDATE_STATE available|checking|downloading|ready|error|idle shows that state
+        // without Sparkle (README › Updates).
+        if updates.simulateFromDefaults() { return }
+        #endif
+        updates.start()
+    }
+
     // MARK: Window
 
     func showWindow(_ section: ServerController.Section? = nil) {
         if let section { controller.section = section }
         if window == nil {
-            let hosting = NSHostingController(rootView: ServerWindowView().environment(controller))
+            let hosting = NSHostingController(rootView: ServerWindowView().environment(controller).environment(updates))
             hosting.sceneBridgingOptions = [.toolbars]
             let w = NSWindow(contentViewController: hosting)
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
@@ -89,7 +107,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
     func rebuildWindowContent() {
         guard let window else { return }
         let frame = window.frame
-        let hosting = NSHostingController(rootView: ServerWindowView().environment(controller))
+        let hosting = NSHostingController(rootView: ServerWindowView().environment(controller).environment(updates))
         hosting.sceneBridgingOptions = [.toolbars]
         window.contentViewController = hosting
         window.setFrame(frame, display: true)
@@ -124,6 +142,8 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
         menu.addItem(toggleItem)
         loginItem.target = self
         menu.addItem(loginItem)
+        updateItem.target = self
+        menu.addItem(updateItem)
         menu.addItem(.separator())
         menu.addItem(entry("Quit \(ServerInfo.displayName)", #selector(quit), "q"))
         item.menu = menu
@@ -151,6 +171,13 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
         addressLine.isHidden = !c.runState.isRunning
         toggleItem.title = c.runState.isRunning ? "Stop Serving" : "Start Serving"
         loginItem.state = LoginItem.isEnabled ? .on : .off
+        let update = updates.presentation
+        updateItem.title = update.menuTitle
+        updateItem.setAccessibilityLabel(update.accessibilityLabel)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem == updateItem ? updates.presentation.isEnabled : true
     }
 
     @objc private func openWindow() { showWindow() }
@@ -162,12 +189,23 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
     @objc private func toggleLoginItem() { controller.setLoginItem(!LoginItem.isEnabled) }
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func showConfiguration() { showWindow(.configuration) }
+    /// App menu › Check for Updates…: opens the window so the answer (a toast) is visible.
+    @objc private func checkForUpdates() {
+        showWindow()
+        updates.checkForUpdates()
+    }
+    /// The menu bar item's update entry: check, install or restart, by state.
+    @objc private func updateAction() {
+        showWindow()
+        updates.performPrimaryAction()
+    }
 
     private func buildMainMenu() -> NSMenu {
         let main = NSMenu()
         let name = ServerInfo.displayName
         let appMenu = NSMenu(title: name)
         appMenu.addItem(NSMenuItem(title: "About \(name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        appMenu.addItem(entry("Check for Updates…", #selector(checkForUpdates), ""))
         appMenu.addItem(.separator())
         appMenu.addItem(entry("Settings…", #selector(showConfiguration), ","))
         appMenu.addItem(.separator())
