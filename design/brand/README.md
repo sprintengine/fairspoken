@@ -209,7 +209,7 @@ Screenshots (2×, light and dark) in `app/screenshots/`. The pill is captured in
 
 **Nothing has to be bought for type or imagery.** Decisions and checks before launch:
 
-1. **Domains:** availability of `fairspoken.com`, `fairspoken.ie` (needs an Irish connection, which you have) and `fairspoken.app` wasn't checked. Register `.ie` and `.com` at least. Also claim the GitHub organisation `fairspoken` (the repo is currently `sprintengine/multivoice-tauri`) and social handles.
+1. **Domains:** availability of `fairspoken.com`, `fairspoken.ie` (needs an Irish connection, which you have) and `fairspoken.app` wasn't checked. Register `.ie` and `.com` at least. Also claim the GitHub organisation `fairspoken` (the repo is `sprintengine/fairspoken`) and social handles.
 2. **Trademark:** run a clearance search for "Fairspoken" (EUIPO, IPOI and USPTO) before printing anything.
 3. **No taglines.** The founder decided against slogans and taglines; product copy stays plain and descriptive.
 4. **Claims to verify before publishing** (the site copy is written to be true as far as the repo shows, but these need sign-off):

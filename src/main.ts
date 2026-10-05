@@ -905,9 +905,9 @@ settingsBtn.addEventListener("click", () => {
   void invoke("open_home_window", { screen: "settings" });
 });
 
-window.addEventListener("multivoice-events-updated", updateSettingsEventBadge);
+window.addEventListener("fairspoken-events-updated", updateSettingsEventBadge);
 window.addEventListener("storage", (event) => {
-  if (event.key === "multivoice-tauri-events") {
+  if (event.key === "fairspoken-events") {
     updateSettingsEventBadge();
   }
 });

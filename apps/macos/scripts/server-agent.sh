@@ -7,7 +7,7 @@
 #   scripts/server-agent.sh uninstall
 #
 # --app       the app to run (default: /Applications/Fairspoken Server.app, else ~/Applications/…)
-# --env       extra environment for the server, e.g. --env MULTIVOICE_HOST_ADDR=0.0.0.0:48173
+# --env       extra environment for the server, e.g. --env FAIRSPOKEN_HOST_ADDR=0.0.0.0:48173
 #             (see apps/macos/README.md; normally the app's own host-config.json is enough)
 #
 # The agent's label is the app's bundle id; its log is ~/Library/Logs/Fairspoken Server.log.

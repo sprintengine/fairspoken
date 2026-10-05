@@ -86,9 +86,9 @@ function formatTime(timestamp: string): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-window.addEventListener("multivoice-events-updated", render);
+window.addEventListener("fairspoken-events-updated", render);
 window.addEventListener("storage", (event) => {
-  if (event.key === "multivoice-tauri-events") render();
+  if (event.key === "fairspoken-events") render();
 });
 
 clearButton?.addEventListener("click", () => {

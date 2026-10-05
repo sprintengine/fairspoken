@@ -1,5 +1,5 @@
 use crate::audio::{AudioFrame, Recording};
-use crate::settings::{cloud_url, Settings, TranscriptionLocation};
+use crate::settings::{cloud_url, Settings, TranscriptionLocation, CLOUD_UNAVAILABLE};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-const STREAM_CONTENT_TYPE: &str = "application/vnd.multivoice.pcm-stream";
+const STREAM_CONTENT_TYPE: &str = "application/vnd.fairspoken.pcm-stream";
 const STREAM_CHANNEL_DEPTH: usize = 12;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -34,8 +34,8 @@ pub struct RemoteTranscriptionResponse {
 
 /// The remote endpoint a session talks to, resolved from the transcription
 /// location: `RemoteHost` uses the user's own URL and token; `Cloud` uses the
-/// Fairspoken Cloud URL (compile-time constant, `MULTIVOICE_CLOUD_URL` env
-/// override for dev builds) and the multiauth token. The wire protocol is
+/// Fairspoken Cloud URL (compile-time `FAIRSPOKEN_CLOUD_URL`, runtime override
+/// for dev builds; absent in builds without a cloud) and the multiauth token. The wire protocol is
 /// identical, so everything downstream of resolution is shared.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteTarget {
@@ -55,6 +55,13 @@ impl RemoteTarget {
 }
 
 pub fn resolve_remote_target(settings: &Settings) -> Result<RemoteTarget, String> {
+    resolve_remote_target_with(settings, cloud_url())
+}
+
+fn resolve_remote_target_with(
+    settings: &Settings,
+    cloud_url: Option<String>,
+) -> Result<RemoteTarget, String> {
     match settings.transcription_location {
         TranscriptionLocation::RemoteHost => Ok(RemoteTarget {
             base_url: validate_remote_base_url(&settings.remote_url)?,
@@ -62,9 +69,11 @@ pub fn resolve_remote_target(settings: &Settings) -> Result<RemoteTarget, String
             is_cloud: false,
         }),
         TranscriptionLocation::Cloud => Ok(RemoteTarget {
-            // Still validated so a bad MULTIVOICE_CLOUD_URL override fails
+            // Still validated so a bad FAIRSPOKEN_CLOUD_URL override fails
             // loudly instead of dictating into the void.
-            base_url: validate_remote_base_url(&cloud_url())?,
+            base_url: validate_remote_base_url(
+                &cloud_url.ok_or_else(|| CLOUD_UNAVAILABLE.to_string())?,
+            )?,
             auth_token: settings.cloud_auth_token.trim().to_string(),
             is_cloud: true,
         }),
@@ -491,22 +500,22 @@ fn auth_headers(target: &RemoteTarget) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
-// Every x-multivoice-* header is sent to both targets: the cloud Worker
+// Every x-fairspoken-* header is sent to both targets: the cloud Worker
 // ignores the self-host-only ones (backend/model) by contract.
 fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<HeaderMap, String> {
     let mut headers = auth_headers(target)?;
     headers.insert(
-        "x-multivoice-client",
-        HeaderValue::from_static("multivoice-tauri"),
+        "x-fairspoken-client",
+        HeaderValue::from_static("fairspoken-desktop"),
     );
-    headers.insert("x-multivoice-backend", HeaderValue::from_static(BACKEND_ID));
+    headers.insert("x-fairspoken-backend", HeaderValue::from_static(BACKEND_ID));
     headers.insert(
-        "x-multivoice-model",
+        "x-fairspoken-model",
         HeaderValue::from_str(selected_model_id(settings))
             .map_err(|err| format!("Invalid selected model header: {err}"))?,
     );
     headers.insert(
-        "x-multivoice-language",
+        "x-fairspoken-language",
         HeaderValue::from_str(&settings.language)
             .map_err(|err| format!("Invalid language header: {err}"))?,
     );
@@ -514,7 +523,7 @@ fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<H
         let hints = serde_json::to_string(&settings.vocabulary_hints)
             .map_err(|err| format!("Failed to serialize vocabulary hints: {err}"))?;
         headers.insert(
-            "x-multivoice-vocabulary-hints",
+            "x-fairspoken-vocabulary-hints",
             HeaderValue::from_str(&percent_encode(&hints))
                 .map_err(|err| format!("Invalid vocabulary hints header: {err}"))?,
         );
@@ -602,10 +611,13 @@ fn host_is_private_name(host: &str) -> bool {
 mod tests {
     use super::{
         decode_wav, encode_wav, format_remote_error, read_stream_frame, remote_connect_timeout,
-        resolve_remote_target, validate_remote_base_url, write_stream_frame,
+        resolve_remote_target, resolve_remote_target_with, validate_remote_base_url,
+        write_stream_frame,
     };
     use crate::audio::{AudioFrame, Recording};
     use crate::settings::{Settings, TranscriptionLocation};
+
+    const TEST_CLOUD_URL: &str = "https://cloud.example.com";
     use std::time::Duration;
 
     #[test]
@@ -705,11 +717,17 @@ mod tests {
             remote_auth_token: "host-token".to_string(),
             ..Settings::default()
         };
-        let target = resolve_remote_target(&cloud).expect("cloud target");
+        let target = resolve_remote_target_with(&cloud, Some(TEST_CLOUD_URL.into()))
+            .expect("cloud target");
         assert!(target.is_cloud);
         assert_eq!(target.auth_token, "cloud-jwt");
         assert_ne!(target.base_url.host_str(), Some("host.example.com"));
         assert_eq!(target.display_name(), "Fairspoken Cloud");
+
+        // Builds without a cloud URL never offer Cloud; a stale setting fails
+        // with guidance instead of panicking.
+        let unavailable = resolve_remote_target_with(&cloud, None).unwrap_err();
+        assert!(unavailable.contains("not available in this build"));
 
         let local = Settings::default();
         assert!(resolve_remote_target(&local).is_err());
@@ -721,7 +739,8 @@ mod tests {
             transcription_location: TranscriptionLocation::Cloud,
             ..Settings::default()
         };
-        let target = resolve_remote_target(&cloud).expect("cloud target");
+        let target = resolve_remote_target_with(&cloud, Some(TEST_CLOUD_URL.into()))
+            .expect("cloud target");
 
         let unauthorized = format_remote_error(&target, 401, "401 Unauthorized", None);
         assert!(unauthorized.contains("update your token in Settings"));

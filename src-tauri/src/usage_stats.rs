@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -526,24 +525,13 @@ fn weekday_label(day_index: u64) -> &'static str {
 }
 
 fn default_usage_stats_path() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_TAURI_USAGE_STATS_PATH") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_USAGE_STATS_PATH") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("usage-stats.json");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("multivoice-tauri")
-            .join("usage-stats.json");
-    }
-
-    PathBuf::from("usage-stats.json")
+    crate::app_dirs::config_dir()
+        .map(|dir| dir.join("usage-stats.json"))
+        .unwrap_or_else(|| PathBuf::from("usage-stats.json"))
 }
 
 #[cfg(test)]
@@ -572,7 +560,7 @@ mod tests {
     fn record_accumulates_lifetime_and_daily_totals() {
         let mut service = UsageStatsService {
             data: UsageStatsData::default(),
-            path: std::env::temp_dir().join("multivoice-usage-stats-test-unused.json"),
+            path: std::env::temp_dir().join("fairspoken-usage-stats-test-unused.json"),
         };
         let day_secs = 100 * SECONDS_PER_DAY + 500;
         // Two dictations on the same day, one the next day.
@@ -593,7 +581,7 @@ mod tests {
     fn record_ignores_empty_dictations() {
         let mut service = UsageStatsService {
             data: UsageStatsData::default(),
-            path: std::env::temp_dir().join("multivoice-usage-stats-test-unused.json"),
+            path: std::env::temp_dir().join("fairspoken-usage-stats-test-unused.json"),
         };
         let _ = service.record(0, 5.0, 12_345);
         assert_eq!(service.data.total_dictations, 0);
@@ -641,7 +629,7 @@ mod tests {
     fn set_measured_typing_wpm_clamps_and_rejects_bad_values() {
         let mut service = UsageStatsService {
             data: UsageStatsData::default(),
-            path: std::env::temp_dir().join("multivoice-usage-stats-wpm-test.json"),
+            path: std::env::temp_dir().join("fairspoken-usage-stats-wpm-test.json"),
         };
         assert!(service.set_measured_typing_wpm(0.0).is_err());
         assert!(service.set_measured_typing_wpm(f64::NAN).is_err());
@@ -751,7 +739,7 @@ mod tests {
     fn test_service(name: &str) -> UsageStatsService {
         UsageStatsService {
             data: UsageStatsData::default(),
-            path: std::env::temp_dir().join(format!("multivoice-usage-stats-{name}.json")),
+            path: std::env::temp_dir().join(format!("fairspoken-usage-stats-{name}.json")),
         }
     }
 

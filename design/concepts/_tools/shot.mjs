@@ -31,7 +31,7 @@ const reduced = Boolean(flag("reduced", false));
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const port = 9300 + Math.floor(Math.random() * 500);
-const profile = mkdtempSync(join(tmpdir(), "mv-shot-"));
+const profile = mkdtempSync(join(tmpdir(), "fs-shot-"));
 const chrome = spawn(CHROME, [
   "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
   "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",

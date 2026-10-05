@@ -1,6 +1,6 @@
 import FairspokenHost
 import FairspokenUI
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// Every client the server has seen (up to 32, most recent first) and the last 50 jobs.

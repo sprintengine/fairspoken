@@ -1,7 +1,6 @@
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -19,20 +18,23 @@ pub enum TranscriptionLocation {
 }
 
 /// Fairspoken Cloud endpoint. Not user-editable: users configure only their
-/// token. Forks and self-hosters bake in their own endpoint by setting
-/// `MULTIVOICE_CLOUD_URL` at compile time; the same variable at runtime
-/// overrides it again (dev builds).
-const DEFAULT_CLOUD_URL: &str = match option_env!("MULTIVOICE_CLOUD_URL") {
-    Some(url) => url,
-    None => "https://multivoice-cloud.multicodelabs.workers.dev",
+/// token. Builds bake it in by setting `FAIRSPOKEN_CLOUD_URL` at compile time
+/// (the former `MULTIVOICE_CLOUD_URL` is still read); the same variable at
+/// runtime overrides it again (dev builds). With neither, the build has no
+/// cloud: the Cloud location and cloud polish are unavailable.
+const BUILD_CLOUD_URL: Option<&str> = match option_env!("FAIRSPOKEN_CLOUD_URL") {
+    Some(url) => Some(url),
+    None => option_env!("MULTIVOICE_CLOUD_URL"),
 };
 
-pub fn cloud_url() -> String {
-    env::var("MULTIVOICE_CLOUD_URL")
-        .ok()
-        .map(|url| url.trim().trim_end_matches('/').to_string())
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| DEFAULT_CLOUD_URL.to_string())
+pub const CLOUD_UNAVAILABLE: &str =
+    "Fairspoken Cloud is not available in this build. Choose Local or My host in Settings.";
+
+pub fn cloud_url() -> Option<String> {
+    let normalize = |url: &str| Some(url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty());
+    crate::app_dirs::env_var("FAIRSPOKEN_CLOUD_URL")
+        .and_then(|url| normalize(&url))
+        .or_else(|| BUILD_CLOUD_URL.and_then(normalize))
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -464,24 +466,13 @@ fn normalize_shortcut(shortcut: &str, fallback: &str) -> String {
 }
 
 fn default_settings_path() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_TAURI_SETTINGS_PATH") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_SETTINGS_PATH") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("settings.json");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("multivoice-tauri")
-            .join("settings.json");
-    }
-
-    PathBuf::from("settings.json")
+    crate::app_dirs::config_dir()
+        .map(|dir| dir.join("settings.json"))
+        .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
 #[cfg(test)]
@@ -653,7 +644,7 @@ mod tests {
     #[test]
     fn atomic_save_keeps_settings_private_and_replaces_existing_file() {
         use std::os::unix::fs::PermissionsExt;
-        let directory = std::env::temp_dir().join(format!("multivoice-settings-{}", uuid::Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("fairspoken-settings-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("settings.json");
         let mut service = SettingsService { path: path.clone(), current: Settings::default() };

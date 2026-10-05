@@ -26,8 +26,8 @@ keep development data separate from your everyday install, point the app at
 throwaway locations:
 
 ```bash
-MULTIVOICE_TAURI_MODEL_DIR=/tmp/mv-models \
-MULTIVOICE_TAURI_SETTINGS_PATH=/tmp/mv-settings.json \
+FAIRSPOKEN_MODEL_DIR=/tmp/fairspoken-models \
+FAIRSPOKEN_SETTINGS_PATH=/tmp/fairspoken-settings.json \
 npm run tauri dev
 ```
 

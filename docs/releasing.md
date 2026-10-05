@@ -98,7 +98,7 @@ named: the release scripts read it too, and refuse to publish anywhere else.
 ## Builds and publishing
 
 Every entry point builds the same files. `<slug>` is `productName` from
-`tauri.conf.json` in lower case (`multivoice-tauri` today); `<Name>` is
+`tauri.conf.json` in lower case (`fairspoken` today); `<Name>` is
 `MV_DISPLAY_NAME` in `apps/macos/Config/Base.xcconfig` (`Fairspoken`).
 
 | Job (runner) | Files |
@@ -213,7 +213,7 @@ and as the release's quality gate:
 | Build & test (macOS) | `macos-latest` | the crate with the macOS-only code, `cargo test` |
 | Build & test (Windows) | `windows-2022` | the crate and both bins, `cargo test --lib` |
 | Build transcription host (Linux arm64) | `ubuntu-24.04-arm` | `cargo build --bin transcription-host` |
-| Build & test (macOS app) | `macos-26` | `apps/macos/scripts/test.sh` (the Swift packages' unit tests: MultiVoiceCore and FairspokenHost), `scripts/build.sh` (Fairspoken and Fairspoken Server, Debug, ad-hoc signed) |
+| Build & test (macOS app) | `macos-26` | `apps/macos/scripts/test.sh` (the Swift packages' unit tests: FairspokenCore and FairspokenHost), `scripts/build.sh` (Fairspoken and Fairspoken Server, Debug, ad-hoc signed) |
 | Dependency licenses | `ubuntu-latest` | `cargo deny check licenses` |
 
 There are no path filters: a required check that a filter skips never reports,

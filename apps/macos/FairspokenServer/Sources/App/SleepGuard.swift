@@ -1,4 +1,4 @@
-import MultiVoiceCore
+import FairspokenCore
 import FairspokenHost
 import Foundation
 import IOKit.pwr_mgt

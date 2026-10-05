@@ -1,7 +1,7 @@
 # Publisher artwork
 
 These bundled files identify the publisher of a selectable model, next to its
-name. They are not MultiVoice branding and do not imply a partnership or
+name. They are not Fairspoken branding and do not imply a partnership or
 endorsement. The app makes no image requests to third-party hosts at runtime.
 Artwork is unmodified, with no CSS tint, filter or opacity treatment. Copyright
 and trademarks belong to their respective owners; the app's MIT license does

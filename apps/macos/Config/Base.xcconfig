@@ -6,8 +6,7 @@
 MV_DISPLAY_NAME = Fairspoken
 
 // BUNDLE ID: ie.fairspoken.mac (Release). Debug builds append ".dev" so they never
-// clobber the installed app's privacy grants. (The plan's earlier placeholder was
-// com.multicodelabs.multivoice.mac; nothing shipped under it.)
+// clobber the installed app's privacy grants.
 // WARNING: macOS keys Microphone / Accessibility / Input Monitoring grants on the bundle
 // id AND the code-signing identity. Changing either later makes every user re-grant them.
 MV_BUNDLE_ID_BASE = ie.fairspoken.mac
@@ -16,9 +15,9 @@ MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 
 PRODUCT_NAME = $(MV_DISPLAY_NAME)
-PRODUCT_MODULE_NAME = MultiVoiceApp
-INFOPLIST_FILE = MultiVoice/Info.plist
-CODE_SIGN_ENTITLEMENTS = Config/MultiVoice.entitlements
+PRODUCT_MODULE_NAME = FairspokenApp
+INFOPLIST_FILE = Fairspoken/Info.plist
+CODE_SIGN_ENTITLEMENTS = Config/Fairspoken.entitlements
 GENERATE_INFOPLIST_FILE = NO
 
 MACOSX_DEPLOYMENT_TARGET = 26.0

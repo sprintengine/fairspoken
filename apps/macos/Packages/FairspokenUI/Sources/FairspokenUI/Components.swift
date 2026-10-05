@@ -1,4 +1,4 @@
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// A Liquid Glass panel. Content cards share one `GlassEffectContainer` per screen so

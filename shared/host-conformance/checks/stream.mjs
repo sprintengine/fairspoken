@@ -123,11 +123,11 @@ export default [
   },
   {
     name: 'stream.backend-header',
-    description: 'x-multivoice-backend other than parakeet/whisper answers 400',
+    description: 'x-fairspoken-backend other than parakeet/whisper answers 400',
     async run(ctx) {
-      const res = await sendChunks(ctx, framesFor(tone(0.3), 16000), { headers: { 'x-multivoice-backend': 'nonsense' } });
+      const res = await sendChunks(ctx, framesFor(tone(0.3), 16000), { headers: { 'x-fairspoken-backend': 'nonsense' } });
       noResponse(res, 'bad backend header');
-      expectError(res, 400, 'stream with x-multivoice-backend: nonsense');
+      expectError(res, 400, 'stream with x-fairspoken-backend: nonsense');
     },
   },
   {

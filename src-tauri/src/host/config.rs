@@ -1,6 +1,5 @@
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -30,38 +29,38 @@ pub(super) struct HostRuntimeConfig {
 
 impl HostRuntimeConfig {
     pub(super) fn from_env() -> Result<Self, String> {
-        let worker_count = env_usize("MULTIVOICE_HOST_WORKERS", DEFAULT_HOST_WORKERS).clamp(1, 4);
+        let worker_count = env_usize("FAIRSPOKEN_HOST_WORKERS", DEFAULT_HOST_WORKERS).clamp(1, 4);
         let worker_models = parse_worker_models(
-            env::var("MULTIVOICE_HOST_MODEL").ok().as_deref(),
+            crate::app_dirs::env_var("FAIRSPOKEN_HOST_MODEL").as_deref(),
             worker_count,
         )?;
         Ok(Self {
             worker_count,
             queue_capacity: env_usize(
-                "MULTIVOICE_HOST_QUEUE_CAPACITY",
+                "FAIRSPOKEN_HOST_QUEUE_CAPACITY",
                 DEFAULT_HOST_QUEUE_CAPACITY,
             )
             .clamp(1, 64),
             max_active_streams: env_u32(
-                "MULTIVOICE_HOST_MAX_ACTIVE_STREAMS",
+                "FAIRSPOKEN_HOST_MAX_ACTIVE_STREAMS",
                 DEFAULT_HOST_MAX_ACTIVE_STREAMS,
             )
             .clamp(MIN_HOST_MAX_ACTIVE_STREAMS, MAX_HOST_MAX_ACTIVE_STREAMS),
             max_recording_seconds: env_u16(
-                "MULTIVOICE_HOST_MAX_RECORDING_SECONDS",
+                "FAIRSPOKEN_HOST_MAX_RECORDING_SECONDS",
                 DEFAULT_HOST_MAX_RECORDING_SECONDS,
             )
             .clamp(
                 MIN_HOST_MAX_RECORDING_SECONDS,
                 MAX_HOST_MAX_RECORDING_SECONDS,
             ),
-            use_gpu: env_bool("MULTIVOICE_HOST_USE_GPU", true),
+            use_gpu: env_bool("FAIRSPOKEN_HOST_USE_GPU", true),
             worker_models,
         })
     }
 }
 
-/// Parses `MULTIVOICE_HOST_MODEL`: a single model id serves on every worker,
+/// Parses `FAIRSPOKEN_HOST_MODEL`: a single model id serves on every worker,
 /// while a comma-separated list assigns exactly one model per worker. The
 /// served model is operator configuration, so an invalid value fails startup
 /// instead of silently serving a default.
@@ -77,7 +76,7 @@ pub(super) fn parse_worker_models(
         .map(|id| {
             let id = id.trim();
             SttModel::from_model_id(id)
-                .ok_or_else(|| format!("MULTIVOICE_HOST_MODEL has an unsupported model: {id}"))
+                .ok_or_else(|| format!("FAIRSPOKEN_HOST_MODEL has an unsupported model: {id}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     if models.len() == 1 {
@@ -85,7 +84,7 @@ pub(super) fn parse_worker_models(
     }
     if models.len() != worker_count {
         return Err(format!(
-            "MULTIVOICE_HOST_MODEL lists {} models for {worker_count} workers; provide one model or exactly one per worker",
+            "FAIRSPOKEN_HOST_MODEL lists {} models for {worker_count} workers; provide one model or exactly one per worker",
             models.len()
         ));
     }
@@ -106,24 +105,13 @@ pub(super) struct PersistedHostConfig {
 }
 
 pub(super) fn default_host_config_path() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_HOST_CONFIG_PATH") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_HOST_CONFIG_PATH") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("host-config.json");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("multivoice-tauri")
-            .join("host-config.json");
-    }
-
-    PathBuf::from("host-config.json")
+    crate::app_dirs::config_dir()
+        .map(|dir| dir.join("host-config.json"))
+        .unwrap_or_else(|| PathBuf::from("host-config.json"))
 }
 
 /// A missing file is a normal first boot. An unreadable or invalid file fails
@@ -352,29 +340,25 @@ pub(super) fn apply_config_update(
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    env::var(name)
-        .ok()
+    crate::app_dirs::env_var(name)
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(default)
 }
 
 fn env_u32(name: &str, default: u32) -> u32 {
-    env::var(name)
-        .ok()
+    crate::app_dirs::env_var(name)
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(default)
 }
 
 fn env_u16(name: &str, default: u16) -> u16 {
-    env::var(name)
-        .ok()
+    crate::app_dirs::env_var(name)
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(default)
 }
 
 fn env_bool(name: &str, default: bool) -> bool {
-    env::var(name)
-        .ok()
+    crate::app_dirs::env_var(name)
         .and_then(|value| parse_bool(&value))
         .unwrap_or(default)
 }

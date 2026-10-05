@@ -79,7 +79,7 @@ function setOutputs(outputs) {
 }
 
 async function github(apiPath, token, { accept = 'application/vnd.github+json', allow404 = false } = {}) {
-  const headers = { accept, 'user-agent': 'multivoice-release', 'x-github-api-version': '2022-11-28' }
+  const headers = { accept, 'user-agent': 'fairspoken-release', 'x-github-api-version': '2022-11-28' }
   if (token) headers.authorization = `Bearer ${token}`
   const response = await fetch(`https://api.github.com${apiPath}`, { headers })
   if (allow404 && response.status === 404) return null
@@ -415,7 +415,7 @@ async function pruneNightlies() {
       headers: {
         accept: 'application/vnd.github+json',
         authorization: `Bearer ${token}`,
-        'user-agent': 'multivoice-release',
+        'user-agent': 'fairspoken-release',
         'x-github-api-version': '2022-11-28',
       },
     })

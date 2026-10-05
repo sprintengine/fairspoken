@@ -1,5 +1,5 @@
 {
-  "name": "multivoice-tauri",
+  "name": "fairspoken",
   "private": true,
   "version": "0.1.0",
   "description": "Fast, private, local-first desktop dictation",

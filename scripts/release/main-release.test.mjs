@@ -38,7 +38,7 @@ test('all accepted maintenance types release patches; features and breaking chan
 })
 
 function repository(t) {
-  const cwd = mkdtempSync(path.join(tmpdir(), 'multivoice-release-test-'))
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fairspoken-release-test-'))
   t.after(() => rmSync(cwd, { recursive: true, force: true }))
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   git('init', '-b', 'main')

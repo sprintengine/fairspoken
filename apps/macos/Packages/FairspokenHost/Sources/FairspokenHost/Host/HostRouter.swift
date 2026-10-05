@@ -205,14 +205,19 @@ public final class HostRouter: Sendable {
         var message: String
     }
 
-    /// The `x-multivoice-*` headers. The served model is host configuration, so
-    /// `x-multivoice-model` is accepted and ignored.
+    /// The `x-fairspoken-*` headers. The served model is host configuration, so
+    /// `x-fairspoken-model` is accepted and ignored.
     func settings(_ head: HTTPRequestHead) -> Result<RequestSettings, RequestError> {
-        let backend = head.header("x-multivoice-backend") ?? HostRuntime.backendID
+        let backend = Self.protocolHeader(head, "backend") ?? HostRuntime.backendID
         guard backend == "parakeet" || backend == "whisper" else {
             return .failure(RequestError(message: "Unsupported transcription backend: \(backend)"))
         }
-        return .success(RequestSettings(language: head.header("x-multivoice-language") ?? "en"))
+        return .success(RequestSettings(language: Self.protocolHeader(head, "language") ?? "en"))
+    }
+
+    /// `x-fairspoken-<name>`; the legacy `x-multivoice-<name>` is still accepted.
+    static func protocolHeader(_ head: HTTPRequestHead, _ name: String) -> String? {
+        head.header("x-fairspoken-" + name) ?? head.header("x-multivoice-" + name)
     }
 
     private func respond(_ request: HTTPServerRequest, _ outcome: TranscriptionOutcome) async {

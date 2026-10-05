@@ -30,7 +30,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
         },
       };
     });
-    await page.goto((process.env.MULTIVOICE_UI_URL || 'http://localhost:1420') + '/cursor-preview.html');
+    await page.goto((process.env.FAIRSPOKEN_UI_URL || process.env.MULTIVOICE_UI_URL || 'http://localhost:1420') + '/cursor-preview.html');
     const emit = payload => page.evaluate(payload => window.previewEmit(payload), payload);
     const canonical = () => page.locator('#previewText').evaluate(element => {
       const copy = element.cloneNode(true); copy.querySelectorAll('del').forEach(node => node.remove()); return copy.textContent;

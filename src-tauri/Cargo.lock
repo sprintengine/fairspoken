@@ -1388,6 +1388,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "fairspoken"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "cpal",
+ "flate2",
+ "hound",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "parakeet-rs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.11.0",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tiny_http",
+ "uuid",
+ "whisper-rs",
+ "zip 2.4.2",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2787,38 +2819,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "multivoice-tauri"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "core-foundation 0.10.1",
- "core-graphics",
- "cpal",
- "flate2",
- "hound",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "parakeet-rs",
- "reqwest",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.11.0",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tiny_http",
- "uuid",
- "whisper-rs",
- "zip 2.4.2",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 import AppKit
 import FairspokenHost
 import Foundation
-import MultiVoiceCore
+import FairspokenCore
 import Observation
 import OSLog
 

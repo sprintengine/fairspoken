@@ -31,7 +31,7 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Fairspoken</string>
+	<string>© 2026 SprintEngine</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>$(MV_DISPLAY_NAME) accepts transcription requests from Fairspoken on other computers on your network or tailnet.</string>
 </dict>

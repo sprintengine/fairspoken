@@ -51,7 +51,7 @@ let browser;
   await page.locator(`#variant-list-${family} [role="option"]`).filter({ hasText: new RegExp(`^${value}\\b`) }).click();
  };
 
- await page.goto((process.env.MULTIVOICE_UI_URL || 'http://localhost:1420') + '/home.html');
+ await page.goto((process.env.FAIRSPOKEN_UI_URL || process.env.MULTIVOICE_UI_URL || 'http://localhost:1420') + '/home.html');
  await page.locator('[data-screen="models"]').click();
  await page.locator('#variant-whisper').waitFor();
  if(await page.locator('#family-parakeet').count()!==1 || await page.locator('#family-whisper').count()!==1)throw Error('families');

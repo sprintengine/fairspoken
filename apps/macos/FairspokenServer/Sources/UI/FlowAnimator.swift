@@ -1,7 +1,7 @@
 import FairspokenUI
 import FairspokenHost
 import Foundation
-import MultiVoiceCore
+import FairspokenCore
 import QuartzCore
 
 /// Turns host cues into short-lived particles and node pulses for the constellation.

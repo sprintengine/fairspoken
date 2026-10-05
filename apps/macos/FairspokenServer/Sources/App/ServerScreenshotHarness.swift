@@ -1,7 +1,7 @@
 import FairspokenUI
 import AppKit
 import FairspokenHost
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// `--screenshots <dir>`: renders every section in light and dark with the demo simulator,

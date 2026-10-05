@@ -7,7 +7,7 @@ export interface AppEvent {
   message: string;
 }
 
-const EVENT_LOG_KEY = "multivoice-tauri-events";
+const EVENT_LOG_KEY = "fairspoken-events";
 const MAX_EVENTS = 80;
 
 export function addEvent(level: EventLevel, message: string): void {
@@ -22,10 +22,10 @@ export function addEventWithId(id: string, level: EventLevel, message: string): 
   // debugging and are deliberately never persisted to UI state. Only warnings
   // and errors — the things worth a user's attention — reach the Activity feed.
   if (level === "info") {
-    console.info(`[multivoice] ${normalized}`);
+    console.info(`[fairspoken] ${normalized}`);
     return;
   }
-  (level === "error" ? console.error : console.warn)(`[multivoice] ${normalized}`);
+  (level === "error" ? console.error : console.warn)(`[fairspoken] ${normalized}`);
 
   const events = readEvents();
   if (events.some((event) => event.id === id)) return;
@@ -38,7 +38,7 @@ export function addEventWithId(id: string, level: EventLevel, message: string): 
   });
 
   localStorage.setItem(EVENT_LOG_KEY, JSON.stringify(events.slice(0, MAX_EVENTS)));
-  window.dispatchEvent(new CustomEvent("multivoice-events-updated"));
+  window.dispatchEvent(new CustomEvent("fairspoken-events-updated"));
 }
 
 export function readEvents(): AppEvent[] {
@@ -54,7 +54,7 @@ export function readEvents(): AppEvent[] {
 
 export function clearEvents(): void {
   localStorage.removeItem(EVENT_LOG_KEY);
-  window.dispatchEvent(new CustomEvent("multivoice-events-updated"));
+  window.dispatchEvent(new CustomEvent("fairspoken-events-updated"));
 }
 
 export function eventSeverity(events = readEvents()): EventLevel | null {

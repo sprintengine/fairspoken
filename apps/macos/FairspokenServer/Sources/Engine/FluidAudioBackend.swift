@@ -1,7 +1,7 @@
 import FairspokenHost
 import FairspokenSpeech
 import Foundation
-import MultiVoiceCore
+import FairspokenCore
 
 /// The host's speech engine: Parakeet TDT v3 and Parakeet Ultra on the Apple Neural Engine
 /// through FluidAudio. Workers serving the same model share its weights.

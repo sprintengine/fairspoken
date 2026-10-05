@@ -1,7 +1,7 @@
 @preconcurrency import CoreML
 import FluidAudio
 import Foundation
-import MultiVoiceCore
+import FairspokenCore
 import OSLog
 
 let speechLog = Logger(subsystem: "ie.fairspoken.speech", category: "engine")

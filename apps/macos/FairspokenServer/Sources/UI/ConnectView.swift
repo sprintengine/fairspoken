@@ -1,4 +1,4 @@
-import MultiVoiceCore
+import FairspokenCore
 import FairspokenHost
 import CoreImage.CIFilterBuiltins
 import FairspokenUI

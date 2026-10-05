@@ -1,4 +1,5 @@
 mod app_categories;
+mod app_dirs;
 mod audio;
 // Consumed by the macOS-only AX integration; compiled everywhere so the pure
 // logic and its tests stay platform-neutral.
@@ -215,6 +216,13 @@ fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
         .map(|service| service.current())
 }
 
+/// Whether this build has a Fairspoken Cloud endpoint; without one the UI
+/// hides the Cloud location and cloud polish.
+#[tauri::command]
+fn get_cloud_available() -> bool {
+    settings::cloud_url().is_some()
+}
+
 fn save_settings_inner(
     app: AppHandle,
     settings: Option<Settings>,
@@ -239,6 +247,20 @@ fn save_settings_inner(
     settings.vocabulary_hints = current_settings.vocabulary_hints.clone();
     settings.transcript_corrections = current_settings.transcript_corrections.clone();
     settings.snippets = current_settings.snippets.clone();
+
+    // Only newly chosen cloud options are refused, so a stale Cloud setting
+    // never blocks saving unrelated changes.
+    if settings::cloud_url().is_none() {
+        let picks_cloud_location = settings.transcription_location == TranscriptionLocation::Cloud
+            && current_settings.transcription_location != TranscriptionLocation::Cloud;
+        let picks_cloud_polish = settings.polish_enabled
+            && settings.polish_provider == settings::PolishProvider::Cloud
+            && !(current_settings.polish_enabled
+                && current_settings.polish_provider == settings::PolishProvider::Cloud);
+        if picks_cloud_location || picks_cloud_polish {
+            return Err(settings::CLOUD_UNAVAILABLE.to_string());
+        }
+    }
 
     if services
         .audio
@@ -2709,6 +2731,8 @@ fn cancel_remote_transcription_if_needed(services: &AppServices) -> Result<(), S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any service below opens its files.
+    app_dirs::migrate_legacy_dirs();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             let _ = open_home_window(app.clone(), None);
@@ -2795,6 +2819,7 @@ pub fn run() {
             remove_local_model,
             get_app_status,
             get_settings,
+            get_cloud_available,
             save_settings,
             save_shortcut_settings,
             save_dictionary,

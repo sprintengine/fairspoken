@@ -36,7 +36,7 @@ pnpm-debug.log*
 .aider*
 CLAUDE.local.md
 
-# SprintEngine Studio / Multicode workspace state (backlog, sprint runs, hooks)
+# Local agent/workspace state
 .multi-code/
 .multicode/
 

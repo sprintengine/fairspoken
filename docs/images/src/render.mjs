@@ -7,7 +7,7 @@
 // Uses the installed Google Chrome (Playwright channel "chrome"), renders at
 // deviceScaleFactor 2, then optimises with pngquant + oxipng when on PATH.
 // PRODUCT_NAME=Foo previews a rename: the network SVG is regenerated with it
-// and visible "MultiVoice"/"multivoice" text in the app/dashboard screenshots
+// and visible "Fairspoken"/"fairspoken" text in the app/dashboard screenshots
 // is swapped in the rendered DOM (the shipped sources are not touched).
 
 import { execFileSync } from "node:child_process";
@@ -41,7 +41,7 @@ async function previewRename(page) {
     await frame.evaluate((name) => {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       for (let node; (node = walker.nextNode());) {
-        node.nodeValue = node.nodeValue.replace(/MultiVoice/g, name).replace(/multivoice/g, name.toLowerCase());
+        node.nodeValue = node.nodeValue.replace(/Fairspoken/g, name).replace(/fairspoken/g, name.toLowerCase());
       }
     }, PRODUCT_NAME).catch(() => {});
   }

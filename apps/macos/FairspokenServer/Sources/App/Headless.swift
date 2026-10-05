@@ -1,6 +1,6 @@
 import FairspokenHost
 import Foundation
-import MultiVoiceCore
+import FairspokenCore
 
 /// `Fairspoken Server --headless`: the same host with no window, menu bar item or Dock icon,
 /// for a LaunchAgent (or a LaunchDaemon). Logs one line per job to standard output, never
@@ -15,12 +15,12 @@ nonisolated enum HeadlessServer {
             let file = try HostConfigurationStore.load(url)
             var resolved = try HostConfigurationStore.resolve(file: file, environment: ServerInfo.environment, knownModels: known)
             if file == nil {
-                if resolved.token.isEmpty && ServerInfo.environment["MULTIVOICE_HOST_TOKEN"] == nil {
+                if resolved.token.isEmpty && HostEnvironment.value("TOKEN", in: ServerInfo.environment) == nil {
                     resolved.token = HostConfiguration.generateToken()
                 }
                 var toSave = resolved
                 // Only persist what the environment didn't force for this run.
-                if ServerInfo.environment["MULTIVOICE_HOST_TOKEN"] != nil { toSave.token = "" }
+                if HostEnvironment.value("TOKEN", in: ServerInfo.environment) != nil { toSave.token = "" }
                 try HostConfigurationStore.save(toSave, to: url)
                 say("Created \(url.path)\(toSave.token.isEmpty ? "" : " with a new token (shown in the app under Connect)")")
             }

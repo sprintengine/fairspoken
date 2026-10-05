@@ -47,7 +47,7 @@ export default [
       const workers = s.workerCount;
       const queue = s.queueCapacity;
       if (queue > MAX_QUEUE_FOR_SATURATION || workers + queue + 2 > 32) {
-        skip(`queueCapacity ${queue} with ${workers} worker(s) is too large to saturate; restart the host with MULTIVOICE_HOST_QUEUE_CAPACITY=2 (and MULTIVOICE_HOST_WORKERS=1) to enable this check`);
+        skip(`queueCapacity ${queue} with ${workers} worker(s) is too large to saturate; restart the host with FAIRSPOKEN_HOST_QUEUE_CAPACITY=2 (and FAIRSPOKEN_HOST_WORKERS=1) to enable this check`);
       }
       await ctx.requireModel();
       const sub = await ctx.subscribe();

@@ -271,8 +271,8 @@ mod tests {
     #[test]
     fn the_nightly_feed_lives_beside_the_stable_endpoint() {
         assert_eq!(
-            releases_base("https://github.com/acme/multivoice/releases/latest/download/latest.json"),
-            Some("https://github.com/acme/multivoice/releases")
+            releases_base("https://github.com/acme/fairspoken/releases/latest/download/latest.json"),
+            Some("https://github.com/acme/fairspoken/releases")
         );
         assert_eq!(releases_base("https://example.com/latest.json"), None);
         assert_eq!(releases_base("https://example.com/latest/download/latest.json"), None);
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn the_newest_nightly_is_the_first_nightly_entry_in_the_feed() {
         let entry = |tag: &str| {
-            format!(r#"<entry><link rel="alternate" href="https://github.com/acme/multivoice/releases/tag/{tag}"/></entry>"#)
+            format!(r#"<entry><link rel="alternate" href="https://github.com/acme/fairspoken/releases/tag/{tag}"/></entry>"#)
         };
         let feed = [
             entry("v0.5.0"),

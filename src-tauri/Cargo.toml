@@ -1,12 +1,12 @@
 [package]
-name = "multivoice-tauri"
+name = "fairspoken"
 version = "0.1.0"
 description = "Fast, private, local-first desktop dictation"
 authors = ["SprintEngine"]
 license = "MIT"
 repository = "https://github.com/sprintengine/fairspoken"
 edition = "2021"
-default-run = "multivoice-tauri"
+default-run = "fairspoken"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,7 +14,7 @@ default-run = "multivoice-tauri"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "multivoice_tauri_lib"
+name = "fairspoken_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

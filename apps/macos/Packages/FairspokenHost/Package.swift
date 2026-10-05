@@ -14,11 +14,11 @@ let package = Package(
         .executable(name: "fairspoken-host-dev", targets: ["fairspoken-host-dev"]),
     ],
     dependencies: [
-        .package(path: "../MultiVoiceCore")
+        .package(path: "../FairspokenCore")
     ],
     targets: [
-        .target(name: "FairspokenHost", dependencies: ["MultiVoiceCore"]),
+        .target(name: "FairspokenHost", dependencies: ["FairspokenCore"]),
         .executableTarget(name: "fairspoken-host-dev", dependencies: ["FairspokenHost"]),
-        .testTarget(name: "FairspokenHostTests", dependencies: ["FairspokenHost", "MultiVoiceCore"]),
+        .testTarget(name: "FairspokenHostTests", dependencies: ["FairspokenHost", "FairspokenCore"]),
     ]
 )

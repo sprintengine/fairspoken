@@ -14,6 +14,7 @@ const feedback = root.querySelector<HTMLElement>("#modelFeedback")!;
 let settings: Settings;
 let catalog: Catalog;
 let speech: SpeechModel[] = [];
+let cloudAvailable = false;
 let download: Download | null = null;
 let speechDownload: string | null = null;
 let loading = false;
@@ -199,7 +200,8 @@ function render(): void {
   }
   root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Polish is off. Dictionary corrections still apply." : settings.polishProvider === "local" ? "Local cleanup stays on this device." : "Cloud cleanup sends text to your configured service.";
   const providerActions = root.querySelector("#polishProviderActions")!;
-  providerActions.replaceChildren(button("Off", () => choose({ polishEnabled: false }), !settings.polishEnabled), button("Use cloud", () => choose({ polishProvider: "cloud", polishEnabled: true }), !settings.cloudAuthToken || (settings.polishEnabled && settings.polishProvider === "cloud")));
+  providerActions.replaceChildren(button("Off", () => choose({ polishEnabled: false }), !settings.polishEnabled));
+  if (cloudAvailable) providerActions.append(button("Use cloud", () => choose({ polishProvider: "cloud", polishEnabled: true }), !settings.cloudAuthToken || (settings.polishEnabled && settings.polishProvider === "cloud")));
   const polishList = root.querySelector("#polishModels")!; polishList.replaceChildren();
   for (const m of catalog.polish) {
     const r = row(m.id, m.name, m.publisher, `${m.publisher} · ${m.description} · ${size(m.bytes)} download${m.downloads !== null ? ` · ${m.downloads.toLocaleString()} Hub downloads` : ""}`, !m.supported ? "Unavailable on this platform" : m.selected && m.installed ? (m.loaded ? "Selected · loaded in memory" : "Selected · loads when needed") : m.installed ? "Downloaded" : "Available to download");
@@ -223,9 +225,9 @@ async function load(refresh = false): Promise<void> {
   if (loading) { reloadRequested = true; return; }
   loading = true;
   try {
-    const values = await Promise.all([invoke<Settings>("get_settings"), invoke<Catalog>("get_local_model_catalog", { refresh }), invoke<SpeechModel[]>("get_dictation_models")]);
+    const values = await Promise.all([invoke<Settings>("get_settings"), invoke<Catalog>("get_local_model_catalog", { refresh }), invoke<SpeechModel[]>("get_dictation_models"), invoke<boolean>("get_cloud_available").catch(() => false)]);
     const previous = catalog;
-    [settings, catalog, speech] = values;
+    [settings, catalog, speech, cloudAvailable] = values;
     if (!refresh && previous) {
       for (const model of catalog.polish) model.downloads = previous.polish.find(m => m.id === model.id)?.downloads ?? model.downloads;
     }

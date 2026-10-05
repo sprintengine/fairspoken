@@ -34,7 +34,7 @@ export default [
       await ctx.requireModel();
       const speech = ctx.speech;
       const seconds = speech.samples.length / speech.sampleRate;
-      const res = await ctx.batch(wav16(speech.samples, speech.sampleRate), { 'x-multivoice-backend': 'parakeet', 'x-multivoice-language': 'en' });
+      const res = await ctx.batch(wav16(speech.samples, speech.sampleRate), { 'x-fairspoken-backend': 'parakeet', 'x-fairspoken-language': 'en' });
       const body = await checkTranscription(ctx, res, { seconds, label: 'POST /v1/transcriptions', speech });
       ctx.note(speech.real ? `transcript: ${JSON.stringify(body.text)}` : 'no `say`/`afconvert`: used a tone and checked the response shape only');
     },
@@ -69,29 +69,36 @@ export default [
   },
   {
     name: 'batch.backend-header',
-    description: 'x-multivoice-backend other than parakeet/whisper answers 400',
+    description: 'x-fairspoken-backend other than parakeet/whisper answers 400',
+    async run(ctx) {
+      expectError(await ctx.batch(wav16(tone(1), 16000), { 'x-fairspoken-backend': 'nonsense' }), 400, 'POST /v1/transcriptions with x-fairspoken-backend: nonsense');
+    },
+  },
+  {
+    name: 'batch.legacy-header-prefix',
+    description: 'the pre-rename x-multivoice-* header names are still read (x-multivoice-backend: nonsense answers 400)',
     async run(ctx) {
       expectError(await ctx.batch(wav16(tone(1), 16000), { 'x-multivoice-backend': 'nonsense' }), 400, 'POST /v1/transcriptions with x-multivoice-backend: nonsense');
     },
   },
   {
     name: 'batch.model-header-ignored',
-    description: 'x-multivoice-model is accepted and ignored: the response model is the served one',
+    description: 'x-fairspoken-model is accepted and ignored: the response model is the served one',
     async run(ctx) {
       await ctx.requireModel();
       const speech = ctx.speech;
-      const res = await ctx.batch(wav16(speech.samples, speech.sampleRate), { 'x-multivoice-model': 'no-such-model' });
-      await checkTranscription(ctx, res, { seconds: speech.samples.length / speech.sampleRate, label: 'POST /v1/transcriptions with x-multivoice-model: no-such-model', speech });
+      const res = await ctx.batch(wav16(speech.samples, speech.sampleRate), { 'x-fairspoken-model': 'no-such-model' });
+      await checkTranscription(ctx, res, { seconds: speech.samples.length / speech.sampleRate, label: 'POST /v1/transcriptions with x-fairspoken-model: no-such-model', speech });
     },
   },
   {
     name: 'batch.vocabulary-hints',
-    description: 'x-multivoice-vocabulary-hints (percent-encoded JSON array) and x-multivoice-backend: whisper are accepted',
+    description: 'x-fairspoken-vocabulary-hints (percent-encoded JSON array) and x-fairspoken-backend: whisper are accepted',
     async run(ctx) {
       await ctx.requireModel();
       const speech = ctx.speech;
       const hints = encodeURIComponent(JSON.stringify(['Fairspoken', 'Parakeet', 'naïve café']));
-      const res = await ctx.batch(wav16(speech.samples, speech.sampleRate), { 'x-multivoice-vocabulary-hints': hints, 'x-multivoice-backend': 'whisper', 'x-multivoice-language': 'en' });
+      const res = await ctx.batch(wav16(speech.samples, speech.sampleRate), { 'x-fairspoken-vocabulary-hints': hints, 'x-fairspoken-backend': 'whisper', 'x-fairspoken-language': 'en' });
       await checkTranscription(ctx, res, { seconds: speech.samples.length / speech.sampleRate, label: 'POST /v1/transcriptions with vocabulary hints', speech });
     },
   },

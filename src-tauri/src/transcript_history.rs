@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -172,24 +171,13 @@ fn current_epoch_millis() -> u64 {
 }
 
 fn default_history_path() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_TAURI_HISTORY_PATH") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_HISTORY_PATH") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("transcript-history.json");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("multivoice-tauri")
-            .join("transcript-history.json");
-    }
-
-    PathBuf::from("transcript-history.json")
+    crate::app_dirs::config_dir()
+        .map(|dir| dir.join("transcript-history.json"))
+        .unwrap_or_else(|| PathBuf::from("transcript-history.json"))
 }
 
 #[cfg(test)]

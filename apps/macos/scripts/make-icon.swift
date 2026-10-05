@@ -1,5 +1,5 @@
 // Renders the placeholder app icon (until design/brand/ lands) into the asset catalog.
-// Usage: swift scripts/make-icon.swift MultiVoice/Resources/Assets.xcassets/AppIcon.appiconset
+// Usage: swift scripts/make-icon.swift Fairspoken/Resources/Assets.xcassets/AppIcon.appiconset
 import AppKit
 
 let out = URL(fileURLWithPath: CommandLine.arguments[1])

@@ -1,6 +1,6 @@
 import FairspokenHost
 import FairspokenUI
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// Main window: Liquid Glass sidebar and toolbar (the control layer) over a limestone /

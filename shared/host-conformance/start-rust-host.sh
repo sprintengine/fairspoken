@@ -6,8 +6,8 @@
 #
 #   shared/host-conformance/start-rust-host.sh <port> <token>
 #
-# Other MULTIVOICE_HOST_* variables pass through, e.g.
-#   MULTIVOICE_HOST_WORKERS=1 MULTIVOICE_HOST_QUEUE_CAPACITY=2 start-rust-host.sh 48970 secret
+# Other FAIRSPOKEN_HOST_* variables pass through, e.g.
+#   FAIRSPOKEN_HOST_WORKERS=1 FAIRSPOKEN_HOST_QUEUE_CAPACITY=2 start-rust-host.sh 48970 secret
 # Set HOST_BIN to use another binary.
 
 set -euo pipefail
@@ -44,9 +44,9 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 env_token=()
-[[ -n $token ]] && env_token=(MULTIVOICE_HOST_TOKEN="$token")
-env MULTIVOICE_HOST_ADDR="127.0.0.1:$port" \
-  MULTIVOICE_HOST_CONFIG_PATH="$config_dir/host-config.json" \
+[[ -n $token ]] && env_token=(FAIRSPOKEN_HOST_TOKEN="$token")
+env FAIRSPOKEN_HOST_ADDR="127.0.0.1:$port" \
+  FAIRSPOKEN_HOST_CONFIG_PATH="$config_dir/host-config.json" \
   ${env_token[@]+"${env_token[@]}"} \
   "$bin" &
 pid=$!

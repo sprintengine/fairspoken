@@ -1,0 +1,16 @@
+# Runs the Fairspoken transcription host as a systemd user service.
+# Install: see "Running the host on a Tailscale network" in README.md.
+[Unit]
+Description=Fairspoken transcription host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/transcription-host
+Environment=FAIRSPOKEN_HOST_ADDR=127.0.0.1:48173
+EnvironmentFile=%h/.config/fairspoken/host.env
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

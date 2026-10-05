@@ -119,6 +119,12 @@ export function startMockHost(port = 0) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(readFileSync(DASHBOARD));
     }
+    // The dashboard shows "Live" only once its event feed opens; a snapshot
+    // frame on a held-open stream is all it needs for a still image.
+    if (path === "/v1/events") {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      return res.write(`event: snapshot\ndata: ${JSON.stringify(stats())}\n\n`);
+    }
     if (path === "/v1/stats") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return res.end(JSON.stringify(stats()));

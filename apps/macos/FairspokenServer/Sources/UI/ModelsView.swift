@@ -1,6 +1,6 @@
 import FairspokenHost
 import FairspokenUI
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// Installed and available models, downloads, and which model each worker serves.

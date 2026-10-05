@@ -197,6 +197,8 @@ const POLISH_MODEL_NAMES: Record<string, string> = {
 };
 
 let currentSettings: Settings = { ...DEFAULTS };
+// Builds without a Fairspoken Cloud endpoint hide every cloud choice.
+let cloudAvailable = true;
 let meterStream: MediaStream | null = null;
 let meterContext: AudioContext | null = null;
 let meterAnimation: number | null = null;
@@ -342,6 +344,16 @@ function speechModelName(model: string): string {
   return model.startsWith("parakeet") ? `Parakeet TDT 0.6B ${model.endsWith("-v2") ? "v2 · English" : "v3"}` : `Whisper ${model}`;
 }
 
+function applyCloudAvailability(): void {
+  const cloudLocation = document.querySelector<HTMLButtonElement>('#locationSeg button[data-value="cloud"]');
+  const cloudPolish = polishProviderSelect.querySelector<HTMLOptionElement>('option[value="cloud"]');
+  for (const choice of [cloudLocation, cloudPolish]) {
+    if (!choice) continue;
+    choice.hidden = !cloudAvailable;
+    choice.disabled = !cloudAvailable;
+  }
+}
+
 function applyToForm(settings: Settings): void {
   locationSeg.set(settings.transcriptionLocation);
   // A selection from the model library must remain representable even if its
@@ -391,15 +403,16 @@ function applyToForm(settings: Settings): void {
 // Speech and polish use independent providers and share only the cloud token.
 function updatePolishUi(settings: Settings): void {
   const local = settings.polishProvider === "local";
-  const hasToken = local || settings.cloudAuthToken.trim() !== "";
+  const hasToken = local || (cloudAvailable && settings.cloudAuthToken.trim() !== "");
   polishEnabled.disabled = !hasToken;
   polishHelp.textContent = local
     ? settings.transcriptionLocation === "local"
       ? "Cleans previews as you dictate locally, then runs a final pass. Manage local model downloads in Models."
       : "Runs a final cleanup pass on this device after remote transcription finishes. Manage downloads in Models."
+    : !cloudAvailable ? "Fairspoken Cloud is not available in this build. Choose On this device."
     : hasToken ? "Sends transcript text to Fairspoken Cloud for cleanup. Speech transcription can stay local."
     : "Add your Fairspoken Cloud token below to enable cloud cleanup.";
-  polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local);
+  polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local || !cloudAvailable);
   document.getElementById("polishLocalModelRow")?.toggleAttribute("hidden", !local);
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
   contextAwarenessHelp.textContent = "On macOS, reads vocabulary from the focused window at recording start and limited text before the caret for final cleanup. No screenshots or continuous screen reading. "
@@ -782,7 +795,9 @@ function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
     remoteStatus.textContent = currentSettings.remoteUrl ? "Remote host not checked" : "Remote host not configured";
   }
   if (location === "cloud") {
-    cloudStatus.textContent = currentSettings.cloudAuthToken
+    cloudStatus.textContent = !cloudAvailable
+      ? "Fairspoken Cloud is not available in this build. Choose Local or My host."
+      : currentSettings.cloudAuthToken
       ? "Allowance: shown after first dictation"
       : "Paste a token to enable Fairspoken Cloud";
   }
@@ -905,14 +920,21 @@ function refreshMeter(): void {
 }
 
 async function loadSettings(): Promise<void> {
-  const [saved, models] = await Promise.all([
+  const [saved, models, cloud] = await Promise.all([
     invoke<Settings>("get_settings"),
     invoke<{ model: SttModel }[]>("get_dictation_models").catch(() => []),
+    invoke<boolean>("get_cloud_available").catch(() => false),
   ]);
+  cloudAvailable = cloud;
+  applyCloudAvailability();
   if (Array.isArray(models) && models.length) {
     modelSelect.replaceChildren(...models.map(model => new Option(speechModelName(model.model), model.model)));
   }
   currentSettings = normalizeSettings(saved);
+  // Cloud is the polish default; without a cloud, offer this device instead.
+  if (!cloudAvailable && !currentSettings.polishEnabled && currentSettings.polishProvider === "cloud") {
+    currentSettings.polishProvider = "local";
+  }
   applyToForm(currentSettings);
   await loadAudioDevices();
   if (currentSettings.transcriptionLocation === "local") {

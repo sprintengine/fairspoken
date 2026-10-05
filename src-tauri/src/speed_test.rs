@@ -1,6 +1,5 @@
 use crate::settings::{Settings, TranscriptionLocation};
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -143,24 +142,13 @@ impl SpeedTestService {
 }
 
 fn default_speed_test_path() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_TAURI_SPEED_TEST_PATH") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_SPEED_TEST_PATH") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("speed-test.json");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("multivoice-tauri")
-            .join("speed-test.json");
-    }
-
-    PathBuf::from("speed-test.json")
+    crate::app_dirs::config_dir()
+        .map(|dir| dir.join("speed-test.json"))
+        .unwrap_or_else(|| PathBuf::from("speed-test.json"))
 }
 
 #[cfg(test)]
@@ -186,7 +174,7 @@ mod tests {
 
     #[test]
     fn first_run_is_always_a_new_best() {
-        let mut service = service_at("multivoice-speedtest-first.json");
+        let mut service = service_at("fairspoken-speedtest-first.json");
         let (summary, is_best) = service.record(record(3.0, 1)).expect("record");
         assert!(is_best);
         assert_eq!(summary.best.unwrap().multiplier, 3.0);
@@ -196,7 +184,7 @@ mod tests {
 
     #[test]
     fn best_only_advances_on_a_higher_multiplier() {
-        let mut service = service_at("multivoice-speedtest-best.json");
+        let mut service = service_at("fairspoken-speedtest-best.json");
         service.record(record(3.5, 1)).expect("first");
         let (summary, is_best) = service.record(record(2.9, 2)).expect("slower run");
         // Last reflects the most recent run; best holds the faster earlier one.

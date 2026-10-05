@@ -97,8 +97,8 @@ export function releasesRepoFromEndpoint(endpoint) {
   return `${match[1]}/${match[2]}`
 }
 
-// The file-name stem every packaged file shares: "Multivoice Tauri" ->
-// "multivoice-tauri". GitHub rewrites spaces in asset names, so none are used.
+// The file-name stem every packaged file shares: "Fairspoken" ->
+// "fairspoken". GitHub rewrites spaces in asset names, so none are used.
 export function productSlug(productName) {
   const slug = String(productName).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   if (!slug) throw new Error(`Cannot name files after the product name ${JSON.stringify(productName)}`)
@@ -368,7 +368,7 @@ export function buildReleaseNotes({ productName, version, channel, sourceRepo, s
 // deliberately, because an anonymous API budget is per address and shared with
 // everything else on the user's network.
 
-const ANONYMOUS_USER_AGENT = 'multivoice-release'
+const ANONYMOUS_USER_AGENT = 'fairspoken-release'
 
 // fetch is a parameter so the tests can read back exactly what was sent: the
 // point of this function is the headers it does NOT carry, and an ambient

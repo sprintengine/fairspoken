@@ -32,8 +32,8 @@ import {
 } from './release-lib.mjs'
 
 const SHA = 'a'.repeat(40)
-const REPO = 'acme/multivoice'
-const SLUG = 'multivoice'
+const REPO = 'acme/fairspoken'
+const SLUG = 'fairspoken'
 
 test('channelForVersion: stable, nightly, and prereleases nobody could follow', () => {
   assert.equal(channelForVersion('0.4.0'), 'latest')
@@ -57,29 +57,29 @@ test('the releases repository comes from the stable updater endpoint and nowhere
   assert.equal(releasesRepoFromEndpoint('https://github.com/acme/multi-voice.app/releases/latest/download/latest.json'), 'acme/multi-voice.app')
   for (const wrong of [
     undefined,
-    'https://github.com/acme/multivoice/releases/download/nightly/latest.json',
-    'https://example.com/acme/multivoice/releases/latest/download/latest.json',
-    'https://github.com/acme/multivoice/releases/latest/download/latest.yml',
+    'https://github.com/acme/fairspoken/releases/download/nightly/latest.json',
+    'https://example.com/acme/fairspoken/releases/latest/download/latest.json',
+    'https://github.com/acme/fairspoken/releases/latest/download/latest.yml',
   ]) {
     assert.throws(() => releasesRepoFromEndpoint(wrong), /updater endpoint must be/)
   }
 })
 
 test('file names carry no spaces, whatever the product is called', () => {
-  assert.equal(productSlug('Multivoice Tauri'), 'multivoice-tauri')
+  assert.equal(productSlug('Fairspoken Desktop'), 'fairspoken-desktop')
   assert.equal(productSlug('  Hush!  '), 'hush')
   assert.throws(() => productSlug('***'), /Cannot name files/)
 })
 
 test('release notes say which train a build is on', () => {
   const notes = (channel) =>
-    buildReleaseNotes({ productName: 'Multivoice', version: '0.5.0', channel, sourceRepo: 'o/r', sha: SHA, sourcePrivate: true })
-  assert.match(notes('nightly'), /^Nightly build of Multivoice 0\.5\.0\./)
-  assert.match(notes('latest'), /^Multivoice 0\.5\.0\.\n/)
+    buildReleaseNotes({ productName: 'Fairspoken', version: '0.5.0', channel, sourceRepo: 'o/r', sha: SHA, sourcePrivate: true })
+  assert.match(notes('nightly'), /^Nightly build of Fairspoken 0\.5\.0\./)
+  assert.match(notes('latest'), /^Fairspoken 0\.5\.0\.\n/)
 })
 
 test('the source sha round-trips through the release body', () => {
-  const body = buildReleaseNotes({ productName: 'Multivoice', version: '0.4.0', channel: 'latest', sourceRepo: 'o/r', sha: SHA, sourcePrivate: true })
+  const body = buildReleaseNotes({ productName: 'Fairspoken', version: '0.4.0', channel: 'latest', sourceRepo: 'o/r', sha: SHA, sourcePrivate: true })
   assert.equal(sourceShaFromBody(body), SHA)
   assert.equal(sourceShaFromBody('no marker here'), null)
   assert.equal(sourceShaFromBody(null), null)
@@ -87,7 +87,7 @@ test('the source sha round-trips through the release body', () => {
 
 test('release notes list commit subjects only when the source is public', () => {
   const commits = [{ sha: 'b'.repeat(40), subject: 'Private subject line' }]
-  const base = { productName: 'Multivoice', version: '0.4.0', channel: 'latest', sourceRepo: 'o/r', sha: SHA, commits }
+  const base = { productName: 'Fairspoken', version: '0.4.0', channel: 'latest', sourceRepo: 'o/r', sha: SHA, commits }
   const privateBody = buildReleaseNotes({ ...base, sourcePrivate: true })
   assert.ok(!privateBody.includes('Private subject line'))
   assert.ok(!privateBody.includes('github.com/o/r'))
@@ -98,11 +98,11 @@ test('release notes list commit subjects only when the source is public', () => 
 // What `tauri build` leaves under target/release/bundle on each OS that ships
 // the Tauri app. macOS is not one of them: Macs get the native apps.
 const BUNDLES = {
-  'windows-x86_64': ['bundle/nsis/Multivoice_0.4.0_x64-setup.exe', 'bundle/nsis/Multivoice_0.4.0_x64-setup.exe.sig'],
+  'windows-x86_64': ['bundle/nsis/Fairspoken_0.4.0_x64-setup.exe', 'bundle/nsis/Fairspoken_0.4.0_x64-setup.exe.sig'],
   'linux-x86_64': [
-    'bundle/appimage/Multivoice_0.4.0_amd64.AppImage',
-    'bundle/appimage/Multivoice_0.4.0_amd64.AppImage.sig',
-    'bundle/deb/Multivoice_0.4.0_amd64.deb',
+    'bundle/appimage/Fairspoken_0.4.0_amd64.AppImage',
+    'bundle/appimage/Fairspoken_0.4.0_amd64.AppImage.sig',
+    'bundle/deb/Fairspoken_0.4.0_amd64.deb',
   ],
 }
 
@@ -110,13 +110,13 @@ test('each leg renames its bundles so every leg can share one release', () => {
   const plan = (platform) => planCollect({ files: BUNDLES[platform], platform, slug: SLUG, version: '0.4.0' })
   const linux = plan('linux-x86_64')
   assert.deepEqual(linux.copies, [
-    { from: 'bundle/deb/Multivoice_0.4.0_amd64.deb', to: 'multivoice-0.4.0-linux-x86_64.deb' },
-    { from: 'bundle/appimage/Multivoice_0.4.0_amd64.AppImage', to: 'multivoice-0.4.0-linux-x86_64.AppImage' },
+    { from: 'bundle/deb/Fairspoken_0.4.0_amd64.deb', to: 'fairspoken-0.4.0-linux-x86_64.deb' },
+    { from: 'bundle/appimage/Fairspoken_0.4.0_amd64.AppImage', to: 'fairspoken-0.4.0-linux-x86_64.AppImage' },
   ])
-  assert.equal(linux.signature, 'bundle/appimage/Multivoice_0.4.0_amd64.AppImage.sig')
-  assert.equal(linux.payloadName, 'multivoice-0.4.0-linux-x86_64.AppImage')
-  assert.deepEqual(plan('windows-x86_64').copies.map((copy) => copy.to), ['multivoice-0.4.0-windows-x64-setup.exe'])
-  assert.equal(plan('windows-x86_64').payloadName, 'multivoice-0.4.0-windows-x64-setup.exe')
+  assert.equal(linux.signature, 'bundle/appimage/Fairspoken_0.4.0_amd64.AppImage.sig')
+  assert.equal(linux.payloadName, 'fairspoken-0.4.0-linux-x86_64.AppImage')
+  assert.deepEqual(plan('windows-x86_64').copies.map((copy) => copy.to), ['fairspoken-0.4.0-windows-x64-setup.exe'])
+  assert.equal(plan('windows-x86_64').payloadName, 'fairspoken-0.4.0-windows-x64-setup.exe')
 })
 
 test('a leg that cannot say which file it built, or built it unsigned, fails', () => {
@@ -132,9 +132,9 @@ test('a leg that cannot say which file it built, or built it unsigned, fails', (
 
 test('the Tauri app has no macOS platform: no leg can collect one, and no manifest entry is written for it', () => {
   const macBundle = [
-    'bundle/dmg/Multivoice_0.4.0_aarch64.dmg',
-    'bundle/macos/Multivoice.app.tar.gz',
-    'bundle/macos/Multivoice.app.tar.gz.sig',
+    'bundle/dmg/Fairspoken_0.4.0_aarch64.dmg',
+    'bundle/macos/Fairspoken.app.tar.gz',
+    'bundle/macos/Fairspoken.app.tar.gz.sig',
   ]
   for (const platform of ['darwin-aarch64', 'darwin-x86_64']) {
     assert.throws(() => planCollect({ files: macBundle, platform, slug: SLUG, version: '0.4.0' }), /Unknown updater platform/)
@@ -148,14 +148,14 @@ test('the Tauri app has no macOS platform: no leg can collect one, and no manife
 
 const TAG = 'v0.4.0'
 const RELEASE_ASSETS = [
-  'multivoice-0.4.0-windows-x64-setup.exe',
-  'multivoice-0.4.0-linux-x86_64.AppImage',
-  'multivoice-0.4.0-linux-x86_64.deb',
-  'multivoice-0.4.0-transcription-host-linux-x64.tar.gz',
-  'multivoice-0.4.0-transcription-host-linux-arm64.tar.gz',
-  'multivoice-0.4.0-transcription-host-windows-x64.zip',
-  'multivoice-0.4.0-transcription-host-macos-arm64.tar.gz',
-  'multivoice-0.4.0-transcription-host-macos-x64.tar.gz',
+  'fairspoken-0.4.0-windows-x64-setup.exe',
+  'fairspoken-0.4.0-linux-x86_64.AppImage',
+  'fairspoken-0.4.0-linux-x86_64.deb',
+  'fairspoken-0.4.0-transcription-host-linux-x64.tar.gz',
+  'fairspoken-0.4.0-transcription-host-linux-arm64.tar.gz',
+  'fairspoken-0.4.0-transcription-host-windows-x64.zip',
+  'fairspoken-0.4.0-transcription-host-macos-arm64.tar.gz',
+  'fairspoken-0.4.0-transcription-host-macos-x64.tar.gz',
   'Fairspoken-0.4.0-macos-arm64.zip',
   'Fairspoken-0.4.0-macos-arm64.dmg',
   'Fairspoken-Server-0.4.0-macos-arm64.zip',
@@ -164,8 +164,8 @@ const RELEASE_ASSETS = [
 
 function fragments(version = '0.4.0', tag = TAG) {
   const payloads = {
-    'windows-x86_64': `multivoice-${version}-windows-x64-setup.exe`,
-    'linux-x86_64': `multivoice-${version}-linux-x86_64.AppImage`,
+    'windows-x86_64': `fairspoken-${version}-windows-x64-setup.exe`,
+    'linux-x86_64': `fairspoken-${version}-linux-x86_64.AppImage`,
   }
   return Object.entries(payloads).map(([platform, payloadName]) =>
     manifestFragment({ platform, version, repo: REPO, tag, payloadName, signature: `sig-${platform}\n` }),
@@ -182,7 +182,7 @@ test('the merged manifest carries every platform, and passes the updater check',
   assert.equal(manifest.platforms['windows-x86_64'].signature, 'sig-windows-x86_64')
   assert.equal(
     manifest.platforms['linux-x86_64'].url,
-    `https://github.com/${REPO}/releases/download/v0.4.0/multivoice-0.4.0-linux-x86_64.AppImage`,
+    `https://github.com/${REPO}/releases/download/v0.4.0/fairspoken-0.4.0-linux-x86_64.AppImage`,
   )
   assert.deepEqual(checkManifest(manifestText(), { version: '0.4.0', repo: REPO, tag: TAG, assetNames: RELEASE_ASSETS }), [])
 })
@@ -206,9 +206,9 @@ test('checkManifest names what a partial or misdirected manifest lacks', () => {
   assert.deepEqual(check(manifestText(), { version: '0.4.1' }), ['names version 0.4.0, expected 0.4.1'])
   const elsewhere = manifestText().replaceAll(`github.com/${REPO}/`, 'github.com/acme/other/')
   assert.equal(check(elsewhere).length, 2)
-  assert.match(check(elsewhere)[0], /not at v0\.4\.0 on acme\/multivoice/)
+  assert.match(check(elsewhere)[0], /not at v0\.4\.0 on acme\/fairspoken/)
   const missingAsset = check(manifestText(), { assetNames: RELEASE_ASSETS.filter((name) => !name.endsWith('.AppImage')) })
-  assert.deepEqual(missingAsset, ['points linux-x86_64 at multivoice-0.4.0-linux-x86_64.AppImage, which is not on the release'])
+  assert.deepEqual(missingAsset, ['points linux-x86_64 at fairspoken-0.4.0-linux-x86_64.AppImage, which is not on the release'])
   const unsigned = JSON.parse(manifestText())
   unsigned.platforms['windows-x86_64'].signature = ''
   assert.deepEqual(check(JSON.stringify(unsigned)), ['has no windows-x86_64 signature, and the updater refuses an unsigned payload'])
@@ -219,13 +219,13 @@ test('missingInstallers wants every product: the Tauri installers, each host arc
   const options = { slug: SLUG, version: '0.4.0', macAppName: 'Fairspoken' }
   assert.deepEqual(missingInstallers(RELEASE_ASSETS, options), [])
   assert.deepEqual(missingInstallers([], options), [
-    'a Windows -setup.exe (multivoice-0.4.0-windows-x64-setup.exe)',
-    'an .AppImage (multivoice-0.4.0-linux-x86_64.AppImage)',
-    'the linux-x64 transcription host (multivoice-0.4.0-transcription-host-linux-x64.tar.gz)',
-    'the linux-arm64 transcription host (multivoice-0.4.0-transcription-host-linux-arm64.tar.gz)',
-    'the windows-x64 transcription host (multivoice-0.4.0-transcription-host-windows-x64.zip)',
-    'the macos-arm64 transcription host (multivoice-0.4.0-transcription-host-macos-arm64.tar.gz)',
-    'the macos-x64 transcription host (multivoice-0.4.0-transcription-host-macos-x64.tar.gz)',
+    'a Windows -setup.exe (fairspoken-0.4.0-windows-x64-setup.exe)',
+    'an .AppImage (fairspoken-0.4.0-linux-x86_64.AppImage)',
+    'the linux-x64 transcription host (fairspoken-0.4.0-transcription-host-linux-x64.tar.gz)',
+    'the linux-arm64 transcription host (fairspoken-0.4.0-transcription-host-linux-arm64.tar.gz)',
+    'the windows-x64 transcription host (fairspoken-0.4.0-transcription-host-windows-x64.zip)',
+    'the macos-arm64 transcription host (fairspoken-0.4.0-transcription-host-macos-arm64.tar.gz)',
+    'the macos-x64 transcription host (fairspoken-0.4.0-transcription-host-macos-x64.tar.gz)',
     'the native macOS app .zip (Fairspoken-0.4.0-macos-arm64.zip)',
     'the native macOS app .dmg (Fairspoken-0.4.0-macos-arm64.dmg)',
     'the native macOS server app .zip (Fairspoken-Server-0.4.0-macos-arm64.zip)',
@@ -239,11 +239,11 @@ test('missingInstallers wants every product: the Tauri installers, each host arc
 test('the Tauri macOS app is no longer asked for, and its files do not stand in for anything', () => {
   const options = { slug: SLUG, version: '0.4.0', macAppName: 'Fairspoken' }
   // The current asset set carries no Tauri macOS DMG or updater payload.
-  assert.ok(!RELEASE_ASSETS.some((name) => /^multivoice-.*-macos-(arm64|x64)(\.dmg|\.app\.tar\.gz)$/.test(name)))
+  assert.ok(!RELEASE_ASSETS.some((name) => /^fairspoken-.*-macos-(arm64|x64)(\.dmg|\.app\.tar\.gz)$/.test(name)))
   assert.deepEqual(missingInstallers(RELEASE_ASSETS, options), [])
   // The macOS host archives are still required.
   for (const target of ['macos-arm64', 'macos-x64']) {
-    const name = `multivoice-0.4.0-transcription-host-${target}.tar.gz`
+    const name = `fairspoken-0.4.0-transcription-host-${target}.tar.gz`
     assert.deepEqual(missingInstallers(RELEASE_ASSETS.filter((asset) => asset !== name), options), [
       `the ${target} transcription host (${name})`,
     ])
@@ -251,7 +251,7 @@ test('the Tauri macOS app is no longer asked for, and its files do not stand in 
   // An old-style Tauri Apple Silicon DMG is not the native app.
   const tauriDmgOnly = [
     ...RELEASE_ASSETS.filter((name) => name !== 'Fairspoken-0.4.0-macos-arm64.dmg'),
-    'multivoice-0.4.0-macos-arm64.dmg',
+    'fairspoken-0.4.0-macos-arm64.dmg',
   ]
   assert.deepEqual(missingInstallers(tauriDmgOnly, options), ['the native macOS app .dmg (Fairspoken-0.4.0-macos-arm64.dmg)'])
 })
@@ -300,9 +300,9 @@ test('ad-hoc signed native apps complete a release, and are named as such', () =
 test('host archives and native app packages are named per platform, with no spaces', () => {
   assert.equal(
     hostArchiveName({ slug: SLUG, version: '0.5.0-nightly.20261004.41', target: 'linux-arm64' }),
-    'multivoice-0.5.0-nightly.20261004.41-transcription-host-linux-arm64.tar.gz',
+    'fairspoken-0.5.0-nightly.20261004.41-transcription-host-linux-arm64.tar.gz',
   )
-  assert.equal(hostArchiveName({ slug: SLUG, version: '0.5.0', target: 'windows-x64' }), 'multivoice-0.5.0-transcription-host-windows-x64.zip')
+  assert.equal(hostArchiveName({ slug: SLUG, version: '0.5.0', target: 'windows-x64' }), 'fairspoken-0.5.0-transcription-host-windows-x64.zip')
   assert.throws(() => hostArchiveName({ slug: SLUG, version: '0.5.0', target: 'linux-riscv64' }), /Unknown transcription host target/)
   assert.equal(
     macAppFileName({ appName: 'Fairspoken', version: '0.5.0-nightly.20261004.41', extension: '.dmg' }),

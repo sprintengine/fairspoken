@@ -1,7 +1,7 @@
 # cargo-deny configuration. CI runs `cargo deny check licenses`; every Rust
 # dependency (direct or transitive) must carry a license on this allow list.
 # Adding a license here is a deliberate decision: it has to be compatible with
-# distributing MultiVoice under MIT.
+# distributing Fairspoken under MIT.
 
 [licenses]
 confidence-threshold = 0.8

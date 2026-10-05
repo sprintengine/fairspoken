@@ -1352,19 +1352,19 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
-    // Run explicitly with MULTIVOICE_POLISH_MODEL_DIR pointing at an installed
-    // polish directory (runtime plus model) and MULTIVOICE_POLISH_MODEL naming
+    // Run explicitly with FAIRSPOKEN_POLISH_MODEL_DIR pointing at an installed
+    // polish directory (runtime plus model) and FAIRSPOKEN_POLISH_MODEL naming
     // the model. Replays dictations that went wrong in the field; only reads
     // the directory.
     #[test]
     #[ignore = "requires an installed local runtime and model"]
     fn installed_model_handles_field_failures() {
-        let dir = PathBuf::from(std::env::var("MULTIVOICE_POLISH_MODEL_DIR").expect("model directory"));
+        let dir = PathBuf::from(crate::app_dirs::env_var("FAIRSPOKEN_POLISH_MODEL_DIR").expect("model directory"));
         let service = LocalModels::new(dir);
         let settings = Settings {
             polish_enabled: true,
             polish_provider: PolishProvider::Local,
-            polish_model: std::env::var("MULTIVOICE_POLISH_MODEL").unwrap_or_else(|_| MODELS[0].id.into()),
+            polish_model: crate::app_dirs::env_var("FAIRSPOKEN_POLISH_MODEL").unwrap_or_else(|| MODELS[0].id.into()),
             language: "en".into(),
             vocabulary_hints: ["Hypercube", "rocketdeck", "RocketDeck", "Railway", "Claude"]
                 .iter()
@@ -1394,26 +1394,26 @@ mod tests {
         service.unload();
     }
 
-    // Run explicitly with MULTIVOICE_POLISH_MODEL_DIR and MULTIVOICE_POLISH_MODEL
-    // as above, MULTIVOICE_POLISH_BENCH_CASES naming a file written by
+    // Run explicitly with FAIRSPOKEN_POLISH_MODEL_DIR and FAIRSPOKEN_POLISH_MODEL
+    // as above, FAIRSPOKEN_POLISH_BENCH_CASES naming a file written by
     // `scripts/polish-bench.py --export-cases=<file>` and
-    // MULTIVOICE_POLISH_BENCH_RESULTS naming where to write what each dictation
+    // FAIRSPOKEN_POLISH_BENCH_RESULTS naming where to write what each dictation
     // would insert, for `polish-bench.py --score=<file>`. Unlike the bench
     // itself this is the whole local path: tidy, the model's own prompt and
     // the output guards, with the raw text kept whenever a guard rejects.
     #[test]
     #[ignore = "requires an installed local runtime and model"]
     fn benchmark_cases_through_the_app_path() {
-        let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name}"));
+        let env = |name: &str| crate::app_dirs::env_var(name).unwrap_or_else(|| panic!("{name}"));
         let bench: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(env("MULTIVOICE_POLISH_BENCH_CASES")).unwrap(),
+            &fs::read_to_string(env("FAIRSPOKEN_POLISH_BENCH_CASES")).unwrap(),
         )
         .unwrap();
-        let service = LocalModels::new(PathBuf::from(env("MULTIVOICE_POLISH_MODEL_DIR")));
+        let service = LocalModels::new(PathBuf::from(env("FAIRSPOKEN_POLISH_MODEL_DIR")));
         let settings = Settings {
             polish_enabled: true,
             polish_provider: PolishProvider::Local,
-            polish_model: env("MULTIVOICE_POLISH_MODEL"),
+            polish_model: env("FAIRSPOKEN_POLISH_MODEL"),
             language: "en".into(),
             vocabulary_hints: serde_json::from_value(bench["vocab"].clone()).unwrap(),
             ..Settings::default()
@@ -1436,19 +1436,19 @@ mod tests {
         }
         service.unload();
         fs::write(
-            env("MULTIVOICE_POLISH_BENCH_RESULTS"),
+            env("FAIRSPOKEN_POLISH_BENCH_RESULTS"),
             serde_json::to_string_pretty(&results).unwrap(),
         )
         .unwrap();
     }
 
-    // Run explicitly with MULTIVOICE_POLISH_SMOKE_DIR pointing to verified
+    // Run explicitly with FAIRSPOKEN_POLISH_SMOKE_DIR pointing to verified
     // runtime.tar.gz and model.gguf fixtures. Never touches user settings.
     #[test]
     #[ignore = "requires the pinned local runtime and model fixtures"]
     fn real_runtime_polishes_and_unloads() {
         let fixtures =
-            PathBuf::from(std::env::var("MULTIVOICE_POLISH_SMOKE_DIR").expect("fixture directory"));
+            PathBuf::from(crate::app_dirs::env_var("FAIRSPOKEN_POLISH_SMOKE_DIR").expect("fixture directory"));
         let dir = fixtures.join(format!("rust-smoke-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         install_runtime(

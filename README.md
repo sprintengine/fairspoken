@@ -78,9 +78,12 @@ Useful environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `MULTIVOICE_TAURI_MODEL_DIR` | Override the model cache directory |
-| `MULTIVOICE_TAURI_SETTINGS_PATH` | Override the settings file location |
-| `MULTIVOICE_CLOUD_URL` | Point cloud mode at a different endpoint (compile time or runtime) |
+| `FAIRSPOKEN_MODEL_DIR` | Override the model cache directory |
+| `FAIRSPOKEN_SETTINGS_PATH` | Override the settings file location |
+| `FAIRSPOKEN_CLOUD_URL` | Fairspoken Cloud endpoint. Set at compile time to offer the Cloud location and cloud polish (a runtime value overrides it); builds without it offer only local and self-hosted transcription |
+
+Variables from before the rename (`MULTIVOICE_*`, `MULTIVOICE_TAURI_*`) are
+still accepted when the `FAIRSPOKEN_*` name is unset.
 
 ## Remote transcription host
 
@@ -94,17 +97,17 @@ It listens on `127.0.0.1:48173` by default. To accept connections from other
 machines, bind to all interfaces and require a token:
 
 ```bash
-MULTIVOICE_HOST_ADDR=0.0.0.0:48173 MULTIVOICE_HOST_TOKEN=<choose-a-token> \
+FAIRSPOKEN_HOST_ADDR=0.0.0.0:48173 FAIRSPOKEN_HOST_TOKEN=<choose-a-token> \
   cargo run --manifest-path src-tauri/Cargo.toml --release --bin transcription-host
 ```
 
 Capacity settings (defaults shown):
 
 ```bash
-MULTIVOICE_HOST_WORKERS=1
-MULTIVOICE_HOST_QUEUE_CAPACITY=8
-MULTIVOICE_HOST_MAX_ACTIVE_STREAMS=4
-MULTIVOICE_HOST_MAX_RECORDING_SECONDS=600
+FAIRSPOKEN_HOST_WORKERS=1
+FAIRSPOKEN_HOST_QUEUE_CAPACITY=8
+FAIRSPOKEN_HOST_MAX_ACTIVE_STREAMS=4
+FAIRSPOKEN_HOST_MAX_RECORDING_SECONDS=600
 ```
 
 In the app's settings, set **Transcription location** to **Remote host** and
@@ -125,7 +128,7 @@ tailnet over HTTPS with a real `*.ts.net` certificate:
 
 ```bash
 cargo build --manifest-path src-tauri/Cargo.toml --release --bin transcription-host
-MULTIVOICE_HOST_TOKEN=<choose-a-token> src-tauri/target/release/transcription-host
+FAIRSPOKEN_HOST_TOKEN=<choose-a-token> src-tauri/target/release/transcription-host
 tailscale serve --bg --https=443 http://127.0.0.1:48173
 ```
 
@@ -135,21 +138,21 @@ dashboard and download a model. On each client, set the host URL to
 
 Plain `http://` also works for tailnet addresses (`100.64.0.0/10`, MagicDNS
 names and `*.ts.net`) because tailnet traffic is already encrypted. For that,
-bind the host with `MULTIVOICE_HOST_ADDR=0.0.0.0:48173` instead of using
+bind the host with `FAIRSPOKEN_HOST_ADDR=0.0.0.0:48173` instead of using
 `tailscale serve`.
 
 To keep the host running across logins and reboots:
 
 - **macOS:** copy
-  `packaging/host/com.multivoice.transcription-host.plist` to
+  `packaging/host/ie.fairspoken.transcription-host.plist` to
   `~/Library/LaunchAgents/`, fill in the binary path, token and log directory,
   `chmod 600` it, then run
-  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.multivoice.transcription-host.plist`.
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ie.fairspoken.transcription-host.plist`.
 - **Linux:** copy the binary to `~/.local/bin/transcription-host`, put
-  `MULTIVOICE_HOST_TOKEN=<token>` in `~/.config/multivoice-tauri/host.env`,
-  copy `packaging/host/multivoice-transcription-host.service` to
+  `FAIRSPOKEN_HOST_TOKEN=<token>` in `~/.config/fairspoken/host.env`,
+  copy `packaging/host/fairspoken-transcription-host.service` to
   `~/.config/systemd/user/`, then run
-  `systemctl --user enable --now multivoice-transcription-host` (and
+  `systemctl --user enable --now fairspoken-transcription-host` (and
   `loginctl enable-linger $USER` to start it without logging in).
 
 ## Privacy

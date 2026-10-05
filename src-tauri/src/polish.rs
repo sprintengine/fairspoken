@@ -5,7 +5,7 @@
 //! and the pipeline continues exactly as if polish were off.
 
 use crate::app_categories::{categorize, AppCategory};
-use crate::settings::{cloud_url, Settings};
+use crate::settings::{cloud_url, Settings, CLOUD_UNAVAILABLE};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
@@ -145,6 +145,9 @@ fn maybe_polish_impl(
     if tone == "off" {
         return PolishDecision::Skipped("polish is off for this app type");
     }
+    if cloud_url().is_none() {
+        return PolishDecision::Skipped("Fairspoken Cloud is not available in this build");
+    }
 
     // Surrounding text goes off-device only when the user opted into BOTH
     // polish and context awareness (Phase C of context-awareness-ax).
@@ -201,7 +204,8 @@ fn polish_transcript(
     span: Option<&crate::note_debug::Span>,
 ) -> Result<PolishResponse, String> {
     let base_url =
-        reqwest::Url::parse(&cloud_url()).map_err(|err| format!("invalid cloud URL: {err}"))?;
+        reqwest::Url::parse(&cloud_url().ok_or_else(|| CLOUD_UNAVAILABLE.to_string())?)
+            .map_err(|err| format!("invalid cloud URL: {err}"))?;
     let url = base_url
         .join("v1/polish")
         .map_err(|err| format!("invalid polish URL: {err}"))?;

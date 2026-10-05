@@ -5,15 +5,16 @@ implementation (this Rust host, the Swift host). JSON is UTF-8 and camelCase.
 Timestamps named `at` or `…Ms` with an epoch meaning are Unix epoch
 milliseconds; other `…Ms` fields are durations.
 
-Wire identifiers keep their original `multivoice` spelling for compatibility
-with shipped clients: the `x-multivoice-*` headers, the
-`application/vnd.multivoice.pcm-stream` content type and the
-`MULTIVOICE_HOST_*` environment variables. Implementations must not rename
-them.
+Wire identifiers are the `x-fairspoken-*` headers, the
+`application/vnd.fairspoken.pcm-stream` content type and the
+`FAIRSPOKEN_HOST_*` environment variables. Clients send only these names.
+Hosts must also accept the pre-rename `x-multivoice-*` headers and
+`MULTIVOICE_HOST_*` variables when the new name is absent (the new name wins
+when both are present).
 
 ## Authentication
 
-When the host has a token (`MULTIVOICE_HOST_TOKEN`), every route except
+When the host has a token (`FAIRSPOKEN_HOST_TOKEN`), every route except
 `GET /` and `GET /favicon.ico` requires it:
 
 - `Authorization: Bearer <token>` on any method, or
@@ -44,17 +45,17 @@ Body: a WAV file (mono PCM16). Answers
 engine that ran (`"parakeet"` or `"whisper"`) and `model` the model id the
 serving worker holds — the host's choice, never the client's.
 
-Request headers: `x-multivoice-language` (default `en`),
-`x-multivoice-vocabulary-hints` (percent-encoded JSON string array),
-`x-multivoice-backend` (`parakeet`/`whisper`; anything else is `400`).
-`x-multivoice-model` is accepted and ignored.
+Request headers: `x-fairspoken-language` (default `en`),
+`x-fairspoken-vocabulary-hints` (percent-encoded JSON string array),
+`x-fairspoken-backend` (`parakeet`/`whisper`; anything else is `400`).
+`x-fairspoken-model` and `x-fairspoken-client` are accepted and ignored.
 
 Status: `413` over the size/duration limit, `429` queue or stream capacity
 reached, `500` worker failure.
 
 ### POST /v1/transcriptions/stream
 
-`Content-Type: application/vnd.multivoice.pcm-stream` (informational; the
+`Content-Type: application/vnd.fairspoken.pcm-stream` (informational; the
 host does not require it). Chunked request body of frames, sent as audio is
 captured:
 

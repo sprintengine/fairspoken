@@ -240,7 +240,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      # XcodeGen generates the git-ignored MultiVoice.xcodeproj. Not on the
+      # XcodeGen generates the git-ignored Fairspoken.xcodeproj. Not on the
       # image; the release zip is pinned by version and checksum.
       - name: Install XcodeGen
         env:
@@ -267,7 +267,7 @@ jobs:
           path: apps/macos/build/SourcePackages
           key: swiftpm-macos26-${{ hashFiles('apps/macos/project.yml', 'apps/macos/Packages/*/Package.swift') }}
 
-      # Every Swift package's unit tests (MultiVoiceCore and FairspokenHost).
+      # Every Swift package's unit tests (FairspokenCore and FairspokenHost).
       - name: Unit tests (Swift packages)
         run: apps/macos/scripts/test.sh
 

@@ -131,13 +131,13 @@
     const frame = document.getElementById("preview");
     await loaded(frame);
     const win = frame.contentWindow, doc = frame.contentDocument;
-    await until(() => win.__mvEmit && doc.getElementById("cursorPreview"));
+    await until(() => win.__fsEmit && doc.getElementById("cursorPreview"));
     doc.body.style.padding = "48px"; // room for the real modal shadow
     await wait(200);
     const base = { sessionId: 7, phase: "recording", remote: false };
-    win.__mvEmit("cursor-preview-state", { ...base, revision: 1, text: RAW, polished: false, polishing: true });
+    win.__fsEmit("cursor-preview-state", { ...base, revision: 1, text: RAW, polished: false, polishing: true });
     await wait(60);
-    win.__mvEmit("cursor-preview-state", { ...base, revision: 2, text: POLISHED, polished: true, polishing: true });
+    win.__fsEmit("cursor-preview-state", { ...base, revision: 2, text: POLISHED, polished: true, polishing: true });
     await wait(120);
 
     // Anchor below-right of the caret, as cursor_preview.rs positions it

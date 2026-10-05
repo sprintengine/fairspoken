@@ -135,15 +135,15 @@ mod tests {
     fn applies_case_insensitive_phrase_correction() {
         let settings = settings_with_corrections(vec![TranscriptCorrection {
             enabled: true,
-            from: "moldy voice".to_string(),
-            to: "Multivoice".to_string(),
+            from: "fair spoken".to_string(),
+            to: "Fairspoken".to_string(),
             case_sensitive: false,
             whole_phrase: true,
         }]);
 
-        let result = apply_transcript_post_processing("Open moldy voice settings.", &settings);
+        let result = apply_transcript_post_processing("Open fair spoken settings.", &settings);
 
-        assert_eq!(result.text, "Open Multivoice settings.");
+        assert_eq!(result.text, "Open Fairspoken settings.");
         assert_eq!(result.corrections_applied, 1);
     }
 

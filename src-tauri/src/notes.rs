@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -236,24 +235,13 @@ fn current_epoch_millis() -> u64 {
 }
 
 fn default_notes_path() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_TAURI_NOTES_PATH") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_NOTES_PATH") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("notes.json");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".config")
-            .join("multivoice-tauri")
-            .join("notes.json");
-    }
-
-    PathBuf::from("notes.json")
+    crate::app_dirs::config_dir()
+        .map(|dir| dir.join("notes.json"))
+        .unwrap_or_else(|| PathBuf::from("notes.json"))
 }
 
 #[cfg(test)]
@@ -263,7 +251,7 @@ mod tests {
     fn service() -> NotesService {
         NotesService {
             notes: Vec::new(),
-            path: std::env::temp_dir().join("multivoice-notes-test-unused.json"),
+            path: std::env::temp_dir().join("fairspoken-notes-test-unused.json"),
         }
     }
 

@@ -1,10 +1,10 @@
-# XcodeGen spec. The generated MultiVoice.xcodeproj is git-ignored: regenerate with
+# XcodeGen spec. The generated Fairspoken.xcodeproj is git-ignored: regenerate with
 #   xcodegen generate        (or scripts/build.sh, which does it for you)
 #
 # Two apps share the packages under Packages/:
-#   MultiVoice        → Fairspoken.app         (dictation client, ie.fairspoken.mac)
+#   Fairspoken        → Fairspoken.app         (dictation client, ie.fairspoken.mac)
 #   FairspokenServer  → Fairspoken Server.app  (transcription server, ie.fairspoken.server)
-name: MultiVoice
+name: Fairspoken
 options:
   deploymentTarget:
     macOS: "26.0"
@@ -20,8 +20,8 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: 1.10.0
-  MultiVoiceCore:
-    path: Packages/MultiVoiceCore
+  FairspokenCore:
+    path: Packages/FairspokenCore
   FairspokenSpeech:
     path: Packages/FairspokenSpeech
   FairspokenUI:
@@ -29,16 +29,16 @@ packages:
   FairspokenHost:
     path: Packages/FairspokenHost
 targets:
-  MultiVoice:
+  Fairspoken:
     type: application
     platform: macOS
     sources:
-      - path: MultiVoice
+      - path: Fairspoken
         excludes:
           - Info.plist
     dependencies:
       - package: KeyboardShortcuts
-      - package: MultiVoiceCore
+      - package: FairspokenCore
       - package: FairspokenSpeech
       - package: FairspokenUI
   FairspokenServer:
@@ -57,21 +57,21 @@ targets:
         buildPhase: resources
         group: FairspokenServer/Resources
     dependencies:
-      - package: MultiVoiceCore
+      - package: FairspokenCore
       - package: FairspokenSpeech
       - package: FairspokenUI
       - package: FairspokenHost
 schemes:
-  MultiVoice:
+  Fairspoken:
     build:
       targets:
-        MultiVoice: all
+        Fairspoken: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - package: MultiVoiceCore/MultiVoiceCoreTests
+        - package: FairspokenCore/FairspokenCoreTests
     archive:
       config: Release
   FairspokenServer:

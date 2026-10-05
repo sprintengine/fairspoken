@@ -23,8 +23,8 @@ and the output guards that keep the raw text when they reject a pass), replay
 the same cases through the ignored Rust test and score its output:
 
     python3 scripts/polish-bench.py --export-cases=/tmp/cases.json
-    MULTIVOICE_POLISH_MODEL_DIR=<polish dir> MULTIVOICE_POLISH_MODEL=<id> \
-    MULTIVOICE_POLISH_BENCH_CASES=/tmp/cases.json MULTIVOICE_POLISH_BENCH_RESULTS=/tmp/app.json \
+    FAIRSPOKEN_POLISH_MODEL_DIR=<polish dir> FAIRSPOKEN_POLISH_MODEL=<id> \
+    FAIRSPOKEN_POLISH_BENCH_CASES=/tmp/cases.json FAIRSPOKEN_POLISH_BENCH_RESULTS=/tmp/app.json \
         cargo test --lib benchmark_cases_through_the_app_path -- --ignored
     python3 scripts/polish-bench.py --score=/tmp/app.json
 

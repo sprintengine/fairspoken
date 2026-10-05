@@ -9,7 +9,7 @@
   // Resolve the theme before first paint so a dark-preferring operator never
   // sees a light flash. "system" follows prefers-color-scheme live.
   (() => {
-    const pref = localStorage.getItem("mv-host-theme") || "system";
+    const pref = localStorage.getItem("fairspoken-host-theme") || localStorage.getItem("mv-host-theme") || "system";
     const dark = pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     document.documentElement.dataset.themePref = pref;
@@ -668,7 +668,7 @@
     const order = ["system", "light", "dark"];
     const next = order[(order.indexOf(document.documentElement.dataset.themePref || "system") + 1) % 3];
     document.documentElement.dataset.themePref = next;
-    localStorage.setItem("mv-host-theme", next);
+    localStorage.setItem("fairspoken-host-theme", next);
     applyTheme();
   });
   darkQuery.addEventListener("change", applyTheme);
@@ -1486,7 +1486,7 @@
     if (S.conn === "unauthorized") {
       notice.dataset.visible = "true";
       notice.dataset.tone = "error";
-      notice.innerHTML = "This host requires a token. Open the dashboard as <code>/?token=…</code> with the host's <code>MULTIVOICE_HOST_TOKEN</code>.";
+      notice.innerHTML = "This host requires a token. Open the dashboard as <code>/?token=…</code> with the host's <code>FAIRSPOKEN_HOST_TOKEN</code>.";
       return;
     }
     const stats = S.stats;

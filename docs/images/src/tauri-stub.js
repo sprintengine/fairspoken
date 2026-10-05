@@ -4,7 +4,7 @@
 // script runs (Playwright addInitScript). Unknown commands reject, which the
 // app already treats as "no data yet".
 //
-// window.__mvEmit(event, payload) fires a backend event into the page.
+// window.__fsEmit(event, payload) fires a backend event into the page.
 (() => {
   const settings = {
     transcriptionLocation: "local", model: "parakeet-tdt-0.6b-v3",
@@ -24,6 +24,7 @@
   ];
   const handlers = {
     get_settings: () => settings,
+    get_cloud_available: () => true,
     save_settings: () => null,
     get_dictation_models: () => speech,
     get_transcription_model_status: () => ({ model: settings.model, cached: true, message: "Model is ready", modelPath: "~/Library/Application Support/models/parakeet-tdt-0.6b-v3" }),
@@ -35,7 +36,7 @@
 
   const listeners = new Map();
   let next = 1;
-  window.__mvEmit = (event, payload) => {
+  window.__fsEmit = (event, payload) => {
     for (const id of listeners.get(event) || []) window[`_${id}`]?.({ event, id: 0, payload });
   };
   window.__TAURI_INTERNALS__ = {

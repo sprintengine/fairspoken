@@ -12,12 +12,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.5"),
-        .package(path: "../MultiVoiceCore"),
+        .package(path: "../FairspokenCore"),
     ],
     targets: [
         .target(name: "FairspokenSpeech", dependencies: [
             .product(name: "FluidAudio", package: "FluidAudio"),
-            "MultiVoiceCore",
+            "FairspokenCore",
         ])
     ]
 )

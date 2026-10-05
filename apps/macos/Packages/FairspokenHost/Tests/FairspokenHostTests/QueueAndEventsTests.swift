@@ -133,8 +133,8 @@ struct ConfigurationTests {
     }
 
     @Test func environmentSeedsFirstBootAndOverridesRestartOnlySettings() throws {
-        let env = ["MULTIVOICE_HOST_ADDR": "0.0.0.0:48981", "MULTIVOICE_HOST_TOKEN": "t", "MULTIVOICE_HOST_WORKERS": "3",
-                   "MULTIVOICE_HOST_MODEL": "parakeet-ultra", "MULTIVOICE_HOST_MAX_ACTIVE_STREAMS": "2"]
+        let env = ["FAIRSPOKEN_HOST_ADDR": "0.0.0.0:48981", "FAIRSPOKEN_HOST_TOKEN": "t", "FAIRSPOKEN_HOST_WORKERS": "3",
+                   "FAIRSPOKEN_HOST_MODEL": "parakeet-ultra", "FAIRSPOKEN_HOST_MAX_ACTIVE_STREAMS": "2"]
         let first = try HostConfigurationStore.resolve(file: nil, environment: env, knownModels: known)
         #expect(first.bindAddress == "0.0.0.0" && first.port == 48981 && first.token == "t")
         #expect(first.workerModels == ["parakeet-ultra", "parakeet-ultra", "parakeet-ultra"])
@@ -145,9 +145,21 @@ struct ConfigurationTests {
         #expect(later.maxActiveStreams == 9) // the saved, dashboard-edited value wins
         #expect(later.workerCount == 3 && later.workerModels.count == 3)
         #expect(throws: HostConfigurationStore.StoreError.self) {
-            try HostConfigurationStore.resolve(file: nil, environment: ["MULTIVOICE_HOST_MODEL": "nope"], knownModels: known)
+            try HostConfigurationStore.resolve(file: nil, environment: ["FAIRSPOKEN_HOST_MODEL": "nope"], knownModels: known)
         }
         #expect(HostConfigurationStore.parseAddress("[::1]:9") ?? ("", 0) == ("::1", 9))
+    }
+
+    @Test func legacyEnvironmentPrefixIsAFallback() throws {
+        let legacy = try HostConfigurationStore.resolve(file: nil, environment: ["MULTIVOICE_HOST_TOKEN": "old", "MULTIVOICE_HOST_WORKERS": "2"],
+                                                        knownModels: known)
+        #expect(legacy.token == "old" && legacy.workerCount == 2)
+        let both = ["FAIRSPOKEN_HOST_TOKEN": "new", "MULTIVOICE_HOST_TOKEN": "old", "FAIRSPOKEN_HOST_ADDR": "127.0.0.1:9", "MULTIVOICE_HOST_ADDR": "bad"]
+        let config = try HostConfigurationStore.resolve(file: nil, environment: both, knownModels: known)
+        #expect(config.token == "new" && config.port == 9) // the new name wins
+        #expect(HostEnvironment.value("TOKEN", in: ["FAIRSPOKEN_HOST_TOKEN": "", "MULTIVOICE_HOST_TOKEN": "old"]) == "") // set, even empty, wins
+        #expect(HostEnvironment.value("TOKEN", in: [:]) == nil)
+        #expect(HostConfigurationStore.defaultURL(bundleID: "x", environment: ["MULTIVOICE_HOST_CONFIG_PATH": "/tmp/legacy.json"]).path == "/tmp/legacy.json")
     }
 
     @Test func readsTheRustHostConfigFile() throws {

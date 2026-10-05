@@ -1,4 +1,4 @@
-import MultiVoiceCore
+import FairspokenCore
 import FairspokenHost
 import Foundation
 
@@ -22,7 +22,7 @@ nonisolated enum ServerInfo {
         return URL(fileURLWithPath: arguments[i + 1], isDirectory: true)
     }
 
-    /// `host-config.json`: `MULTIVOICE_HOST_CONFIG_PATH`, else Application Support/<bundle id>/.
+    /// `host-config.json`: `FAIRSPOKEN_HOST_CONFIG_PATH`, else Application Support/<bundle id>/.
     static var configURL: URL {
         if let i = arguments.firstIndex(of: "--config"), i + 1 < arguments.count { return URL(fileURLWithPath: arguments[i + 1]) }
         // Screenshots never read or write the real configuration.

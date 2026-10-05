@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Multivoice Tauri",
+  "productName": "Fairspoken",
   "version": "../package.json",
-  "identifier": "com.multicodelabs.multivoice.tauri",
+  "identifier": "ie.fairspoken.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

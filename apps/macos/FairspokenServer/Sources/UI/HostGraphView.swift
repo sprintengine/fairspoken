@@ -1,6 +1,6 @@
 import FairspokenHost
 import FairspokenUI
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// Where every node of the constellation sits. Shared by the Canvas (edges, particles,

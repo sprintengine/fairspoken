@@ -1,5 +1,5 @@
 import FairspokenUI
-import MultiVoiceCore
+import FairspokenCore
 import FairspokenHost
 import AppKit
 import SwiftUI

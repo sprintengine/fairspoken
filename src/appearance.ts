@@ -1,14 +1,16 @@
 import { emit, listen } from "@tauri-apps/api/event";
 
 type Appearance = "system" | "light" | "dark";
-const preferenceKey = "multivoice.appearance";
+const preferenceKey = "fairspoken.appearance";
+// Read once when the new key is unset; earlier builds used the former name.
+const legacyPreferenceKey = "multivoice.appearance";
 const system = window.matchMedia("(prefers-color-scheme: dark)");
 let appearance: Appearance = "system";
 function valid(value: unknown): value is Appearance {
   return value === "system" || value === "light" || value === "dark";
 }
 try {
-  const stored = localStorage.getItem(preferenceKey);
+  const stored = localStorage.getItem(preferenceKey) ?? localStorage.getItem(legacyPreferenceKey);
   if (valid(stored)) appearance = stored;
 } catch { /* The current window remains usable without local storage. */ }
 function apply(): void {

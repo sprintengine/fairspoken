@@ -1,7 +1,7 @@
 import FairspokenHost
 import Charts
 import FairspokenUI
-import MultiVoiceCore
+import FairspokenCore
 import SwiftUI
 
 /// Live view of the server: counters, the constellation and recent jobs.

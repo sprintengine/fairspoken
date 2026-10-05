@@ -2,7 +2,7 @@ import Foundation
 import Network
 import Synchronization
 @testable import FairspokenHost
-import MultiVoiceCore
+import FairspokenCore
 
 /// In-memory `HTTPTransport`: the test writes request bytes in, reads response bytes out.
 final class PipeTransport: HTTPTransport, @unchecked Sendable {

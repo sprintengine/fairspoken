@@ -1,6 +1,6 @@
 // Development host: the real HTTP server, queue and workers over the stub speech engine
 // (no models, no Neural Engine). For protocol work and the conformance suite:
-//   MULTIVOICE_HOST_ADDR=127.0.0.1:48980 MULTIVOICE_HOST_TOKEN=secret swift run fairspoken-host-dev
+//   FAIRSPOKEN_HOST_ADDR=127.0.0.1:48980 FAIRSPOKEN_HOST_TOKEN=secret swift run fairspoken-host-dev
 // The real server is `Fairspoken Server.app/Contents/MacOS/Fairspoken Server --headless`.
 import FairspokenHost
 import Foundation
@@ -8,7 +8,7 @@ import Foundation
 let env = ProcessInfo.processInfo.environment
 let backend = StubSpeechBackend(transcribeDelay: .milliseconds(Int(env["STUB_TRANSCRIBE_MS"] ?? "40") ?? 40),
                                 downloadStepDelay: .milliseconds(400))
-let configURL = URL(fileURLWithPath: env["MULTIVOICE_HOST_CONFIG_PATH"] ?? NSTemporaryDirectory() + "fairspoken-host-dev-config.json")
+let configURL = URL(fileURLWithPath: HostEnvironment.value("CONFIG_PATH", in: env) ?? NSTemporaryDirectory() + "fairspoken-host-dev-config.json")
 do {
     let file = try HostConfigurationStore.load(configURL)
     let config = try HostConfigurationStore.resolve(file: file, environment: env, knownModels: Set(backend.catalog.map(\.id)))

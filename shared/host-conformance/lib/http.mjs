@@ -7,7 +7,7 @@ import net from 'node:net';
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export const STREAM_CONTENT_TYPE = 'application/vnd.multivoice.pcm-stream';
+export const STREAM_CONTENT_TYPE = 'application/vnd.fairspoken.pcm-stream';
 
 /** Every SSE connection this process holds open (see `openSubscriberCount`). */
 const openSubscribers = new Set();

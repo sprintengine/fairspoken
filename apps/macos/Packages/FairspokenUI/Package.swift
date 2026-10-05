@@ -11,10 +11,10 @@ let package = Package(
         .library(name: "FairspokenUI", targets: ["FairspokenUI"])
     ],
     dependencies: [
-        .package(path: "../MultiVoiceCore")
+        .package(path: "../FairspokenCore")
     ],
     targets: [
-        .target(name: "FairspokenUI", dependencies: ["MultiVoiceCore"],
+        .target(name: "FairspokenUI", dependencies: ["FairspokenCore"],
                 swiftSettings: [.defaultIsolation(MainActor.self)])
     ]
 )

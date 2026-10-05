@@ -3,7 +3,6 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::env;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -441,25 +440,13 @@ impl WhisperModel {
 }
 
 pub(crate) fn default_model_dir() -> PathBuf {
-    if let Some(path) = env::var_os("MULTIVOICE_TAURI_MODEL_DIR") {
+    if let Some(path) = crate::app_dirs::env_var_os("FAIRSPOKEN_MODEL_DIR") {
         return PathBuf::from(path);
     }
 
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data)
-            .join("Multivoice Tauri")
-            .join("models");
-    }
-
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("multivoice-tauri")
-            .join("models");
-    }
-
-    PathBuf::from("models")
+    crate::app_dirs::data_dir()
+        .map(|dir| dir.join("models"))
+        .unwrap_or_else(|| PathBuf::from("models"))
 }
 
 fn download_to_file_with_progress(
@@ -556,7 +543,7 @@ mod tests {
     #[test]
     fn validates_sha1_hashes() {
         let path =
-            std::env::temp_dir().join(format!("multivoice-tauri-sha1-{}.txt", std::process::id()));
+            std::env::temp_dir().join(format!("fairspoken-sha1-{}.txt", std::process::id()));
         fs::write(&path, b"abc").expect("write fixture");
 
         assert!(file_hash_matches(
@@ -576,7 +563,7 @@ mod tests {
     #[test]
     fn validates_sha256_hashes() {
         let path = std::env::temp_dir().join(format!(
-            "multivoice-tauri-sha256-{}.txt",
+            "fairspoken-sha256-{}.txt",
             std::process::id()
         ));
         fs::write(&path, b"abc").expect("write fixture");
@@ -697,7 +684,7 @@ mod tests {
     fn reports_missing_model_status_for_parakeet() {
         let service = ModelService {
             base_dir: std::env::temp_dir()
-                .join(format!("multivoice-tauri-models-{}", std::process::id())),
+                .join(format!("fairspoken-models-{}", std::process::id())),
         };
         let status = service.status(SttModel::Parakeet);
 
@@ -713,7 +700,7 @@ mod tests {
         use super::WhisperModel;
         let service = ModelService {
             base_dir: std::env::temp_dir().join(format!(
-                "multivoice-tauri-model-download-{}",
+                "fairspoken-model-download-{}",
                 std::process::id()
             )),
         };

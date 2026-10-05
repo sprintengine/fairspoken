@@ -3,7 +3,7 @@ import Foundation
 /// Fairspoken Server's host configuration, persisted as `host-config.json`. The first four
 /// fields are the Rust host's `PersistedHostConfig` with the same names and meaning, so either
 /// host reads the other's file; the rest are restart-only settings the Rust host takes from
-/// `MULTIVOICE_HOST_*` environment variables.
+/// `FAIRSPOKEN_HOST_*` environment variables.
 public struct HostConfiguration: Codable, Sendable, Equatable {
     public static let defaultModel = "parakeet-tdt-0.6b-v3"
     public static let defaultPort = 48173
@@ -100,6 +100,18 @@ extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self { min(max(self, range.lowerBound), range.upperBound) }
 }
 
+/// The host's `FAIRSPOKEN_HOST_*` environment variables. The legacy `MULTIVOICE_HOST_*` prefix
+/// is still accepted when the new name is unset.
+public enum HostEnvironment {
+    static let prefix = "FAIRSPOKEN_HOST_"
+    static let legacyPrefix = "MULTIVOICE_HOST_"
+
+    /// `FAIRSPOKEN_HOST_<suffix>`, else `MULTIVOICE_HOST_<suffix>`.
+    public static func value(_ suffix: String, in environment: [String: String]) -> String? {
+        environment[prefix + suffix] ?? environment[legacyPrefix + suffix]
+    }
+}
+
 /// Loads, seeds and saves `host-config.json`.
 public enum HostConfigurationStore {
     public enum StoreError: Error, LocalizedError {
@@ -113,9 +125,9 @@ public enum HostConfigurationStore {
         }
     }
 
-    /// `MULTIVOICE_HOST_CONFIG_PATH`, else `~/Library/Application Support/<bundle id>/host-config.json`.
+    /// `FAIRSPOKEN_HOST_CONFIG_PATH`, else `~/Library/Application Support/<bundle id>/host-config.json`.
     public static func defaultURL(bundleID: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
-        if let path = environment["MULTIVOICE_HOST_CONFIG_PATH"], !path.isEmpty { return URL(fileURLWithPath: path) }
+        if let path = HostEnvironment.value("CONFIG_PATH", in: environment), !path.isEmpty { return URL(fileURLWithPath: path) }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent(bundleID, isDirectory: true).appendingPathComponent("host-config.json")
     }
@@ -149,38 +161,39 @@ public enum HostConfigurationStore {
     }
 
     /// The effective configuration for a run. The file (if any) is the durable configuration
-    /// edited in the app and through `POST /v1/config`; without one, `MULTIVOICE_HOST_*`
+    /// edited in the app and through `POST /v1/config`; without one, `FAIRSPOKEN_HOST_*`
     /// variables seed it. Restart-only settings (address, token, workers, queue) set in the
     /// environment override the file for this run, as they are what a LaunchAgent or a test
     /// harness passes. Returns whether the file existed.
     public static func resolve(file: HostConfiguration?, environment: [String: String], knownModels: Set<String>) throws(StoreError) -> HostConfiguration {
         var config = file ?? HostConfiguration()
-        func int(_ key: String) -> Int? { environment[key].flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
-        if let addr = environment["MULTIVOICE_HOST_ADDR"], !addr.isEmpty {
-            guard let (host, port) = parseAddress(addr) else { throw .invalid("MULTIVOICE_HOST_ADDR is not host:port: \(addr)") }
+        func string(_ suffix: String) -> String? { HostEnvironment.value(suffix, in: environment) }
+        func int(_ suffix: String) -> Int? { string(suffix).flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
+        if let addr = string("ADDR"), !addr.isEmpty {
+            guard let (host, port) = parseAddress(addr) else { throw .invalid("FAIRSPOKEN_HOST_ADDR is not host:port: \(addr)") }
             config.bindAddress = host
             config.port = port
         }
-        if let token = environment["MULTIVOICE_HOST_TOKEN"] { config.token = token }
-        if let workers = int("MULTIVOICE_HOST_WORKERS") { config.workerCount = workers.clamped(to: HostConfiguration.workerCountRange) }
-        if let queue = int("MULTIVOICE_HOST_QUEUE_CAPACITY") { config.queueCapacity = queue }
+        if let token = string("TOKEN") { config.token = token }
+        if let workers = int("WORKERS") { config.workerCount = workers.clamped(to: HostConfiguration.workerCountRange) }
+        if let queue = int("QUEUE_CAPACITY") { config.queueCapacity = queue }
         if file == nil {
-            if let v = int("MULTIVOICE_HOST_MAX_ACTIVE_STREAMS") { config.maxActiveStreams = v }
-            if let v = int("MULTIVOICE_HOST_MAX_RECORDING_SECONDS") { config.maxRecordingSeconds = v }
-            if let v = environment["MULTIVOICE_HOST_USE_GPU"]?.trimmingCharacters(in: .whitespaces).lowercased() {
+            if let v = int("MAX_ACTIVE_STREAMS") { config.maxActiveStreams = v }
+            if let v = int("MAX_RECORDING_SECONDS") { config.maxRecordingSeconds = v }
+            if let v = string("USE_GPU")?.trimmingCharacters(in: .whitespaces).lowercased() {
                 if v == "1" || v == "true" { config.useGpu = true } else if v == "0" || v == "false" { config.useGpu = false }
             }
-            if let raw = environment["MULTIVOICE_HOST_MODEL"]?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+            if let raw = string("MODEL")?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
                 let ids = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 for id in ids where !knownModels.contains(id) {
-                    throw .invalid("MULTIVOICE_HOST_MODEL has an unsupported model: \(id)")
+                    throw .invalid("FAIRSPOKEN_HOST_MODEL has an unsupported model: \(id)")
                 }
                 if ids.count == 1 {
                     config.workerModels = Array(repeating: ids[0], count: config.workerCount)
                 } else if ids.count == config.workerCount {
                     config.workerModels = ids
                 } else {
-                    throw .invalid("MULTIVOICE_HOST_MODEL lists \(ids.count) models for \(config.workerCount) workers; provide one model or exactly one per worker")
+                    throw .invalid("FAIRSPOKEN_HOST_MODEL lists \(ids.count) models for \(config.workerCount) workers; provide one model or exactly one per worker")
                 }
             } else if config.workerModels.count != config.workerCount {
                 config.workerModels = Array(repeating: config.workerModels.first ?? HostConfiguration.defaultModel, count: config.workerCount)

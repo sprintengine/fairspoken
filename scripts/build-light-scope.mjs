@@ -1,18 +1,23 @@
 #!/usr/bin/env node
 // Regenerate the missing nested light-mode scope from the canonical DTCG source.
-// Usage: node scripts/build-light-scope.mjs [path/to/tokens.tokens.json]
+// Usage: node scripts/build-light-scope.mjs path/to/tokens.tokens.json
+//    or: FAIRSPOKEN_DESIGN_TOKENS=path/to/tokens.tokens.json node scripts/build-light-scope.mjs
 // No shared design-system files are modified; generated output is vendored.
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
 
-const source = process.argv[2] ?? fileURLToPath(new URL("../../multicode/design-system/foundations/tokens.tokens.json", import.meta.url));
+const source = process.argv[2] ?? process.env.FAIRSPOKEN_DESIGN_TOKENS;
+if (!source) {
+  console.error("Pass the design system's foundations/tokens.tokens.json as the first argument or set FAIRSPOKEN_DESIGN_TOKENS.\nThe design system is not part of this repository; src/design-system holds the vendored output.");
+  process.exit(1);
+}
 const input = readFileSync(source, "utf8");
 const definitions = JSON.parse(input);
 const declarations = [];
 function visit(node, path = []) {
   if (node && typeof node === "object" && "$value" in node) {
-    const modes = node.$extensions?.["com.multicode"]?.modes;
+    // Per-mode values live under the design system's own $extensions namespace.
+    const modes = Object.values(node.$extensions ?? {}).find((extension) => extension?.modes)?.modes;
     if (path[0] !== "sem" || !modes || modes.light === modes.dark) return;
     const value = modes.light;
     if (typeof value !== "string" && typeof value !== "number") throw new Error(`Unsupported light value: ${path.join(".")}`);

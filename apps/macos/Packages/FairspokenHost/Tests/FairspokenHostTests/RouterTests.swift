@@ -1,5 +1,5 @@
 import Foundation
-import MultiVoiceCore
+import FairspokenCore
 import Testing
 @testable import FairspokenHost
 
@@ -69,7 +69,7 @@ struct RouterTests {
         let h = Harness()
         await h.startWorkers()
         let events = FrameCollector(h.runtime.observe().frames)
-        let response = await h.request("POST", "/v1/transcriptions", headers: ["x-multivoice-model": "whatever", "X-Forwarded-For": "100.64.0.7"],
+        let response = await h.request("POST", "/v1/transcriptions", headers: ["x-fairspoken-model": "whatever", "X-Forwarded-For": "100.64.0.7"],
                                        body: TestAudio.wav(seconds: 1.5))
         #expect(response.status == 200)
         let json = response.json
@@ -82,7 +82,11 @@ struct RouterTests {
         let queued = events.all[0].json
         #expect(queued["source"] as? String == "batch" && queued["audioSeconds"] as? Double == 1.5 && queued["client"] as? String == "100.64.0.7")
         #expect(events.all[4].json["state"] as? String == "idle")
+        #expect(await h.request("POST", "/v1/transcriptions", headers: ["x-fairspoken-backend": "nonsense"], body: TestAudio.wav(seconds: 0.2)).status == 400)
+        // The legacy x-multivoice-* headers are still read when the new one is absent.
         #expect(await h.request("POST", "/v1/transcriptions", headers: ["x-multivoice-backend": "nonsense"], body: TestAudio.wav(seconds: 0.2)).status == 400)
+        #expect(await h.request("POST", "/v1/transcriptions", headers: ["x-fairspoken-backend": "whisper", "x-multivoice-backend": "nonsense"],
+                                body: TestAudio.wav(seconds: 0.2)).status == 200)
         #expect(await h.request("POST", "/v1/transcriptions", body: TestAudio.wav(seconds: 0.2, bits: 8)).status == 400)
         #expect(await h.request("POST", "/v1/transcriptions", body: Array("garbage".utf8)).status == 400)
         _ = try await h.runtime.applyConfigUpdate(HostConfigUpdate(maxRecordingSeconds: 10))

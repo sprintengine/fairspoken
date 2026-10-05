@@ -45,8 +45,10 @@ const MAX_TRACKED_CLIENTS: usize = 32;
 const WORKER_IDLE_POLL: Duration = Duration::from_millis(250);
 
 pub fn run_transcription_host() -> Result<(), String> {
-    let addr = env::var("MULTIVOICE_HOST_ADDR").unwrap_or_else(|_| "127.0.0.1:48173".to_string());
-    let token = env::var("MULTIVOICE_HOST_TOKEN").ok();
+    crate::app_dirs::migrate_legacy_dirs();
+    let addr = crate::app_dirs::env_var("FAIRSPOKEN_HOST_ADDR")
+        .unwrap_or_else(|| "127.0.0.1:48173".to_string());
+    let token = crate::app_dirs::env_var("FAIRSPOKEN_HOST_TOKEN");
     let mut config = HostRuntimeConfig::from_env()?;
     // Dashboard edits are the durable configuration; the environment only
     // seeds the first boot (or a deleted config file).
@@ -1180,11 +1182,11 @@ fn transcribe_recording(
 }
 
 fn settings_from_headers(request: &Request) -> Result<Settings, String> {
-    let backend = header_value(request, "x-multivoice-backend").unwrap_or(BACKEND_ID);
-    let language = header_value(request, "x-multivoice-language")
+    let backend = protocol_header(request, "backend").unwrap_or(BACKEND_ID);
+    let language = protocol_header(request, "language")
         .unwrap_or("en")
         .to_string();
-    let vocabulary_hints = header_value(request, "x-multivoice-vocabulary-hints")
+    let vocabulary_hints = protocol_header(request, "vocabulary-hints")
         .map(percent_decode)
         .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
         .unwrap_or_default();
@@ -1197,8 +1199,8 @@ fn settings_from_headers(request: &Request) -> Result<Settings, String> {
     if backend != "parakeet" && backend != "whisper" {
         return Err(format!("Unsupported transcription backend: {backend}"));
     }
-    // The served model is host configuration. Older clients still send an
-    // x-multivoice-model header; it is deliberately ignored — never an error —
+    // The served model is host configuration. Clients still send an
+    // x-fairspoken-model header; it is deliberately ignored — never an error —
     // and the response's `model` field reports what actually ran.
     Ok(settings)
 }
@@ -1270,6 +1272,13 @@ fn percent_decode(input: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// An `x-fairspoken-<name>` request header. Clients from before the rename
+/// send `x-multivoice-<name>`, which is still accepted.
+fn protocol_header<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
+    header_value(request, &format!("x-fairspoken-{name}"))
+        .or_else(|| header_value(request, &format!("x-multivoice-{name}")))
 }
 
 fn header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
@@ -2068,7 +2077,7 @@ mod tests {
             live: Arc::new(HostLiveConfig::new(&config)),
             models: ModelService::default(),
             config_path: std::env::temp_dir().join(format!(
-                "multivoice-tauri-host-config-test-{}.json",
+                "fairspoken-host-config-test-{}.json",
                 std::process::id()
             )),
             next_job_id: AtomicU64::new(1),
@@ -2729,7 +2738,7 @@ mod tests {
     #[test]
     fn persisted_config_round_trips_dashboard_edits() {
         let path = std::env::temp_dir().join(format!(
-            "multivoice-tauri-host-config-roundtrip-{}.json",
+            "fairspoken-host-config-roundtrip-{}.json",
             std::process::id()
         ));
         let config = HostRuntimeConfig {
@@ -2801,7 +2810,7 @@ mod tests {
     #[test]
     fn missing_config_file_is_first_boot_and_corrupt_file_fails() {
         let missing = std::env::temp_dir().join(format!(
-            "multivoice-tauri-host-config-missing-{}.json",
+            "fairspoken-host-config-missing-{}.json",
             std::process::id()
         ));
         assert!(super::load_persisted_config(&missing)
@@ -2809,7 +2818,7 @@ mod tests {
             .is_none());
 
         let corrupt = std::env::temp_dir().join(format!(
-            "multivoice-tauri-host-config-corrupt-{}.json",
+            "fairspoken-host-config-corrupt-{}.json",
             std::process::id()
         ));
         std::fs::write(&corrupt, b"{not json").expect("write corrupt fixture");
@@ -3147,5 +3156,36 @@ mod tests {
         let _event_size = read_line();
         assert_eq!(read_line(), "event: stream_started\n");
         assert!(read_line().contains("\"streamId\":1,\"client\":\"10.0.0.2\""));
+    }
+
+    #[test]
+    fn protocol_headers_prefer_fairspoken_and_accept_the_legacy_prefix() {
+        use std::io::Write;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("ip address");
+        let parse = |headers: &str| {
+            let mut socket = std::net::TcpStream::connect(addr).expect("connect");
+            socket
+                .write_all(
+                    format!("POST /v1/transcriptions HTTP/1.1\r\nHost: test\r\n{headers}Content-Length: 0\r\n\r\n")
+                        .as_bytes(),
+                )
+                .expect("send request");
+            let request = server.recv().expect("request");
+            super::settings_from_headers(&request)
+        };
+
+        assert_eq!(parse("x-fairspoken-language: de\r\n").unwrap().language, "de");
+        assert_eq!(parse("x-multivoice-language: fr\r\n").unwrap().language, "fr");
+        assert_eq!(
+            parse("x-multivoice-language: fr\r\nx-fairspoken-language: de\r\n")
+                .unwrap()
+                .language,
+            "de"
+        );
+        assert!(parse("x-fairspoken-backend: nonsense\r\n").is_err());
+        assert!(parse("x-multivoice-backend: nonsense\r\n").is_err());
+        assert_eq!(parse("").unwrap().language, "en");
     }
 }

@@ -204,7 +204,7 @@ kbd { font: 600 11.5px var(--font-ui); display: inline-grid; place-items: center
         <defs><linearGradient id="bl" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#c2577a"/><stop offset=".55" stop-color="#d9633a"/><stop offset="1" stop-color="#f2a27c"/></linearGradient></defs>
         <g fill="url(#bl)"><circle cx="16" cy="16" r="2.4"/><circle cx="17.03" cy="10.90" r="1.20"/><circle cx="20.63" cy="13.63" r="1.29"/><circle cx="20.74" cy="18.14" r="1.29"/><circle cx="17.28" cy="21.04" r="1.21"/><circle cx="12.86" cy="20.14" r="1.10"/><circle cx="10.80" cy="16.13" r="1.05"/><circle cx="12.66" cy="12.01" r="1.09"/><circle cx="16.00" cy="6.60" r="1.15"/><circle cx="20.70" cy="7.86" r="1.27"/><circle cx="24.14" cy="11.30" r="1.37"/><circle cx="25.40" cy="16.00" r="1.40"/><circle cx="24.14" cy="20.70" r="1.37"/><circle cx="20.70" cy="24.14" r="1.27"/><circle cx="16.00" cy="25.40" r="1.15"/><circle cx="11.30" cy="24.14" r="1.03"/><circle cx="7.86" cy="20.70" r="0.93"/><circle cx="6.60" cy="16.00" r="0.90"/><circle cx="7.86" cy="11.30" r="0.93"/><circle cx="11.30" cy="7.86" r="1.02"/><circle cx="18.66" cy="2.87" r="0.91"/><circle cx="23.23" cy="4.72" r="1.01"/><circle cx="26.81" cy="8.09" r="1.09"/><circle cx="28.94" cy="12.53" r="1.14"/><circle cx="29.32" cy="17.44" r="1.15"/><circle cx="27.90" cy="22.15" r="1.12"/><circle cx="24.88" cy="26.04" r="1.05"/><circle cx="20.65" cy="28.57" r="0.95"/><circle cx="15.80" cy="29.40" r="0.85"/><circle cx="10.97" cy="28.42" r="0.74"/><circle cx="6.82" cy="25.76" r="0.64"/><circle cx="3.92" cy="21.79" r="0.58"/><circle cx="2.64" cy="17.03" r="0.55"/><circle cx="3.17" cy="12.14" r="0.56"/><circle cx="5.43" cy="7.76" r="0.61"/><circle cx="9.12" cy="4.50" r="0.70"/><circle cx="13.74" cy="2.79" r="0.80"/></g>
       </svg>
-      <span data-brand>MultiVoice</span>
+      <span data-brand>Fairspoken</span>
     </div>
     <nav class="seg glass" aria-label="Primary">
       <button type="button" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4.8l8 6.4V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Z" fill="currentColor" fill-opacity=".14"/></svg>Home</button>
@@ -281,7 +281,7 @@ kbd { font: 600 11.5px var(--font-ui); display: inline-grid; place-items: center
 /* ─────────────── Brand placeholder: the ONE place the product name lives ─────────────── */
 // Placeholder while the name is under review (candidates: Fairspoken, Glinn, the Voicewave family).
 // Try ?brand=Glinn to preview a candidate.
-const BRAND_NAME = new URLSearchParams(location.search).get("brand") || "MultiVoice";
+const BRAND_NAME = new URLSearchParams(location.search).get("brand") || "Fairspoken";
 for (const node of document.querySelectorAll("[data-brand]")) node.textContent = BRAND_NAME;
 document.title = `${BRAND_NAME} — Home`;
 
