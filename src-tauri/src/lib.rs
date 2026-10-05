@@ -151,8 +151,20 @@ async fn check_for_updates(app: AppHandle) -> Result<updates::UpdateStatus, Stri
     updates::check(&app).await
 }
 #[tauri::command]
-fn install_update(app: AppHandle) -> Result<(), String> {
-    updates::install_and_restart(&app)
+async fn download_and_install_update(app: AppHandle) -> Result<updates::UpdateStatus, String> {
+    updates::download_and_install(&app).await
+}
+#[tauri::command]
+fn restart_to_update(app: AppHandle) -> Result<(), String> {
+    updates::restart(&app)
+}
+#[tauri::command]
+fn get_update_channel(app: AppHandle) -> updates::Channel {
+    updates::channel(&app)
+}
+#[tauri::command]
+fn set_update_channel(app: AppHandle, channel: updates::Channel) -> Result<updates::UpdateStatus, String> {
+    updates::set_channel(&app, channel)
 }
 
 #[derive(Clone, Serialize)]
@@ -2856,7 +2868,10 @@ pub fn run() {
             set_measured_typing_wpm,
             get_update_status,
             check_for_updates,
-            install_update,
+            download_and_install_update,
+            restart_to_update,
+            get_update_channel,
+            set_update_channel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
