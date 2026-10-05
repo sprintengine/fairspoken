@@ -7,6 +7,7 @@ const categories = {
   polish: "Text polish",
   keybindings: "Keybindings",
   appearance: "Appearance",
+  updates: "Updates",
 } as const;
 type Category = keyof typeof categories;
 let category: Category = "general";

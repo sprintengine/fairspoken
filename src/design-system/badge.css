@@ -1,0 +1,37 @@
+/* Badge (count) — vendored from the Sprint Engine Studio design system
+ * (design-system/components/badge) on 2026-10-05. The small display-only
+ * count docked on a control. Never interactive; name what it counts in the
+ * control's accessible label, never only in the digit. */
+
+.ds-badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--sem-space-xl);
+  min-width: var(--sem-space-xl);
+  padding: 0 var(--sem-space-2xs);
+  /* Pill: a one-digit counter has to be a circle. */
+  border-radius: 999px;
+  background: var(--sem-color-status-neutral);
+  color: var(--sem-color-text-on-accent);
+  font-family: var(--sem-font-family-ui);
+  font-size: var(--sem-font-size-micro);
+  font-weight: var(--sem-font-weight-emphasis);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-badge-count[hidden] { display: none; }
+
+.ds-badge-count--accent { background: var(--sem-color-accent-primary); }
+.ds-badge-count--warn { background: var(--sem-color-status-warn); }
+
+/* Docks the count to the top-right of a positioned trigger, with a border in
+ * the ground behind it so it reads as sitting ON the control. */
+.ds-badge-count--corner {
+  position: absolute;
+  top: calc(var(--sem-space-2xs) * -1);
+  right: calc(var(--sem-space-2xs) * -1);
+  border: 1px solid var(--sem-color-bg-app);
+}

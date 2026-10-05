@@ -1,0 +1,121 @@
+@import "./design-system/badge.css";
+@import "./design-system/toast.css";
+
+/* ── Sidebar update button ──────────────────────────────────────────────
+   One rail button, six states (data-state): idle, checking, available,
+   downloading, ready, error. The icon says what a click does; the badge says
+   there is news; the ring says how far a download is. */
+.sidebar .update-button { position: relative; }
+.sidebar .update-button[hidden] { display: none; }
+.update-button .update-icon { display: none; }
+.update-button[data-icon="sync"] .update-icon--sync,
+.update-button[data-icon="download"] .update-icon--download,
+.update-button[data-icon="restart"] .update-icon--restart { display: block; }
+.sidebar .update-button:disabled { cursor: default; opacity: 1; }
+.sidebar .update-button:disabled:hover { background: transparent; color: var(--sem-color-text-muted); }
+
+/* News reads in the accent: an update to take, or one to restart into. */
+.sidebar .update-button[data-state="available"],
+.sidebar .update-button[data-state="ready"] { color: var(--sem-color-accent-primary); }
+
+.update-button[data-state="checking"] .update-icon--sync {
+  animation: update-spin 1s linear infinite;
+  transform-origin: 50% 50%;
+}
+@keyframes update-spin { to { transform: rotate(360deg); } }
+
+/* Progress ring: the full button, drawn around the shrunken download icon. */
+.update-ring { display: none; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; transform: rotate(-90deg); }
+.sidebar .update-button .update-ring { width: 100%; height: 100%; }
+.update-button[data-state="downloading"] .update-ring { display: block; }
+.sidebar .update-button[data-state="downloading"] .update-icon { width: var(--sem-icon-size-sm); height: var(--sem-icon-size-sm); }
+.update-ring circle { fill: none; stroke-width: 2.5; }
+.update-ring-track { stroke: var(--sem-color-border-default); }
+.update-ring-fill {
+  stroke: var(--sem-color-accent-primary);
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: var(--update-ring-offset, 100);
+  transition: stroke-dashoffset var(--sem-motion-duration-normal) var(--sem-motion-ease-standard);
+}
+/* Size unknown: a quarter arc that turns. */
+.update-button[data-progress="indeterminate"] .update-ring-fill { stroke-dashoffset: 75; }
+.update-button[data-progress="indeterminate"] .update-ring { animation: update-ring-turn 1.2s linear infinite; }
+@keyframes update-ring-turn { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+
+/* Badges: a count (available), a dot (ready), a warning dot (error). */
+.update-count, .update-dot { display: none; pointer-events: none; }
+.update-button[data-badge="count"] .update-count { display: inline-flex; }
+.update-button[data-badge="dot"] .update-dot,
+.update-button[data-badge="warning"] .update-dot {
+  display: block;
+  position: absolute;
+  top: var(--sem-space-xs);
+  right: var(--sem-space-xs);
+  width: var(--sem-space-sm);
+  height: var(--sem-space-sm);
+  border-radius: 50%;
+  border: 1px solid var(--sem-color-bg-app);
+  background: var(--sem-color-accent-primary);
+}
+.update-button[data-badge="warning"] .update-dot { background: var(--sem-color-status-warn); }
+
+/* The Settings rail glyph wears a dot while an update waits for the user. */
+.sidebar .nav-item[data-screen="settings"] { position: relative; }
+.nav-badge {
+  position: absolute;
+  top: var(--sem-space-xs);
+  right: var(--sem-space-xs);
+  width: var(--sem-space-sm);
+  height: var(--sem-space-sm);
+  border-radius: 50%;
+  border: 1px solid var(--sem-color-bg-app);
+  background: var(--sem-color-accent-primary);
+  pointer-events: none;
+}
+.nav-badge[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .update-button[data-state="checking"] .update-icon--sync,
+  .update-button[data-progress="indeterminate"] .update-ring { animation: none; }
+  .update-ring-fill { transition: none; }
+}
+
+/* ── Settings → Updates ─────────────────────────────────────────────── */
+.settings-nav-badge { margin-left: auto; }
+.update-channel-chip {
+  display: inline-block;
+  margin-left: var(--sem-space-2xs);
+  padding: 0 var(--sem-space-xs);
+  border: 1px solid var(--sem-color-border-default);
+  border-radius: 999px;
+  color: var(--sem-color-text-muted);
+  font-size: var(--sem-font-size-micro);
+  font-weight: var(--sem-font-weight-medium);
+  line-height: var(--sem-space-xl);
+  vertical-align: middle;
+}
+#updateStatus[data-error="true"] { color: var(--sem-color-status-danger); }
+.update-progress {
+  height: var(--sem-space-2xs);
+  margin-top: var(--sem-space-xs);
+  max-width: 54ch;
+  border-radius: 999px;
+  background: var(--sem-color-border-subtle);
+  overflow: hidden;
+}
+.update-progress[hidden] { display: none; }
+.update-progress span {
+  display: block;
+  height: 100%;
+  width: var(--update-progress, 0%);
+  background: var(--sem-color-accent-primary);
+  border-radius: inherit;
+  transition: width var(--sem-motion-duration-normal) var(--sem-motion-ease-standard);
+}
+.channel-help { display: flex; flex-direction: column; gap: var(--sem-space-3xs); }
+.channel-help strong { color: var(--sem-color-text-default); font-weight: var(--sem-font-weight-medium); }
+.btn[aria-busy="true"] { cursor: progress; }
+@media (prefers-reduced-motion: reduce) {
+  .update-progress span { transition: none; }
+}
