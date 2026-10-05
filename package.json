@@ -10,7 +10,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:release": "node --test scripts/release/*.test.mjs"
+    "test:release": "node --test scripts/release/*.test.mjs",
+    "test:scripts": "node --test scripts/test-*.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

@@ -214,3 +214,32 @@ test('a pushed hotfix tag publishes its own version, whatever package.json says'
   assert.throws(() => resolveTagRelease({ refName: 'v1.1.0-nightly.20260923.1', latestStable: '1.0.0' }), /X\.Y\.Z/)
   assert.throws(() => resolveTagRelease({ refName: 'release-1', latestStable: '1.0.0' }), /Not a release version/)
 })
+
+test('a new repository whose only tag is v0.1.0, with no release published yet, cuts 0.2.0 nightlies', (t) => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fairspoken-release-test-'))
+  t.after(() => rmSync(cwd, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  git('init', '-b', 'main')
+  git('config', 'user.name', 'Dev')
+  git('config', 'user.email', 'dev@example.com')
+  git('config', 'commit.gpgsign', 'false')
+  git('config', 'tag.gpgsign', 'false')
+  const commit = (message) => {
+    git('commit', '--allow-empty', '-m', message)
+    return git('rev-parse', 'HEAD')
+  }
+  commit('Initial prose commit from before Conventional Commits')
+  git('tag', 'v0.1.0')
+  commit('Add Hugging Face model search')
+  commit('feat(macos): native apps')
+  const head = commit('chore: rename to Fairspoken')
+  // No GitHub release exists for v0.1.0; the only release is the rolling
+  // update-feeds prerelease, which is no version and must not count.
+  const releases = [{ tag_name: 'update-feeds', draft: false, prerelease: true, published_at: '2026-10-05T10:00:00Z' }]
+  const plan = resolveNightly({ sha: head, releases, packageVersion: '0.1.0', date: '20261005', runNumber: 3, cwd })
+  assert.deepEqual(plan, { shouldBuild: true, base: '0.2.0', version: '0.2.0-nightly.20261005.3' })
+  // Without the tag at all (not pushed to the new repository), package.json's
+  // 0.1.0 is the base and the whole history is read: the same answer.
+  git('tag', '-d', 'v0.1.0')
+  assert.equal(resolveNightly({ sha: head, releases, packageVersion: '0.1.0', date: '20261005', runNumber: 4, cwd }).base, '0.2.0')
+})

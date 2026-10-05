@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { lastNightly, nightlyGate } from './nightly-gate.mjs'
+import { failedAttemptGate, lastNightly, nightlyGate } from './nightly-gate.mjs'
 
 const SHA = 'a'.repeat(40)
 const HOUR = 3_600_000
@@ -69,4 +69,39 @@ test('the last nightly is the newest published one, not a stable, a draft or the
   assert.equal(lastNightly(releases).tag_name, 'v0.5.3-nightly.20260923.41')
   assert.equal(nightlyGate({ releases, comparison: { status: 'ahead' }, now: NOW }).publish, false)
   assert.equal(lastNightly([release('v0.5.2', 1)]), null)
+})
+
+test('a new repository with no nightly yet: the first tick publishes, the update-feeds release is not a nightly', () => {
+  const feeds = { tag_name: 'update-feeds', draft: false, published_at: new Date(NOW - HOUR).toISOString(), body: '' }
+  assert.equal(lastNightly([feeds]), null)
+  const gate = nightlyGate({ releases: [feeds], comparison: null, now: NOW })
+  assert.equal(gate.publish, true)
+  assert.match(gate.reason, /No nightly has been published yet/)
+})
+
+const run = (id, hoursAgo, overrides = {}) => ({
+  id,
+  event: 'schedule',
+  head_sha: SHA,
+  conclusion: 'failure',
+  created_at: new Date(NOW - hoursAgo * HOUR).toISOString(),
+  html_url: `https://github.com/acme/fairspoken/actions/runs/${id}`,
+  ...overrides,
+})
+
+test('a scheduled nightly that failed on this commit is not retried every half hour', () => {
+  const held = failedAttemptGate({ runs: [run(7, 0.5), run(5, 2)], sha: SHA, now: NOW })
+  assert.equal(held.publish, false)
+  assert.match(held.reason, /failed at .*runs\/7/)
+  assert.match(held.reason, /again after 2026-09-23T17:30:00\.000Z/)
+})
+
+test('the failed-attempt hold lifts after six hours, on a new commit, and ignores other runs', () => {
+  assert.equal(failedAttemptGate({ runs: [run(7, 6)], sha: SHA, now: NOW }).publish, true)
+  assert.equal(failedAttemptGate({ runs: [run(7, 1, { head_sha: 'b'.repeat(40) })], sha: SHA, now: NOW }).publish, true)
+  assert.equal(failedAttemptGate({ runs: [run(7, 1, { event: 'workflow_dispatch' })], sha: SHA, now: NOW }).publish, true)
+  assert.equal(failedAttemptGate({ runs: [run(7, 1, { conclusion: 'cancelled' })], sha: SHA, now: NOW }).publish, true)
+  assert.equal(failedAttemptGate({ runs: [run(7, 0)], sha: SHA, now: NOW, currentRunId: 7 }).publish, true)
+  assert.equal(failedAttemptGate({ runs: [], sha: SHA, now: NOW }).publish, true)
+  assert.equal(failedAttemptGate({ runs: undefined, sha: SHA, now: NOW }).publish, true)
 })
