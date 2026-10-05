@@ -207,14 +207,8 @@ jobs:
             hostBinary: src-tauri/target/release/transcription-host.exe
             hostTarget: windows-x64
           # The transcription host only, signed and notarized. Macs run the
-          # native apps (the macos-app job), not the Tauri app.
-          - name: macos-x64
-            os: macos-15-intel
-            platform: darwin-x86_64
-            target: x86_64-apple-darwin
-            bundles: ""
-            hostBinary: src-tauri/target/x86_64-apple-darwin/release/transcription-host
-            hostTarget: macos-x64
+          # native apps (the macos-app job), not the Tauri app. No Intel Mac
+          # leg: ort ships no prebuilt ONNX Runtime for x86_64-apple-darwin.
           - name: macos-arm64
             os: macos-15
             platform: darwin-aarch64
@@ -379,7 +373,7 @@ jobs:
 
       # `tauri build` builds the frontend on the app legs; the host is a bin
       # of the same crate, whose tauri::generate_context! reads ../dist, so
-      # the host-only legs (linux-arm64, macos-x64, macos-arm64) build it here.
+      # the host-only legs (linux-arm64, macos-arm64) build it here.
       - name: Build frontend (host-only leg)
         if: matrix.bundles == ''
         run: npm run build

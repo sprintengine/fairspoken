@@ -69,14 +69,14 @@ test('desktop feeds: newest stable and newest nightly, with all three platforms 
   for (const entry of Object.values(nightly.platforms)) assert.match(entry.url, /\/releases\/download\/v0\.4\.1-nightly\.20261004\.71\//)
 })
 
-test('host feeds: the contract shape, the five platforms, and the channel spelled out', async () => {
+test('host feeds: the contract shape, the four platforms, and the channel spelled out', async () => {
   const { files } = await render(fixtureReleases())
   const host = JSON.parse(files['host-nightly.json'])
   assert.deepEqual(Object.keys(host), ['version', 'channel', 'pub_date', 'notes', 'platforms'])
   assert.equal(host.version, '0.4.1-nightly.20261004.71')
   assert.equal(host.channel, 'nightly')
   assert.equal(host.notes, 'https://github.com/sprintengine/fairspoken/releases/tag/v0.4.1-nightly.20261004.71')
-  assert.deepEqual(Object.keys(host.platforms), ['linux-x86_64', 'linux-aarch64', 'windows-x86_64', 'darwin-aarch64', 'darwin-x86_64'])
+  assert.deepEqual(Object.keys(host.platforms), ['linux-x86_64', 'linux-aarch64', 'windows-x86_64', 'darwin-aarch64'])
   for (const [platform, entry] of Object.entries(host.platforms)) {
     assert.deepEqual(Object.keys(entry), ['url', 'sha256', 'signature', 'format'])
     assert.match(entry.sha256, /^[0-9a-f]{64}$/)

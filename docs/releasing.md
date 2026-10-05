@@ -66,7 +66,7 @@ https://github.com/sprintengine/fairspoken/releases/download/update-feeds/
 | `desktop-stable.json`, `desktop-nightly.json` | the Tauri desktop app | Tauri's static updater JSON: `version`, `notes` (the release page), `pub_date`, `platforms` with `windows-x86_64` (NSIS installer), `linux-x86_64` (AppImage) and `linux-x86_64-deb` (.deb), each `{ url, signature }` |
 | `appcast-fairspoken.xml` | Fairspoken (Mac) | Sparkle 2 appcast, both channels |
 | `appcast-fairspoken-server.xml` | Fairspoken Server (Mac) | Sparkle 2 appcast, both channels |
-| `host-stable.json`, `host-nightly.json` | the transcription host | `version`, `channel`, `pub_date`, `notes`, `platforms` (`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, `darwin-x86_64`, `darwin-aarch64`), each `{ url, sha256, signature, format }` |
+| `host-stable.json`, `host-nightly.json` | the transcription host | `version`, `channel`, `pub_date`, `notes`, `platforms` (`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, `darwin-aarch64`; no Intel Mac build, since ort ships no prebuilt ONNX Runtime for it), each `{ url, sha256, signature, format }` |
 
 Every URL inside a feed points at the asset on its own release
 (`.../releases/download/vX.Y.Z[-nightly...]/<file>`), never at `update-feeds`.
@@ -186,7 +186,6 @@ in `apps/macos/Config/Base.xcconfig` (`Fairspoken`); `<v>` the version.
 | `package` linux (`ubuntu-24.04`) | `<slug>-<v>-linux-x86_64.AppImage`, `<slug>-<v>-linux-x86_64.deb`, `<slug>-<v>-transcription-host-linux-x64.tar.gz` |
 | `package` linux-arm64 (`ubuntu-24.04-arm`) | `<slug>-<v>-transcription-host-linux-arm64.tar.gz` (no Linux arm64 desktop app) |
 | `package` macos-arm64 (`macos-15`) | `<slug>-<v>-transcription-host-macos-arm64.tar.gz` (signed and notarized) |
-| `package` macos-x64 (`macos-15-intel`) | `<slug>-<v>-transcription-host-macos-x64.tar.gz` (signed and notarized) |
 | `macos-app` (`macos-26`, Xcode 26.6) | `<Name>-<v>-macos-arm64.zip` and `.dmg`, `<Name>-Server-<v>-macos-arm64.zip` and `.dmg`, `sparkle-fairspoken.json`, `sparkle-fairspoken-server.json`; without the Apple secrets the apps are `-unsigned` and carry no Sparkle metadata |
 | `publish` | `desktop-manifest.json`, `host-manifest.json` (merged from every leg's share) |
 | `feeds` | the six feeds on `update-feeds` |
@@ -229,7 +228,6 @@ its extension:
 | `linux-aarch64` | `<slug>-<v>-transcription-host-linux-arm64.tar.gz` (`tar.gz`) | `<slug>-<v>-transcription-host-linux-arm64/transcription-host` |
 | `windows-x86_64` | `<slug>-<v>-transcription-host-windows-x64.zip` (`zip`) | `<slug>-<v>-transcription-host-windows-x64/transcription-host.exe` |
 | `darwin-aarch64` | `<slug>-<v>-transcription-host-macos-arm64.tar.gz` (`tar.gz`) | `<slug>-<v>-transcription-host-macos-arm64/transcription-host` |
-| `darwin-x86_64` | `<slug>-<v>-transcription-host-macos-x64.tar.gz` (`tar.gz`) | `<slug>-<v>-transcription-host-macos-x64/transcription-host` |
 
 Beside the binary: `PROTOCOL.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`,
 `fairspoken-transcription-host.service` (systemd) and

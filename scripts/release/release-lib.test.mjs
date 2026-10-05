@@ -195,7 +195,6 @@ function releaseAssets(version = '0.4.0') {
     `fairspoken-${version}-transcription-host-linux-arm64.tar.gz`,
     `fairspoken-${version}-transcription-host-windows-x64.zip`,
     `fairspoken-${version}-transcription-host-macos-arm64.tar.gz`,
-    `fairspoken-${version}-transcription-host-macos-x64.tar.gz`,
     HOST_MANIFEST,
     `Fairspoken-${version}-macos-arm64.zip`,
     `Fairspoken-${version}-macos-arm64.dmg`,
@@ -273,7 +272,7 @@ test('checkDesktopManifest names what a partial or misdirected manifest lacks', 
 const SHA256 = 'c'.repeat(64)
 
 function hostManifest(version = '0.4.0', tag = TAG) {
-  const fragments = ['linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64', 'macos-x64'].map((target) =>
+  const fragments = ['linux-x64', 'linux-arm64', 'windows-x64', 'macos-arm64'].map((target) =>
     hostFragment({ slug: SLUG, version, repo: REPO, tag, target, sha256: SHA256, signature: `sig-${target}\n` }),
   )
   return mergeFragments(fragments, { notes: 'n', pub_date: '2026-09-11T00:00:00.000Z' })
@@ -282,7 +281,7 @@ function hostManifest(version = '0.4.0', tag = TAG) {
 test('the host manifest is keyed by the contract platforms, with url, sha256, signature and format', () => {
   const manifest = hostManifest()
   assert.deepEqual(Object.keys(manifest.platforms).sort(), [...HOST_PLATFORMS].sort())
-  assert.deepEqual(HOST_PLATFORMS, ['linux-x86_64', 'linux-aarch64', 'windows-x86_64', 'darwin-aarch64', 'darwin-x86_64'])
+  assert.deepEqual(HOST_PLATFORMS, ['linux-x86_64', 'linux-aarch64', 'windows-x86_64', 'darwin-aarch64'])
   assert.deepEqual(manifest.platforms['windows-x86_64'], {
     url: `https://github.com/${REPO}/releases/download/v0.4.0/fairspoken-0.4.0-transcription-host-windows-x64.zip`,
     sha256: SHA256,
@@ -299,9 +298,9 @@ test('checkHostManifest names a missing platform, a bad hash, a wrong format and
   const check = (doc, assetNames = RELEASE_ASSETS) => checkHostManifest(doc, { version: '0.4.0', repo: REPO, tag: TAG, assetNames })
   const broken = hostManifest()
   delete broken.platforms['linux-aarch64']
-  broken.platforms['darwin-x86_64'].sha256 = 'nope'
+  broken.platforms['darwin-aarch64'].sha256 = 'nope'
   broken.platforms['windows-x86_64'].format = 'tar.gz'
-  assert.deepEqual(check(broken), ['has no linux-aarch64 entry', 'says windows-x86_64 is tar.gz, not zip', 'has no sha256 for darwin-x86_64'])
+  assert.deepEqual(check(broken), ['has no linux-aarch64 entry', 'says windows-x86_64 is tar.gz, not zip', 'has no sha256 for darwin-aarch64'])
   assert.deepEqual(check(hostManifest(), RELEASE_ASSETS.filter((name) => !name.includes('macos-arm64.tar.gz'))), [
     'points darwin-aarch64 at fairspoken-0.4.0-transcription-host-macos-arm64.tar.gz, which is not on the release',
   ])
@@ -316,8 +315,8 @@ test('the host archive layout names the one folder and the binary inside it', ()
     format: 'zip',
   })
   assert.equal(
-    hostArchiveLayout({ slug: SLUG, version: '0.5.0-nightly.20261004.41', target: 'macos-x64' }).binary,
-    'fairspoken-0.5.0-nightly.20261004.41-transcription-host-macos-x64/transcription-host',
+    hostArchiveLayout({ slug: SLUG, version: '0.5.0-nightly.20261004.41', target: 'macos-arm64' }).binary,
+    'fairspoken-0.5.0-nightly.20261004.41-transcription-host-macos-arm64/transcription-host',
   )
 })
 
@@ -364,7 +363,6 @@ test('missingInstallers wants every product and the metadata the feeds are rende
     'the linux-arm64 transcription host (fairspoken-0.4.0-transcription-host-linux-arm64.tar.gz)',
     'the windows-x64 transcription host (fairspoken-0.4.0-transcription-host-windows-x64.zip)',
     'the macos-arm64 transcription host (fairspoken-0.4.0-transcription-host-macos-arm64.tar.gz)',
-    'the macos-x64 transcription host (fairspoken-0.4.0-transcription-host-macos-x64.tar.gz)',
     'the transcription host manifest (host-manifest.json)',
     'the native macOS app .zip (Fairspoken-0.4.0-macos-arm64.zip)',
     'the native macOS app .dmg (Fairspoken-0.4.0-macos-arm64.dmg)',
@@ -373,7 +371,7 @@ test('missingInstallers wants every product and the metadata the feeds are rende
   ])
   // A commit from before apps/macos existed ships no native app.
   assert.equal(missingInstallers(RELEASE_ASSETS, { ...options, macAppName: null }).length, 0)
-  assert.equal(missingInstallers([], { ...options, macAppName: null }).length, 10)
+  assert.equal(missingInstallers([], { ...options, macAppName: null }).length, 9)
   // No latest.json or nightly.json is asked for any more.
   assert.ok(!missingInstallers([], options).some((line) => /latest\.json|nightly\.json/.test(line)))
 })
@@ -381,7 +379,7 @@ test('missingInstallers wants every product and the metadata the feeds are rende
 test('the Tauri macOS app is no longer asked for, and its files do not stand in for anything', () => {
   const options = { slug: SLUG, version: '0.4.0', macAppName: 'Fairspoken' }
   assert.ok(!RELEASE_ASSETS.some((name) => /^fairspoken-.*-macos-(arm64|x64)(\.dmg|\.app\.tar\.gz)$/.test(name)))
-  for (const target of ['macos-arm64', 'macos-x64']) {
+  for (const target of ['macos-arm64']) {
     const name = `fairspoken-0.4.0-transcription-host-${target}.tar.gz`
     assert.deepEqual(missingInstallers(RELEASE_ASSETS.filter((asset) => asset !== name), options), [`the ${target} transcription host (${name})`])
   }

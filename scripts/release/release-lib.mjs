@@ -317,7 +317,6 @@ export const HOST_TARGETS = {
   'linux-arm64': { extension: '.tar.gz', platform: 'linux-aarch64', binary: 'transcription-host' },
   'windows-x64': { extension: '.zip', platform: 'windows-x86_64', binary: 'transcription-host.exe' },
   'macos-arm64': { extension: '.tar.gz', platform: 'darwin-aarch64', binary: 'transcription-host' },
-  'macos-x64': { extension: '.tar.gz', platform: 'darwin-x86_64', binary: 'transcription-host' },
 }
 
 // Every key host-<channel>.json carries (contract §5).
