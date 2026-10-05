@@ -1,0 +1,87 @@
+/* Toast — vendored from the Sprint Engine Studio design system
+ * (design-system/components/toast) on 2026-10-05: the region, the surface and
+ * the action-row variant ("X is available" + Later · Update). Studio's
+ * shadow.toast token is not in this kit's tokens yet; shadow.popover stands
+ * in for it. */
+
+/* The one corner. pointer-events pass through the empty column so the region
+ * never blocks the content it floats over; each toast re-enables its own. */
+.ds-toast-region {
+  position: fixed;
+  right: var(--sem-space-2xl);
+  bottom: var(--sem-space-2xl);
+  z-index: var(--sem-z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sem-space-sm);
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--sem-space-2xl));
+  pointer-events: none;
+}
+
+.ds-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sem-space-sm);
+  box-sizing: border-box;
+  padding: var(--sem-space-sm) var(--sem-space-lg);
+  border: 1px solid var(--sem-color-border-default);
+  border-radius: var(--sem-radius-overlay);
+  background: color-mix(in srgb, var(--sem-color-bg-surface-raised) calc(var(--sem-glass-opacity) * 100%), transparent);
+  -webkit-backdrop-filter: blur(var(--sem-glass-blur)) saturate(var(--sem-glass-saturation));
+  backdrop-filter: blur(var(--sem-glass-blur)) saturate(var(--sem-glass-saturation));
+  box-shadow: var(--sem-shadow-popover);
+  color: var(--sem-color-text-default);
+  font-family: var(--sem-font-family-ui);
+  font-size: var(--sem-font-size-meta);
+  line-height: var(--sem-font-line-default);
+  animation: ds-toast-enter var(--sem-motion-duration-normal) var(--sem-motion-ease-standard);
+}
+
+.ds-toast-glyph {
+  flex: none;
+  width: var(--sem-icon-size-sm);
+  height: var(--sem-icon-size-sm);
+  margin-top: 1px; /* optical alignment with the title's cap height */
+  color: var(--sem-color-accent-primary);
+}
+
+.ds-toast-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.ds-toast-title {
+  color: var(--sem-color-text-primary);
+  font-weight: var(--sem-font-weight-medium);
+  line-height: var(--sem-font-line-tight);
+}
+
+.ds-toast-description {
+  margin-top: var(--sem-space-3xs);
+  color: var(--sem-color-text-muted);
+  font-size: var(--sem-font-size-micro);
+  overflow-wrap: anywhere;
+}
+
+.ds-toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sem-space-xs);
+  margin-top: var(--sem-space-md);
+}
+
+@keyframes ds-toast-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-toast { animation: none; }
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .ds-toast { background: var(--sem-color-bg-surface-raised); }
+}
