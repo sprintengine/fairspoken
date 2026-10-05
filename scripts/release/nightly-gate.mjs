@@ -70,3 +70,34 @@ export function nightlyGate({ releases, comparison, now, intervalMs = NIGHTLY_IN
   }
   return { publish: true, reason: `main has commits since ${last.tag_name}.` }
 }
+
+// A scheduled nightly that fails is not retried every 30 minutes. Without this,
+// a broken build (a missing secret, a red quality gate, a fresh repository
+// whose very first nightly fails) starts the whole packaging matrix, macOS
+// legs included, on every tick until somebody notices: the six-hour interval
+// only counts PUBLISHED nightlies. So a tick that the gate above lets through
+// still holds back when a scheduled run of this workflow on the very same
+// commit failed within the interval. A new commit on main, or a dispatched
+// nightly, goes straight through. `runs` are GitHub's workflow runs of this
+// workflow (head_sha, event, conclusion, created_at, html_url).
+export function failedAttemptGate({ runs, sha, now, intervalMs = NIGHTLY_INTERVAL_MS, currentRunId = null }) {
+  const nowMs = now instanceof Date ? now.getTime() : Number(now)
+  const failed = (runs ?? [])
+    .filter(
+      (run) =>
+        run.id !== currentRunId &&
+        run.event === 'schedule' &&
+        run.head_sha === sha &&
+        run.conclusion === 'failure' &&
+        nowMs - Date.parse(run.created_at) < intervalMs,
+    )
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0]
+  if (!failed) return { publish: true, reason: null }
+  const retry = new Date(Date.parse(failed.created_at) + intervalMs).toISOString()
+  return {
+    publish: false,
+    reason:
+      `A scheduled nightly of ${sha.slice(0, 12)} failed at ${failed.created_at} (${failed.html_url ?? `run ${failed.id}`}). ` +
+      `The schedule tries this commit again after ${retry}; merge a fix or dispatch a nightly to go sooner.`,
+  }
+}

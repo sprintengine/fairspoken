@@ -5,46 +5,51 @@ name: Release
 #
 #   schedule                    every 30 minutes, a nightly of main's head, but
 #                               only when the last nightly is 6+ hours old AND
-#                               main has commits it did not ship
-#                               (scripts/release/nightly-gate.mjs). A tick whose
-#                               main is behind or diverged from the last
-#                               nightly's commit (history rewritten) FAILS in
-#                               the resolve step rather than skipping quietly.
+#                               main has commits it did not ship AND no
+#                               scheduled nightly of the same commit failed in
+#                               the last 6 hours (scripts/release/nightly-gate.mjs).
+#                               A tick whose main is behind or diverged from the
+#                               last nightly's commit (history rewritten) FAILS
+#                               in the resolve step rather than skipping quietly.
 #   dispatch nightly            a nightly of main's head now, gate skipped
 #   dispatch stable             promote: rebuild the commit the latest nightly
 #                               shipped, as stable X.Y.Z, and tag it -- so stable
 #                               only ever ships a build nightly users have run
+#   dispatch feeds              build nothing; re-render the update feeds from
+#                               the releases that exist (recovery, first setup)
 #   push a tag vX.Y.Z           stable build of exactly the tagged commit (hotfix)
 #
 # A merge to main publishes nothing; CI (ci.yml) gates it as before.
 #
 # Nightlies are vX.Y.Z-nightly.YYYYMMDD.RUN, where X.Y.Z is the version the next
 # stable would take (Conventional Commits since the last stable tag), published
-# as prereleases that are never marked latest, each carrying nightly.json.
-# Stables carry latest.json, which installed stable builds reach through
-# /releases/latest/download/latest.json (the endpoint in tauri.conf.json).
+# as prereleases that are never marked latest. Stables are X.Y.Z, marked latest.
+# Every product of one release shares one build number, the UTC minute the
+# release was resolved (YYYYMMDDHHMM): the macOS apps' CFBundleVersion, which
+# Sparkle compares.
+#
+# Installed apps never read a release directly. Every feed they read lives on
+# one rolling prerelease, `update-feeds` (never latest, never pruned):
+# desktop-{stable,nightly}.json, appcast-fairspoken.xml,
+# appcast-fairspoken-server.xml and host-{stable,nightly}.json. The feeds job
+# RE-RENDERS all of them after every publish from the releases that exist and
+# the small metadata each release carries (desktop-manifest.json,
+# host-manifest.json, sparkle-<app>.json), so nothing points at a deleted asset.
 #
 # Build jobs publish NOTHING. They hand their files and their share of the
-# updater manifest to one publish job, which merges the manifest, uploads
-# everything to a draft and only then makes the release visible, so a failed
-# leg never leaves a public half-release behind it.
+# metadata to one publish job, which merges it, uploads everything to a draft
+# and only then makes the release visible, so a failed leg never leaves a
+# public half-release behind it.
 #
-# Every release carries every product, built from one commit at one version,
-# as Studio ships everything on one train:
+# Every release carries every product, built from one commit at one version:
 #
 #   package     the Tauri desktop app (Windows x64, Linux x64) and, on the same
 #               runner and target dir, the standalone transcription host
 #               (Windows x64, Linux x64/arm64, macOS arm64/x64). The
-#               linux-arm64 and both macOS legs build only the host: there is
-#               no Tauri app for Linux arm64, and none for macOS, where the
-#               native apps below take its place.
+#               linux-arm64 and both macOS legs build only the host.
 #   macos-app   the native macOS apps in apps/macos (Apple Silicon, macOS 26):
 #               Fairspoken, the dictation client, and Fairspoken Server, the
-#               transcription server
-#
-# Only the Tauri app has an updater manifest, with Windows and Linux entries
-# only. The native apps' Sparkle feed is a TODO (see the macos-app job); the
-# host is installed by hand.
+#               transcription server, each with its Sparkle metadata
 on:
   push:
     tags:
@@ -57,13 +62,14 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: "nightly builds main now; stable promotes the commit the latest nightly shipped"
+        description: "nightly builds main now; stable promotes the commit the latest nightly shipped; feeds only re-renders the update feeds"
         required: true
         default: nightly
         type: choice
         options:
           - nightly
           - stable
+          - feeds
       version:
         description: "stable only: publish as this X.Y.Z instead of the nightly's version (any version above the latest stable that no tag holds)"
         required: false
@@ -76,10 +82,11 @@ on:
         type: boolean
 
 # Two queues. Nightlies share one so two ticks can never build the same commit
-# or publish out of order; stable runs (promotions, tags) share the other, so a
-# queued nightly never holds up a promotion. Neither cancels: a cancelled
-# release run can leave a draft or a tag behind, and every queued run is kept
-# rather than replaced by the next one.
+# or publish out of order; stable runs (promotions, tags, feeds-only) share the
+# other, so a queued nightly never holds up a promotion. Neither cancels: a
+# cancelled release run can leave a draft or a tag behind, and every queued run
+# is kept rather than replaced by the next one. The feeds job has a third
+# queue of its own, shared by both, so feed uploads never interleave.
 concurrency:
   group: desktop-release-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.channel == 'nightly')) && 'nightly' || 'stable' }}
   cancel-in-progress: false
@@ -93,17 +100,25 @@ jobs:
     name: Resolve release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # The nightly gate reads this workflow's earlier scheduled runs.
+      actions: read
     outputs:
       should_build: ${{ steps.resolve.outputs.should_build }}
+      feeds_only: ${{ steps.resolve.outputs.feeds_only }}
       publish: ${{ steps.resolve.outputs.publish }}
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
       channel: ${{ steps.resolve.outputs.channel }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       ref: ${{ steps.resolve.outputs.ref }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
       previous_sha: ${{ steps.resolve.outputs.previous_sha }}
       source_private: ${{ steps.resolve.outputs.source_private }}
       slug: ${{ steps.resolve.outputs.slug }}
+      mac_signing: ${{ steps.secrets.outputs.mac_signing }}
+      sparkle: ${{ steps.secrets.outputs.sparkle }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -115,11 +130,11 @@ jobs:
         with:
           node-version: 22
 
-      # Channel, version and commit for every later job. See the header for the
-      # entry points; scripts/release/release.mjs for the rules. A shut gate
-      # ends the run here, green, with should_build=false; a refusal (main
-      # rewritten under the last nightly, a promotion that cannot ship) exits
-      # non-zero and fails the run, so it is seen.
+      # Channel, version, commit and build number for every later job. See the
+      # header for the entry points; scripts/release/release.mjs for the rules.
+      # A shut gate ends the run here, green, with should_build=false; a refusal
+      # (main rewritten under the last nightly, a promotion that cannot ship)
+      # exits non-zero and fails the run, so it is seen.
       - name: Resolve channel, version and commit
         id: resolve
         env:
@@ -128,12 +143,35 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           SHA: ${{ github.sha }}
           RUN_NUMBER: ${{ github.run_number }}
+          RUN_ID: ${{ github.run_id }}
           DISPATCH_CHANNEL: ${{ inputs.channel }}
           DISPATCH_VERSION: ${{ inputs.version }}
           DISPATCH_PUBLISH: ${{ inputs.publish }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_TOKEN: ${{ github.token }}
         run: node scripts/release/release.mjs resolve
+
+      # Before a single runner is spent: the Tauri key is required, and every
+      # optional group (Apple, Azure, Sparkle) is all or none. Only whether each
+      # secret is set reaches this step, never a value.
+      - name: Check the signing secrets
+        id: secrets
+        if: steps.resolve.outputs.should_build == 'true'
+        env:
+          HAS_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAS_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+          HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' }}
+          HAS_AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' }}
+          HAS_AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME != '' }}
+          HAS_SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY != '' }}
+        run: node scripts/release/release.mjs check-secrets
 
   # The whole CI gate against the exact commit being released. It runs beside
   # the packaging legs; only the publish job waits for it, so it costs no
@@ -160,7 +198,7 @@ jobs:
           # (HOST_TARGETS in scripts/release/release-lib.mjs). bundles is
           # empty on a host-only leg, which skips the app packaging and
           # collect steps; platform then only keys the Rust cache and the
-          # artifact, and is no updater platform.
+          # artifact.
           - name: windows
             os: windows-2022
             platform: windows-x86_64
@@ -168,9 +206,8 @@ jobs:
             bundles: nsis
             hostBinary: src-tauri/target/release/transcription-host.exe
             hostTarget: windows-x64
-          # The transcription host only, signed and notarized. The Tauri app
-          # does not ship for macOS (the native apps do, from the macos-app
-          # job), so the updater manifest has no darwin-* entry.
+          # The transcription host only, signed and notarized. Macs run the
+          # native apps (the macos-app job), not the Tauri app.
           - name: macos-x64
             os: macos-15-intel
             platform: darwin-x86_64
@@ -196,10 +233,8 @@ jobs:
             bundles: appimage,deb
             hostBinary: src-tauri/target/release/transcription-host
             hostTarget: linux-x64
-          # The transcription host only: no bundles, so the app packaging and
-          # collect steps skip. Studio ships no Linux arm64 desktop app and
-          # neither does this train; the updater manifest has no linux-aarch64
-          # entry. Same glibc 2.39 floor as the x64 leg.
+          # The transcription host only: there is no Linux arm64 desktop app.
+          # Same glibc 2.39 floor as the x64 leg.
           - name: linux-arm64
             os: ubuntu-24.04-arm
             platform: linux-aarch64
@@ -213,9 +248,9 @@ jobs:
       TAG: ${{ needs.validate.outputs.tag }}
       TARGET: ${{ matrix.target }}
       BUNDLES: ${{ matrix.bundles }}
-      # Signs the updater payload; the public half is in tauri.conf.json.
-      # Without it `tauri build` fails, rather than shipping an update no
-      # installed build would accept.
+      # Signs the desktop updater payloads and the host archive; the public
+      # half is plugins.updater.pubkey in tauri.conf.json, and every signature
+      # is checked against it before it leaves this runner.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
@@ -232,12 +267,13 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build outputs
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.platform }}
@@ -260,12 +296,11 @@ jobs:
 
       # Before the build: a nightly or promoted version is not what
       # package.json says at this commit, and the version must be the same in
-      # the bundle, the app's own Settings screen and the updater manifest.
+      # the bundle, the app's own Settings screen and the feeds.
       #
       # A promotion builds the commit a nightly shipped while this workflow
-      # file comes from main, so a step that calls a repository script must
-      # survive a checkout from before that script existed. Every step here
-      # calls scripts that predate the first nightly; keep it that way.
+      # file comes from main, so the scripts each step calls are that commit's.
+      # Promote only nightlies cut by this version of the pipeline.
       - name: Stamp the release version
         run: node scripts/release/release.mjs stamp "${VERSION}"
 
@@ -276,7 +311,7 @@ jobs:
       # Azure Trusted Signing through trusted-signing-cli, which Tauri runs on
       # every binary it signs -- no certificate file, no hardware token. All
       # six secrets sign; none leaves the installer unsigned (SmartScreen warns
-      # on first run); a partial set is a misconfiguration and fails.
+      # on first run); a partial set never gets here (validate fails first).
       - name: Package app (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -311,15 +346,26 @@ jobs:
           npx tauri build --bundles "$BUNDLES" --config "$config"
           echo "BUNDLE_DIR=src-tauri/target/release/bundle" >> "$GITHUB_ENV"
 
+      # createUpdaterArtifacts signs the AppImage and, on Tauri 2, the .deb as
+      # well: a .deb install updates from the linux-x86_64-deb entry of
+      # desktop-<channel>.json. A CLI that leaves the .deb unsigned has it
+      # signed here with the same key, so the entry never goes missing.
       - name: Package app (Linux)
         if: runner.os == 'Linux' && matrix.bundles != ''
         shell: bash
         run: |
           npx tauri build --bundles "$BUNDLES" --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          for deb in src-tauri/target/release/bundle/deb/*.deb; do
+            if [ ! -f "$deb.sig" ]; then
+              echo "Signing $(basename "$deb") for the updater."
+              npx tauri signer sign "$deb" > /dev/null
+            fi
+          done
           echo "BUNDLE_DIR=src-tauri/target/release/bundle" >> "$GITHUB_ENV"
 
-      # Renames the bundles so every leg's files can share one release, and
-      # writes this leg's entry of the updater manifest beside them.
+      # Renames the bundles so every leg's files can share one release, checks
+      # each updater signature against the shipped public key, and writes this
+      # leg's share of desktop-manifest.json beside them.
       - name: Collect release files
         if: matrix.bundles != ''
         shell: bash
@@ -341,10 +387,9 @@ jobs:
       # a "Developer ID Application" certificate exported as a base64 .p12 (the
       # same secret names as sprintengine/studio, so the values carry over).
       # With none of the five set it keeps the linker's ad-hoc signature, with
-      # a warning; a partial set is a misconfiguration and fails. A bare binary
-      # cannot be stapled: Gatekeeper fetches its ticket online the first time
-      # a downloaded copy runs. The certificate goes into a temporary keychain
-      # of this job's own, never the login one.
+      # a warning. A bare binary cannot be stapled: Gatekeeper fetches its
+      # ticket online the first time a downloaded copy runs. The certificate
+      # goes into a temporary keychain of this job's own, never the login one.
       - name: Sign and notarize transcription host (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -401,9 +446,10 @@ jobs:
 
       # One folder per platform, named like the archive: the binary, the wire
       # protocol it serves, the systemd and launchd service files, and the
-      # licences. tar.gz keeps the binary executable; Windows gets a zip.
-      # hostArchiveName in scripts/release/release-lib.mjs names the same files
-      # for the verify step.
+      # licences. tar.gz keeps the binary executable; Windows gets a zip. The
+      # host's self-updater extracts <folder>/transcription-host[.exe] from it
+      # (hostArchiveLayout in scripts/release/release-lib.mjs, and
+      # docs/releasing.md); keep the three in step.
       - name: Package transcription host
         shell: pwsh
         env:
@@ -433,6 +479,13 @@ jobs:
           }
           Get-ChildItem -Recurse $stage | ForEach-Object { $_.FullName.Substring($env:RUNNER_TEMP.Length) }
 
+      # The archive signed with the Tauri key (`tauri signer sign`), the
+      # signature checked against the shipped public key, and the leg's share
+      # of host-manifest.json written: url, sha256, signature, format.
+      - name: Sign transcription host archive
+        shell: bash
+        run: node scripts/release/release.mjs sign-host "${{ matrix.hostTarget }}" release-assets
+
       # A host for a headless server must not need a desktop. Printed rather
       # than enforced until a release has shown what it links.
       - name: Show the transcription host's shared libraries (Linux)
@@ -447,33 +500,28 @@ jobs:
           retention-days: 14
           path: release-assets/*
 
-  # The native macOS apps (apps/macos): the same commit and version as every
-  # other leg, on the same release. Release configuration, Developer ID signed
-  # with the hardened runtime, notarized and stapled by
+  # The native macOS apps (apps/macos): the same commit, version and build
+  # number as every other leg, on the same release. Release configuration,
+  # Developer ID signed with the hardened runtime, notarized and stapled by
   # apps/macos/scripts/release.sh -- the script a maintainer runs locally:
   #
-  #   release.sh               Fairspoken.app, the dictation client, as
-  #                            Fairspoken-<version>-macos-arm64.zip and .dmg
-  #   release.sh --app server  Fairspoken Server.app, the transcription server,
-  #                            as Fairspoken-Server-<version>-macos-arm64.zip
-  #                            and .dmg
+  #   release.sh               Fairspoken.app as Fairspoken-<version>-macos-arm64.zip
+  #                            and .dmg, and sparkle-fairspoken.json
+  #   release.sh --app server  Fairspoken Server.app as
+  #                            Fairspoken-Server-<version>-macos-arm64.zip and .dmg,
+  #                            and sparkle-fairspoken-server.json
   #
-  # Both runs write into release-assets, so one artifact carries all four files.
+  # The .zip (ditto --sequesterRsrc --keepParent of the stapled app) is the
+  # Sparkle enclosure, EdDSA-signed with SPARKLE_ED_PRIVATE_KEY by Sparkle's own
+  # sign_update; the DMG is for people. CFBundleVersion is the release's build
+  # number (YYYYMMDDHHMM), passed as CURRENT_PROJECT_VERSION.
   #
   # Apple Silicon only (the apps need macOS 26 and the Neural Engine). They
   # need the macOS 26 SDK, so Xcode 26 on macos-26, pinned by path as in ci.yml.
   #
   # Bundle ids ie.fairspoken.mac (client) and ie.fairspoken.server (server), the
-  # same on both channels; a nightly says what it is in its version
-  # (CFBundleShortVersionString is the full nightly version). Studio keeps one
-  # app id across channels the same way, and macOS keys Microphone and
-  # Accessibility grants on the bundle id, so moving between nightly and stable
-  # keeps them. CFBundleVersion is this workflow's run number, which only grows:
-  # what Sparkle will compare.
-  #
-  # TODO(updates): Sparkle is not set up, so there is no appcast and nothing
-  # here publishes one; installs update by hand. Each .zip is the payload a
-  # Sparkle appcast will point at once it exists.
+  # same on both channels: macOS keys Microphone and Accessibility grants on the
+  # bundle id, so moving between nightly and stable keeps them.
   macos-app:
     name: Package (macos-app-arm64)
     needs: validate
@@ -483,12 +531,18 @@ jobs:
     timeout-minutes: 150
     env:
       VERSION: ${{ needs.validate.outputs.version }}
+      BUILD_NUMBER: ${{ needs.validate.outputs.build_number }}
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
 
       - name: Install XcodeGen
         env:
@@ -499,6 +553,21 @@ jobs:
           echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
           unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      # Sparkle's sign_update, from the official release tarball, pinned by
+      # version and checksum. Only when the apps are notarized and the Sparkle
+      # key is set: nothing else is ever an update.
+      - name: Install Sparkle tools
+        if: needs.validate.outputs.sparkle == 'true'
+        env:
+          SPARKLE_VERSION: "2.10.0"
+          SPARKLE_SHA256: c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/sparkle.tar.xz" "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          echo "${SPARKLE_SHA256}  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle" ./bin
+          echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
 
       - name: Show toolchain
         run: |
@@ -511,11 +580,10 @@ jobs:
         run: sudo mdutil -a -i off
 
       # All five secrets sign and notarize; none ships ad-hoc signed builds
-      # named -unsigned, with a warning; a partial set is a misconfiguration and
-      # fails, as in the transcription host's macOS signing. CSC_LINK is the
-      # Developer ID Application .p12 (base64) shared with those legs and with
-      # Studio. It is imported into a temporary keychain that only this job
-      # uses, and both apps are signed from it.
+      # named -unsigned, with a warning. CSC_LINK is the Developer ID
+      # Application .p12 (base64) shared with the host legs and with Studio. It
+      # is imported into a temporary keychain that only this job uses, and both
+      # apps are signed from it.
       - name: Import the Developer ID certificate
         id: signing
         env:
@@ -559,9 +627,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ needs.validate.outputs.sparkle == 'true' && secrets.SPARKLE_ED_PRIVATE_KEY || '' }}
           MODE: ${{ steps.signing.outputs.mode }}
         run: |
-          args=(--version "$VERSION" --build-number "$GITHUB_RUN_NUMBER" --out "$GITHUB_WORKSPACE/release-assets")
+          args=(--version "$VERSION" --build-number "$BUILD_NUMBER" --out "$GITHUB_WORKSPACE/release-assets")
           if [ "$MODE" = "unsigned" ]; then args+=(--unsigned); fi
           apps/macos/scripts/release.sh "${args[@]}"
 
@@ -572,11 +641,18 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ needs.validate.outputs.sparkle == 'true' && secrets.SPARKLE_ED_PRIVATE_KEY || '' }}
           MODE: ${{ steps.signing.outputs.mode }}
         run: |
-          args=(--app server --version "$VERSION" --build-number "$GITHUB_RUN_NUMBER" --out "$GITHUB_WORKSPACE/release-assets")
+          args=(--app server --version "$VERSION" --build-number "$BUILD_NUMBER" --out "$GITHUB_WORKSPACE/release-assets")
           if [ "$MODE" = "unsigned" ]; then args+=(--unsigned); fi
           apps/macos/scripts/release.sh "${args[@]}"
+
+      # Each sparkle-<app>.json against its zip and against the SUPublicEDKey
+      # the app ships: a key that does not match fails here, not in every
+      # installed app.
+      - name: Check the Sparkle metadata
+        run: node scripts/release/release.mjs check-sparkle release-assets
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v7
@@ -626,8 +702,8 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      - name: Merge the updater manifest
-        run: node scripts/release/release.mjs merge-manifest release-assets "${CHANNEL}"
+      - name: Merge the desktop and host manifests
+        run: node scripts/release/release.mjs merge-manifests release-assets
 
       - name: Write release notes
         env:
@@ -636,10 +712,9 @@ jobs:
           PREVIOUS_SHA: ${{ needs.validate.outputs.previous_sha }}
         run: node scripts/release/release.mjs notes release-notes.md
 
-      # Draft first, every file uploaded, and only then visible. The updater
-      # reads the release the moment it is published; a release published
-      # before its last file finished uploading is one somebody can
-      # half-install.
+      # Draft first, every file uploaded, and only then visible. The feeds are
+      # rendered from published releases only, so nothing points at a release
+      # still filling up.
       - name: Publish the release
         shell: bash
         run: |
@@ -661,9 +736,8 @@ jobs:
             gh release delete "$TAG" --repo "$REPO" --yes
           fi
 
-          # Only a stable is ever latest: every installed stable build resolves
-          # its next version through /releases/latest.
-          if [ "$CHANNEL" = "latest" ]; then
+          # Only a stable is ever latest.
+          if [ "$CHANNEL" = "stable" ]; then
             flags=()
             latest="--latest"
           else
@@ -681,31 +755,83 @@ jobs:
             release-assets/*
           gh release edit "$TAG" --repo "$REPO" --draft=false "$latest"
 
-      # Twice over: once through the API with the job's token, which says the
-      # release is complete, and once with no credential at all against the
-      # URLs installed builds read, which says a user can actually get at it.
-      # Only the second catches a repository that is private or misnamed.
-      - name: Verify the published release, authenticated and not
-        run: node scripts/release/release.mjs verify
-
-      # Nightlies past the newest few are installers nothing reads: installed
-      # nightly builds, the nightly gate and a stable promotion all go to the
-      # newest. Their tags stay. After the release is verified, so the newest
-      # is the one just made; and a failure here leaves the release it follows
-      # published, so it does not fail the job.
-      - name: Delete the older nightly releases
-        if: needs.validate.outputs.channel == 'nightly'
-        continue-on-error: true
-        run: node scripts/release/release.mjs prune-nightlies
+      # With the job's token: every product, every metadata file, and each one
+      # usable (signatures present, urls on this release, Sparkle lengths
+      # matching the zips).
+      - name: Verify the published release
+        run: node scripts/release/release.mjs verify-release
 
       # A promoted stable has no tag in the source repo yet; a pushed one does.
       # `gh release create --target` above normally creates it already; this
       # stays as the guard. The workflow's own token does not trigger another run.
       - name: Tag the source commit
-        if: needs.validate.outputs.channel == 'latest' && github.event_name != 'push'
+        if: needs.validate.outputs.channel == 'stable' && github.event_name != 'push'
         run: |
           if gh api "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
             echo "${TAG} already exists on ${REPO}."
           else
             gh api "repos/${REPO}/git/refs" -f "ref=refs/tags/${TAG}" -f "sha=${REF}"
           fi
+
+  # Re-renders every update feed from the releases that exist now and uploads
+  # them to the update-feeds release, then reads them back without credentials,
+  # then deletes the nightlies past the newest three -- which the feeds just
+  # rendered already leave out, so no feed ever points at a deleted asset.
+  # One queue for both trains: two publishes never interleave their uploads,
+  # and the later always renders from a list holding the earlier's release.
+  feeds:
+    name: Update feeds
+    needs: [validate, publish]
+    if: >-
+      always() && needs.validate.result == 'success' &&
+      (needs.validate.outputs.feeds_only == 'true' || needs.publish.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: release-update-feeds
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      TAG: ${{ needs.validate.outputs.feeds_only != 'true' && needs.validate.outputs.tag || '' }}
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+      REF: ${{ needs.validate.outputs.ref }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Render and upload the update feeds
+        run: node scripts/release/release.mjs update-feeds "$RUNNER_TEMP/update-feeds"
+
+      # The exact URLs installed apps read, with no credential at all: a
+      # private or misnamed repository fails here rather than in the silence of
+      # apps that never find an update. Also that /releases/latest is a stable.
+      - name: Read the feeds back without credentials
+        run: node scripts/release/release.mjs verify-public "$RUNNER_TEMP/update-feeds"
+
+      # Their tags stay. After the feeds, so the newest nightly is the one just
+      # made; a failure here leaves everything published, so it does not fail
+      # the job.
+      - name: Delete the older nightly releases
+        if: needs.validate.outputs.channel == 'nightly' && needs.validate.outputs.feeds_only != 'true'
+        continue-on-error: true
+        run: node scripts/release/release.mjs prune-nightlies
+
+      - name: Keep the rendered feeds
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: update-feeds-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: ${{ runner.temp }}/update-feeds/*
