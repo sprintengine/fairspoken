@@ -628,7 +628,7 @@ impl LocalModels {
             let messages = polish_messages(
                 cleaned,
                 layout,
-                &settings.vocabulary_hints,
+                &crate::vocabulary_packs::polish_vocabulary(cleaned, settings),
                 spec(&settings.polish_model)?.prompt,
             );
             // Ask the actual tokenizer, so non-Latin scripts cannot overflow a character-based estimate.
@@ -673,7 +673,10 @@ impl LocalModels {
                 span.event("polish-response", response.clone());
             }
             check_cancel(cancel)?;
-            validate_output(cleaned, &response, &settings.vocabulary_hints)
+            let text = validate_output(cleaned, &response, &settings.vocabulary_hints)?;
+            crate::vocabulary_packs::check_polish(cleaned, &text, &settings.enabled_packs)
+                .map_err(|reason| format!("Local polish {reason}; raw text preserved"))?;
+            Ok(text)
         })();
         match result {
             Ok(text) if text == raw.trim() => PolishDecision::Unchanged {
@@ -859,8 +862,9 @@ fn polish_messages(
         messages.push(serde_json::json!({"role":"user", "content":transcript_message(input, &[], example_layout)}));
         messages.push(serde_json::json!({"role":"assistant", "content":output}));
     }
-    let spelling = crate::transcript_cleanup::relevant_vocabulary(raw, vocabulary);
-    messages.push(serde_json::json!({"role":"user", "content":transcript_message(raw, &spelling, layout)}));
+    // `vocabulary` is already the retrieved spelling list
+    // (`vocabulary_packs::polish_vocabulary`).
+    messages.push(serde_json::json!({"role":"user", "content":transcript_message(raw, vocabulary, layout)}));
     serde_json::Value::Array(messages)
 }
 
@@ -1239,9 +1243,13 @@ mod tests {
     use super::*;
     #[test]
     fn unspoken_dictionary_terms_never_reach_the_model() {
-        let vocabulary: Vec<String> = vec!["Acme".into(), "Railway".into()];
+        let settings = crate::settings::Settings {
+            vocabulary_hints: vec!["Acme".into(), "Railway".into()],
+            ..Default::default()
+        };
         let raw = "And then you can feel free to use sub agents on rail way.";
-        let messages = polish_messages(raw, Layout::default(), &vocabulary, PolishPrompt::Instructed);
+        let spelling = crate::vocabulary_packs::polish_vocabulary(raw, &settings);
+        let messages = polish_messages(raw, Layout::default(), &spelling, PolishPrompt::Instructed);
         let messages = messages.as_array().unwrap();
         let last = messages.last().unwrap()["content"].as_str().unwrap();
         assert_eq!(
@@ -1269,14 +1277,16 @@ mod tests {
         for format in Format::ALL {
             for tone in [Tone::Casual, Tone::Neutral, Tone::Formal] {
                 let layout = Layout { format, tone };
-                let messages = polish_messages(raw, layout, &["Railway".into()], PolishPrompt::Instructed);
+                // The spelling list arrives already retrieved
+                // (`vocabulary_packs::polish_vocabulary`), so it passes through.
+                let messages = polish_messages(raw, layout, &["Mary".into()], PolishPrompt::Instructed);
                 let messages = messages.as_array().unwrap();
                 // Byte-stable system prompt and examples: one cache entry
                 // serves every app, format and tone.
                 assert_eq!(messages[..messages.len() - 1], plain[..plain.len() - 1]);
                 assert_eq!(messages[0]["content"], POLISH_SYSTEM_PROMPT);
                 let last = messages.last().unwrap()["content"].as_str().unwrap();
-                assert_eq!(last, crate::polish_input::user_turn(raw, &[], layout));
+                assert_eq!(last, crate::polish_input::user_turn(raw, &["Mary".into()], layout));
                 assert_eq!(
                     last.contains("<format>"),
                     format != Format::Plain,

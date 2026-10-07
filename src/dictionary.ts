@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-// The Dictionary screen owns the vocabulary, corrections, and snippets. These
-// still live in Settings on disk, but only this screen edits them (the backend
-// save_dictionary command owns those fields), so there is no clobbering with
-// the Settings screen. Entries the edit watcher learned carry a "Learned" chip,
-// and fixes it will not apply on its own wait under Suggestions.
+// The Dictionary screen owns the vocabulary, corrections, snippets and enabled
+// vocabulary packs. These still live in Settings on disk, but only this screen
+// edits them (the backend save_dictionary command owns those fields), so there
+// is no clobbering with the Settings screen. Entries the edit watcher learned
+// carry a "Learned" chip, and fixes it will not apply on its own wait under
+// Suggestions.
 
 interface Correction {
   enabled: boolean;
@@ -38,6 +39,31 @@ interface DictionarySettings {
   transcriptCorrections?: Correction[];
   snippets?: Snippet[];
   learnFromEdits?: boolean;
+  enabledPacks?: string[];
+}
+
+interface PackSource {
+  name: string;
+  url: string;
+  licence: string;
+  used_for: string;
+}
+
+interface PackSummary {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  licence: string;
+  attribution: string;
+  sources: PackSource[];
+  termCount: number;
+}
+
+interface PackTermPreview {
+  term: string;
+  category: string;
+  spokenForms: string[];
 }
 
 const vocabAdd = required<HTMLFormElement>("vocabAdd");
@@ -50,12 +76,15 @@ const snippetRows = required("snippetRows");
 const suggestionsSection = required("suggestionsSection");
 const suggestionRows = required("suggestionRows");
 const learnFromEdits = required<HTMLInputElement>("learnFromEdits");
+const packRows = required("packRows");
 
 let vocabulary: string[] = [];
 let learnedVocabulary: string[] = [];
 let corrections: Correction[] = [];
 let snippets: Snippet[] = [];
 let suggestions: LearnedSuggestion[] = [];
+let packs: PackSummary[] = [];
+let enabledPacks: string[] = [];
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -72,6 +101,7 @@ async function persist(): Promise<void> {
         transcriptCorrections: corrections,
         snippets,
         learnFromEdits: learnFromEdits.checked,
+        enabledPacks,
       },
     });
   } catch (error) {
@@ -287,6 +317,119 @@ function renderSuggestions(): void {
   );
 }
 
+// ── Packs ───────────────────────────────────────────────────
+const PREVIEW_LIMIT = 80;
+
+function packDetail(pack: PackSummary): HTMLElement {
+  const detail = document.createElement("div");
+  detail.className = "pack-detail";
+  detail.id = `pack-detail-${pack.id}`;
+  detail.hidden = true;
+
+  const source = document.createElement("p");
+  source.className = "pack-source";
+  source.textContent = `Version ${pack.version}. ${pack.attribution}`;
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "setting-input w-lg";
+  search.placeholder = "Search terms";
+  search.autocomplete = "off";
+  search.setAttribute("aria-label", `Search ${pack.name} terms`);
+
+  const terms = document.createElement("div");
+  terms.className = "pack-terms";
+  terms.setAttribute("aria-live", "polite");
+
+  let request = 0;
+  const refresh = async (): Promise<void> => {
+    const current = ++request;
+    try {
+      const found = await invoke<PackTermPreview[]>("search_vocabulary_pack", {
+        id: pack.id,
+        query: search.value.trim(),
+        limit: PREVIEW_LIMIT,
+      });
+      if (current !== request) return;
+      terms.replaceChildren(
+        ...found.map((term) => {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = term.term;
+          chip.title = term.spokenForms.length
+            ? `${term.category}; heard as ${term.spokenForms.join(", ")}`
+            : term.category;
+          return chip;
+        }),
+      );
+    } catch (error) {
+      console.error("dictionary:", error instanceof Error ? error.message : String(error));
+    }
+  };
+  search.addEventListener("input", () => void refresh());
+  detail.addEventListener("pack-open", () => void refresh(), { once: true });
+
+  detail.append(source, search, terms);
+  return detail;
+}
+
+function renderPacks(): void {
+  if (packs.length === 0) {
+    packRows.innerHTML = '<p class="dict-rows-empty">No packs in this build.</p>';
+    return;
+  }
+  packRows.replaceChildren(
+    ...packs.flatMap((pack) => {
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const text = document.createElement("div");
+      text.className = "row-text";
+      const label = document.createElement("div");
+      label.className = "row-label";
+      label.id = `pack-label-${pack.id}`;
+      label.textContent = pack.name;
+      const help = document.createElement("div");
+      help.className = "row-help";
+      const licences = [...new Set([pack.licence, ...pack.sources.map((s) => s.licence)])].join(", ");
+      help.textContent = `${pack.description} ${pack.termCount.toLocaleString()} terms · ${licences}`;
+      text.append(label, help);
+
+      const detail = packDetail(pack);
+      const browse = document.createElement("button");
+      browse.type = "button";
+      browse.className = "btn btn-ghost";
+      browse.textContent = "Browse terms";
+      browse.setAttribute("aria-expanded", "false");
+      browse.setAttribute("aria-controls", detail.id);
+      browse.addEventListener("click", () => {
+        detail.hidden = !detail.hidden;
+        browse.setAttribute("aria-expanded", String(!detail.hidden));
+        if (!detail.hidden) detail.dispatchEvent(new Event("pack-open"));
+      });
+
+      const toggle = document.createElement("input");
+      toggle.type = "checkbox";
+      toggle.className = "switch";
+      toggle.setAttribute("role", "switch");
+      toggle.setAttribute("aria-labelledby", label.id);
+      toggle.checked = enabledPacks.includes(pack.id);
+      toggle.addEventListener("change", () => {
+        enabledPacks = toggle.checked
+          ? [...enabledPacks.filter((id) => id !== pack.id), pack.id]
+          : enabledPacks.filter((id) => id !== pack.id);
+        void persist();
+      });
+
+      const control = document.createElement("div");
+      control.className = "row-control";
+      control.append(browse, toggle);
+      row.append(text, control);
+      return [row, detail];
+    }),
+  );
+}
+
 async function decide(command: string, id: string): Promise<void> {
   try {
     await invoke(command, { id });
@@ -310,6 +453,8 @@ async function load(): Promise<void> {
     snippets = settings.snippets ?? [];
     learnFromEdits.checked = settings.learnFromEdits ?? true;
     suggestions = learned;
+    enabledPacks = settings.enabledPacks ?? [];
+    packs = await invoke<PackSummary[]>("list_vocabulary_packs");
   } catch (error) {
     console.error("dictionary:", error instanceof Error ? error.message : String(error));
   }
@@ -317,6 +462,7 @@ async function load(): Promise<void> {
   renderCorrections();
   renderSnippets();
   renderSuggestions();
+  renderPacks();
 }
 
 // Learning edits the dictionary from the backend; show what it added unless

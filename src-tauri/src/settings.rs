@@ -83,6 +83,11 @@ pub struct Settings {
     pub post_process: bool,
     #[serde(default)]
     pub vocabulary_hints: Vec<String>,
+    /// Bundled vocabulary packs the user turned on, by id. Their terms are
+    /// retrieved per dictation (`vocabulary_packs`) and never count toward
+    /// the cap on `vocabulary_hints`.
+    #[serde(default)]
+    pub enabled_packs: Vec<String>,
     #[serde(default)]
     pub transcript_corrections: Vec<TranscriptCorrection>,
     #[serde(default)]
@@ -241,6 +246,7 @@ impl Default for Settings {
             input_gain: 2,
             post_process: true,
             vocabulary_hints: Vec::new(),
+            enabled_packs: Vec::new(),
             transcript_corrections: Vec::new(),
             snippets: Vec::new(),
             always_on_top: true,
@@ -387,12 +393,12 @@ impl Settings {
                     (!term.is_empty()).then(|| term.to_string())
                 }),
         );
-        let terms = normalize_vocabulary_hints(terms);
-        if terms.is_empty() {
-            return None;
-        }
-
-        Some(format!("Relevant names and terms: {}.", terms.join(", ")))
+        // The user's terms first, then the enabled packs' always-on terms,
+        // inside the budget Whisper actually keeps.
+        crate::vocabulary_packs::whisper_prompt(
+            &normalize_vocabulary_hints(terms),
+            &self.enabled_packs,
+        )
     }
 }
 
@@ -412,6 +418,7 @@ fn normalize(settings: Settings) -> Settings {
         training_retention_days: normalize_training_retention_days(
             settings.training_retention_days,
         ),
+        enabled_packs: normalize_enabled_packs(settings.enabled_packs),
         transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
         snippets: normalize_snippets(settings.snippets),
         recording_shortcut: normalize_shortcut(
@@ -495,6 +502,23 @@ fn normalize_vocabulary_hints(hints: Vec<String>) -> Vec<String> {
         }
         normalized.push(hint);
         if normalized.len() >= 50 {
+            break;
+        }
+    }
+    normalized
+}
+
+/// Pack ids are kept even when this build does not ship the pack, so a
+/// downgrade does not forget them; unknown ids are ignored at use.
+fn normalize_enabled_packs(ids: Vec<String>) -> Vec<String> {
+    let mut normalized: Vec<String> = Vec::new();
+    for id in ids {
+        let id = clean_text_setting(&id, 64);
+        if id.is_empty() || normalized.contains(&id) {
+            continue;
+        }
+        normalized.push(id);
+        if normalized.len() >= 20 {
             break;
         }
     }
@@ -769,6 +793,53 @@ mod tests {
         .unwrap();
         assert!(manual.get("models").is_none());
         assert_eq!(manual["origin"], "manual");
+    }
+
+    #[test]
+    fn enabled_packs_load_from_old_settings_and_do_not_use_the_term_cap() {
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("enabledPacks");
+        let restored: Settings = serde_json::from_value(old).unwrap();
+        assert!(restored.enabled_packs.is_empty());
+
+        let settings = normalize(Settings {
+            vocabulary_hints: (0..60).map(|i| format!("term{i}")).collect(),
+            enabled_packs: vec![
+                " software-engineering ".into(),
+                "software-engineering".into(),
+                "".into(),
+                "pack-from-a-newer-build".into(),
+            ],
+            ..Settings::default()
+        });
+        assert_eq!(settings.vocabulary_hints.len(), 50);
+        assert_eq!(
+            settings.enabled_packs,
+            vec!["software-engineering", "pack-from-a-newer-build"]
+        );
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["enabledPacks"][0], "software-engineering");
+    }
+
+    #[test]
+    fn whisper_prompt_is_unchanged_without_packs() {
+        let settings = Settings {
+            vocabulary_hints: vec!["Hypercube".into(), "Railway".into()],
+            transcript_corrections: vec![TranscriptCorrection {
+                enabled: true,
+                from: "rocket deck".into(),
+                to: "RocketDeck".into(),
+                case_sensitive: false,
+                whole_phrase: true,
+                ..TranscriptCorrection::default()
+            }],
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.whisper_initial_prompt().as_deref(),
+            Some("Relevant names and terms: Hypercube, Railway, RocketDeck.")
+        );
+        assert_eq!(Settings::default().whisper_initial_prompt(), None);
     }
 
     #[test]

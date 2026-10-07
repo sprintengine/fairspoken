@@ -362,7 +362,8 @@ static DRUG_LEXICON: RwLock<Vec<String>> = RwLock::new(Vec::new());
 
 /// Hook for vocabulary packs: register a pack's medicine terms (its
 /// `category: "drug"` written and accepted forms) so learning treats them as
-/// medicines on top of the built-in heuristic. Replaces any earlier list.
+/// medicines on top of the built-in heuristic and the bundled packs'
+/// medicines (`vocabulary_packs::is_drug_term`). Replaces any earlier list.
 #[allow(dead_code)]
 pub fn register_drug_lexicon(terms: impl IntoIterator<Item = String>) {
     if let Ok(mut lexicon) = DRUG_LEXICON.write() {
@@ -385,8 +386,10 @@ fn looks_medical(phrase: &str) -> bool {
     let lexicon = DRUG_LEXICON.read().map(|terms| terms.clone()).unwrap_or_default();
     let lowered = phrase.trim().to_lowercase();
     lexicon.contains(&lowered)
+        || crate::vocabulary_packs::is_drug_term(phrase)
         || phrase_words(phrase).any(|word| {
             lexicon.contains(&word)
+                || crate::vocabulary_packs::is_drug_term(&word)
                 || COMMON_MEDICINES.contains(&word.as_str())
                 || LOOK_ALIKE_MEDICINES.contains(&word.as_str())
                 || (word.chars().count() >= 6
@@ -648,12 +651,19 @@ mod tests {
 
     #[test]
     fn registered_drug_lexicon_extends_the_heuristic() {
-        assert!(!looks_medical("Zyloric"));
-        register_drug_lexicon(["Zyloric".to_string(), "allopurinol".to_string()]);
-        assert!(looks_medical("Zyloric"));
-        assert!(involves_medicine("allopurinol", "Zyloric"));
+        // A made-up brand: the bundled packs' medicines are always consulted.
+        assert!(!looks_medical("Zorblax"));
+        register_drug_lexicon(["Zorblax".to_string(), "zorblaxine".to_string()]);
+        assert!(looks_medical("Zorblax"));
+        assert!(involves_medicine("zorblaxine", "Zorblax"));
         register_drug_lexicon(Vec::new());
-        assert!(!looks_medical("Zyloric"));
+        assert!(!looks_medical("Zorblax"));
+    }
+
+    #[test]
+    fn bundled_pack_medicines_count_as_medical() {
+        assert!(looks_medical("Zyloric"));
+        assert!(looks_medical("allopurinol"));
     }
 
     #[test]

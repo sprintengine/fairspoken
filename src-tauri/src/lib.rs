@@ -31,6 +31,7 @@ mod macos_input;
 mod models;
 mod note_debug;
 mod notes;
+mod phonetic_index;
 mod polish;
 mod polish_input;
 mod polish_stream;
@@ -47,6 +48,7 @@ mod transcript_history;
 mod transcription;
 mod updates;
 mod usage_stats;
+mod vocabulary_packs;
 
 pub use host::run_transcription_host;
 
@@ -279,6 +281,7 @@ fn save_settings_inner(
     settings.snippets = current_settings.snippets.clone();
     settings.learned_vocabulary_hints = current_settings.learned_vocabulary_hints.clone();
     settings.learn_from_edits = current_settings.learn_from_edits;
+    settings.enabled_packs = current_settings.enabled_packs.clone();
 
     // Only newly chosen cloud options are refused, so a stale Cloud setting
     // never blocks saving unrelated changes.
@@ -527,6 +530,9 @@ struct DictionaryUpdate {
     learned_vocabulary_hints: Option<Vec<String>>,
     #[serde(default)]
     learn_from_edits: Option<bool>,
+    /// Absent from older callers, which leaves the enabled packs alone.
+    #[serde(default)]
+    enabled_packs: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -555,6 +561,9 @@ fn save_dictionary(
     }
     if let Some(learn) = update.learn_from_edits {
         settings.learn_from_edits = learn;
+    }
+    if let Some(enabled_packs) = update.enabled_packs {
+        settings.enabled_packs = enabled_packs;
     }
     services
         .settings
@@ -3007,6 +3016,8 @@ pub fn run() {
             save_settings,
             save_shortcut_settings,
             save_dictionary,
+            vocabulary_packs::list_vocabulary_packs,
+            vocabulary_packs::search_vocabulary_pack,
             get_model_status,
             prepare_model,
             get_transcription_model_status,

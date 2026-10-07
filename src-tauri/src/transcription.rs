@@ -609,15 +609,21 @@ fn run_chunked_session(
         .name("transcription-chunk-worker".to_string())
         .spawn(move || {
             SPEECH_MODEL_BUSY_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+            // Pack terms the dictation has already said join the prompt for
+            // the chunks after them (Whisper only; Parakeet has no prompt).
+            let mut earlier_text = String::new();
             for job in job_rx {
                 let started = std::time::Instant::now();
-                if let Some(trace) = &trace { trace.event("asr-chunk-start", serde_json::json!({"index":job.index,"samples":job.pcm_i16.len(),"sampleRate":job.sample_rate,"durationSeconds":job.pcm_i16.len() as f64 / job.sample_rate.max(1) as f64,"overlapsPrevious":job.overlaps_previous,"language":language,"initialPrompt":initial_prompt})); }
+                let prompt = initial_prompt.as_deref().map(|base| {
+                    crate::vocabulary_packs::extend_whisper_prompt(base, &earlier_text)
+                });
+                if let Some(trace) = &trace { trace.event("asr-chunk-start", serde_json::json!({"index":job.index,"samples":job.pcm_i16.len(),"sampleRate":job.sample_rate,"durationSeconds":job.pcm_i16.len() as f64 / job.sample_rate.max(1) as f64,"overlapsPrevious":job.overlaps_previous,"language":language,"initialPrompt":prompt})); }
                 let result = transcriber
                     .transcribe_pcm(
                         &job.pcm_i16,
                         job.sample_rate,
                         &language,
-                        initial_prompt.as_deref(),
+                        prompt.as_deref(),
                     )
                     .map(|text| ChunkResult {
                         index: job.index,
@@ -644,6 +650,10 @@ fn run_chunked_session(
                     started.elapsed().as_millis() as u64,
                     std::sync::atomic::Ordering::Relaxed,
                 );
+                if let (Some(_), Ok(chunk)) = (&initial_prompt, &result) {
+                    earlier_text.push(' ');
+                    earlier_text.push_str(&chunk.text);
+                }
                 if let Some(trace) = &trace { trace.event("asr-chunk-result", serde_json::json!({"index":job.index,"text":result.as_ref().ok().map(|r|&r.text),"activeSpeechMs":audio_activity_stats(&job.pcm_i16, job.sample_rate).active_speech_ms,"error":result.as_ref().err(),"durationMs":started.elapsed().as_millis() as u64})); }
                 let should_stop = result.is_err();
                 if chunk_result_tx.send(result).is_err() || should_stop {

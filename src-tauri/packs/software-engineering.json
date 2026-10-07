@@ -1,0 +1,3190 @@
+{
+ "schema": 1,
+ "id": "software-engineering",
+ "name": "Software engineering",
+ "description": "Languages, frameworks, tools, cloud services, command-line programs, file formats and acronyms, with the ways speech recognition tends to mishear them.",
+ "version": "2026.10.1",
+ "locale": "en",
+ "licence": "MIT",
+ "attribution": "Curated by the Fairspoken contributors. Product names are trademarks of their owners and are used only to spell them.",
+ "sources": [
+  {
+   "name": "Fairspoken curated list",
+   "url": "",
+   "licence": "MIT",
+   "used_for": "Every term and spoken form (scripts/packs/build-software-engineering.mjs)."
+  }
+ ],
+ "always_on": [
+  "kubectl",
+  "Kubernetes",
+  "PostgreSQL",
+  "nginx",
+  "OAuth",
+  "GraphQL",
+  "TypeScript",
+  "JavaScript",
+  "JSON",
+  "YAML",
+  "npm",
+  "pnpm",
+  "Tauri",
+  "Vite",
+  "Cargo",
+  "GitHub",
+  "Docker",
+  "Terraform",
+  "Redis",
+  "SQLite",
+  "Next.js",
+  "Node.js",
+  "Claude Code",
+  "MCP",
+  "CI/CD",
+  "API",
+  "SSH",
+  "localhost",
+  "PR",
+  "README"
+ ],
+ "terms": [
+  {
+   "term": "TypeScript",
+   "category": "product",
+   "weight": 1
+  },
+  {
+   "term": "JavaScript",
+   "category": "product",
+   "weight": 1
+  },
+  {
+   "term": "Python",
+   "category": "product",
+   "weight": 0.9,
+   "ambiguous": true
+  },
+  {
+   "term": "Rust",
+   "category": "product",
+   "weight": 0.9,
+   "ambiguous": true
+  },
+  {
+   "term": "Go",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "golang",
+    "go lang"
+   ],
+   "ambiguous": true
+  },
+  {
+   "term": "Java",
+   "category": "product",
+   "weight": 0.7,
+   "ambiguous": true
+  },
+  {
+   "term": "Kotlin",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "cotlin"
+   ]
+  },
+  {
+   "term": "Swift",
+   "category": "product",
+   "weight": 0.7,
+   "ambiguous": true
+  },
+  {
+   "term": "SwiftUI",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "swift u i",
+    "swift you eye"
+   ]
+  },
+  {
+   "term": "Objective-C",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "objective c"
+   ]
+  },
+  {
+   "term": "C++",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "c plus plus",
+    "see plus plus"
+   ]
+  },
+  {
+   "term": "C#",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "c sharp",
+    "see sharp"
+   ]
+  },
+  {
+   "term": "Ruby",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "PHP",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "Elixir",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Erlang",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Haskell",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Scala",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Clojure",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "OCaml",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "oh camel"
+   ]
+  },
+  {
+   "term": "Zig",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Dart",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Lua",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Bash",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "Zsh",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "z shell",
+    "zee shell",
+    "zed shell"
+   ]
+  },
+  {
+   "term": "PowerShell",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "WebAssembly",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "web assembly"
+   ]
+  },
+  {
+   "term": "Wasm",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "spoken_forms": [
+    "was um"
+   ]
+  },
+  {
+   "term": "SQL",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "Solidity",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Node.js",
+   "category": "product",
+   "weight": 0.9
+  },
+  {
+   "term": "Deno",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "dee no"
+   ]
+  },
+  {
+   "term": "Bun",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "npm",
+   "category": "identifier",
+   "weight": 1
+  },
+  {
+   "term": "npx",
+   "category": "identifier",
+   "weight": 0.8
+  },
+  {
+   "term": "pnpm",
+   "category": "identifier",
+   "weight": 0.9
+  },
+  {
+   "term": "Yarn",
+   "category": "identifier",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "pip",
+   "category": "identifier",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "pipx",
+   "category": "identifier",
+   "weight": 0.5
+  },
+  {
+   "term": "uv",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Poetry",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "conda",
+   "category": "identifier",
+   "weight": 0.5
+  },
+  {
+   "term": "Homebrew",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "home brew"
+   ]
+  },
+  {
+   "term": "Cargo",
+   "category": "identifier",
+   "weight": 0.9,
+   "ambiguous": true
+  },
+  {
+   "term": "rustup",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "rust up"
+   ]
+  },
+  {
+   "term": "rustc",
+   "category": "identifier",
+   "weight": 0.7,
+   "spoken_forms": [
+    "rust c"
+   ]
+  },
+  {
+   "term": "clippy",
+   "category": "identifier",
+   "weight": 0.8,
+   "ambiguous": true
+  },
+  {
+   "term": "rustfmt",
+   "category": "identifier",
+   "weight": 0.7,
+   "spoken_forms": [
+    "rust format",
+    "rust fmt"
+   ]
+  },
+  {
+   "term": "crates.io",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "crates io"
+   ]
+  },
+  {
+   "term": "Gradle",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Maven",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "CocoaPods",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "cocoa pods"
+   ]
+  },
+  {
+   "term": "JVM",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "React",
+   "category": "product",
+   "weight": 0.9,
+   "ambiguous": true
+  },
+  {
+   "term": "React Native",
+   "category": "product",
+   "weight": 0.7
+  },
+  {
+   "term": "Next.js",
+   "category": "product",
+   "weight": 0.9
+  },
+  {
+   "term": "Vue",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "vue js",
+    "vue.js"
+   ]
+  },
+  {
+   "term": "Nuxt",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "nucked",
+    "nuxt js"
+   ]
+  },
+  {
+   "term": "Svelte",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "svelt"
+   ]
+  },
+  {
+   "term": "SvelteKit",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "svelte kit",
+    "svelt kit"
+   ]
+  },
+  {
+   "term": "Angular",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "SolidJS",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "solid js"
+   ]
+  },
+  {
+   "term": "Astro",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Remix",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Vite",
+   "category": "product",
+   "weight": 0.9,
+   "spoken_forms": [
+    "veet",
+    "vit"
+   ]
+  },
+  {
+   "term": "Vitest",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "vee test",
+    "veet test",
+    "vi test"
+   ]
+  },
+  {
+   "term": "Webpack",
+   "category": "product",
+   "weight": 0.7
+  },
+  {
+   "term": "esbuild",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "e s build",
+    "ee s build"
+   ]
+  },
+  {
+   "term": "Rollup",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Turbopack",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "turbo pack"
+   ]
+  },
+  {
+   "term": "Turborepo",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "turbo repo"
+   ]
+  },
+  {
+   "term": "Babel",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "ESLint",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "e s lint",
+    "ee s lint",
+    "es lint"
+   ]
+  },
+  {
+   "term": "Prettier",
+   "category": "identifier",
+   "weight": 0.7,
+   "ambiguous": true
+  },
+  {
+   "term": "Biome",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Tailwind CSS",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "tail wind css"
+   ]
+  },
+  {
+   "term": "PostCSS",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "post css"
+   ]
+  },
+  {
+   "term": "Sass",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "HTML",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "CSS",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "DOM",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "JSX",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "TSX",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "Storybook",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "story book"
+   ]
+  },
+  {
+   "term": "Playwright",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "play wright",
+    "play right"
+   ]
+  },
+  {
+   "term": "Puppeteer",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "Cypress",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "Jest",
+   "category": "identifier",
+   "weight": 0.7,
+   "ambiguous": true
+  },
+  {
+   "term": "Mocha",
+   "category": "identifier",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Electron",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "Tauri",
+   "category": "product",
+   "weight": 1,
+   "spoken_forms": [
+    "tower e",
+    "towery",
+    "tow ree",
+    "tory app"
+   ]
+  },
+  {
+   "term": "Redux",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "re ducks",
+    "reducks"
+   ]
+  },
+  {
+   "term": "Zustand",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "zoo stand",
+    "zu stand"
+   ]
+  },
+  {
+   "term": "TanStack Query",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "tan stack query"
+   ]
+  },
+  {
+   "term": "shadcn/ui",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "shad c n",
+    "shad cn",
+    "shad seen"
+   ]
+  },
+  {
+   "term": "Radix UI",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "radix"
+   ]
+  },
+  {
+   "term": "htmx",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "h t m x"
+   ]
+  },
+  {
+   "term": "jQuery",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "j query",
+    "jay query"
+   ]
+  },
+  {
+   "term": "Three.js",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "three js"
+   ]
+  },
+  {
+   "term": "D3.js",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "d three",
+    "d3 js"
+   ]
+  },
+  {
+   "term": "Figma",
+   "category": "product",
+   "weight": 0.7
+  },
+  {
+   "term": "Express",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "express js"
+   ],
+   "ambiguous": true
+  },
+  {
+   "term": "Fastify",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "fast ify"
+   ]
+  },
+  {
+   "term": "NestJS",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "nest js"
+   ]
+  },
+  {
+   "term": "Django",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "jango",
+    "d jango"
+   ]
+  },
+  {
+   "term": "Flask",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "FastAPI",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "fast api",
+    "fast a p i"
+   ]
+  },
+  {
+   "term": "Pydantic",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "pie dantic",
+    "pi dantic"
+   ]
+  },
+  {
+   "term": "Rails",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "ruby on rails"
+   ],
+   "ambiguous": true
+  },
+  {
+   "term": "Laravel",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Spring Boot",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "ASP.NET",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "asp dot net"
+   ]
+  },
+  {
+   "term": ".NET",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "dot net"
+   ]
+  },
+  {
+   "term": "Axum",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "axe um",
+    "ax um"
+   ]
+  },
+  {
+   "term": "Actix",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "act ix"
+   ]
+  },
+  {
+   "term": "Tokio",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "tokio rs"
+   ]
+  },
+  {
+   "term": "Serde",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "sir day",
+    "ser dee",
+    "sur day"
+   ]
+  },
+  {
+   "term": "reqwest",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "request crate"
+   ]
+  },
+  {
+   "term": "anyhow",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "thiserror",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "this error"
+   ]
+  },
+  {
+   "term": "clap",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "tracing",
+   "category": "identifier",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "rayon",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "hyper",
+   "category": "identifier",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "tonic",
+   "category": "identifier",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "wgpu",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "w g p u",
+    "web gpu"
+   ]
+  },
+  {
+   "term": "bindgen",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "bind gen"
+   ]
+  },
+  {
+   "term": "whisper.cpp",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "whisper cpp",
+    "whisper c p p"
+   ]
+  },
+  {
+   "term": "llama.cpp",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "llama cpp",
+    "llama c p p",
+    "lama cpp"
+   ]
+  },
+  {
+   "term": "ONNX",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "on x"
+   ]
+  },
+  {
+   "term": "ONNX Runtime",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "PyTorch",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "pie torch",
+    "pi torch"
+   ]
+  },
+  {
+   "term": "TensorFlow",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "tensor flow"
+   ]
+  },
+  {
+   "term": "NumPy",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "num pie",
+    "numb pie",
+    "num pi"
+   ]
+  },
+  {
+   "term": "pandas",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Jupyter",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "jupyter notebook"
+   ]
+  },
+  {
+   "term": "Hugging Face",
+   "category": "product",
+   "weight": 0.8
+  },
+  {
+   "term": "LangChain",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "lang chain"
+   ]
+  },
+  {
+   "term": "Ollama",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "o llama",
+    "oh llama"
+   ]
+  },
+  {
+   "term": "MLX",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "m l x"
+   ]
+  },
+  {
+   "term": "CUDA",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "cooda",
+    "coo da"
+   ]
+  },
+  {
+   "term": "Metal",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "gRPC",
+   "category": "abbreviation",
+   "weight": 0.7,
+   "spoken_forms": [
+    "g r p c",
+    "gee rpc"
+   ]
+  },
+  {
+   "term": "Protobuf",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "proto buf",
+    "proto buff"
+   ]
+  },
+  {
+   "term": "tRPC",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "t r p c"
+   ]
+  },
+  {
+   "term": "WebSocket",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "web socket"
+   ]
+  },
+  {
+   "term": "WebRTC",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "web r t c"
+   ]
+  },
+  {
+   "term": "PostgreSQL",
+   "category": "product",
+   "weight": 1,
+   "spoken_forms": [
+    "postgres",
+    "post gres",
+    "post gress",
+    "postgres q l",
+    "post gress q l"
+   ]
+  },
+  {
+   "term": "MySQL",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "my sequel",
+    "my s q l"
+   ]
+  },
+  {
+   "term": "SQLite",
+   "category": "product",
+   "weight": 0.9,
+   "spoken_forms": [
+    "sequel lite",
+    "sequel light",
+    "s q lite",
+    "sql light"
+   ]
+  },
+  {
+   "term": "MongoDB",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "mongo db",
+    "mongo"
+   ]
+  },
+  {
+   "term": "Redis",
+   "category": "product",
+   "weight": 0.9,
+   "spoken_forms": [
+    "reddis",
+    "red is"
+   ]
+  },
+  {
+   "term": "Valkey",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "val key"
+   ]
+  },
+  {
+   "term": "Elasticsearch",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "elastic search"
+   ]
+  },
+  {
+   "term": "OpenSearch",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "open search"
+   ]
+  },
+  {
+   "term": "Cassandra",
+   "category": "product",
+   "weight": 0.4
+  },
+  {
+   "term": "DynamoDB",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "dynamo db",
+    "dynamo"
+   ]
+  },
+  {
+   "term": "ClickHouse",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "click house"
+   ]
+  },
+  {
+   "term": "DuckDB",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "duck db"
+   ]
+  },
+  {
+   "term": "Snowflake",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "BigQuery",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "big query"
+   ]
+  },
+  {
+   "term": "Kafka",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "RabbitMQ",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "rabbit m q",
+    "rabbit mq"
+   ]
+  },
+  {
+   "term": "Prisma",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "Drizzle",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Supabase",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "supa base",
+    "super base"
+   ]
+  },
+  {
+   "term": "Firebase",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "fire base"
+   ]
+  },
+  {
+   "term": "Neon",
+   "category": "product",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "PlanetScale",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "planet scale"
+   ]
+  },
+  {
+   "term": "pgvector",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "p g vector",
+    "pg vector"
+   ]
+  },
+  {
+   "term": "ORM",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "AWS",
+   "category": "abbreviation",
+   "weight": 0.9
+  },
+  {
+   "term": "Amazon S3",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "s3",
+    "s three"
+   ]
+  },
+  {
+   "term": "EC2",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "e c two",
+    "ec two"
+   ]
+  },
+  {
+   "term": "Lambda",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "CloudFront",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "cloud front"
+   ]
+  },
+  {
+   "term": "IAM",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "spoken_forms": [
+    "i a m"
+   ]
+  },
+  {
+   "term": "Azure",
+   "category": "product",
+   "weight": 0.7,
+   "ambiguous": true
+  },
+  {
+   "term": "GCP",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "Google Cloud",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "Cloud Run",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Cloudflare",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "cloud flare"
+   ]
+  },
+  {
+   "term": "Cloudflare Workers",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "cloud flare workers"
+   ]
+  },
+  {
+   "term": "Vercel",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "ver cell",
+    "vursel",
+    "versel"
+   ]
+  },
+  {
+   "term": "Netlify",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "net lify",
+    "net li fy"
+   ]
+  },
+  {
+   "term": "Fly.io",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "fly io",
+    "fly dot io"
+   ]
+  },
+  {
+   "term": "Render",
+   "category": "product",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "Railway",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Heroku",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "hero ku",
+    "her oku"
+   ]
+  },
+  {
+   "term": "DigitalOcean",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "digital ocean"
+   ]
+  },
+  {
+   "term": "Hetzner",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "hets ner",
+    "het sner"
+   ]
+  },
+  {
+   "term": "Docker",
+   "category": "product",
+   "weight": 1
+  },
+  {
+   "term": "Docker Compose",
+   "category": "identifier",
+   "weight": 0.8
+  },
+  {
+   "term": "Dockerfile",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "docker file"
+   ]
+  },
+  {
+   "term": "Podman",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "pod man"
+   ]
+  },
+  {
+   "term": "Kubernetes",
+   "category": "product",
+   "weight": 1,
+   "spoken_forms": [
+    "cooper netties",
+    "kuber netties",
+    "kuber nettis",
+    "cube er netties"
+   ]
+  },
+  {
+   "term": "k8s",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "spoken_forms": [
+    "k eights",
+    "k eight s"
+   ]
+  },
+  {
+   "term": "kubectl",
+   "category": "identifier",
+   "weight": 1,
+   "spoken_forms": [
+    "cube control",
+    "kube control",
+    "kube cuttle",
+    "cube cuddle",
+    "cube cuttle",
+    "kube c t l",
+    "cube c t l",
+    "kube ctl",
+    "cube ctl"
+   ]
+  },
+  {
+   "term": "Helm",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "Terraform",
+   "category": "product",
+   "weight": 0.9,
+   "spoken_forms": [
+    "terra form"
+   ]
+  },
+  {
+   "term": "OpenTofu",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "open tofu"
+   ]
+  },
+  {
+   "term": "Pulumi",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "pull umi",
+    "pu lumi"
+   ]
+  },
+  {
+   "term": "Ansible",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "nginx",
+   "category": "identifier",
+   "weight": 1,
+   "spoken_forms": [
+    "engine x",
+    "engine ex",
+    "n jinx"
+   ]
+  },
+  {
+   "term": "Caddy",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "Traefik",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "traffic proxy"
+   ]
+  },
+  {
+   "term": "HAProxy",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "h a proxy"
+   ]
+  },
+  {
+   "term": "Prometheus",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "Grafana",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "gra fana",
+    "graf ana"
+   ]
+  },
+  {
+   "term": "Datadog",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "data dog"
+   ]
+  },
+  {
+   "term": "Sentry",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "OpenTelemetry",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "open telemetry"
+   ]
+  },
+  {
+   "term": "PagerDuty",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "pager duty"
+   ]
+  },
+  {
+   "term": "Tailscale",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "tail scale"
+   ]
+  },
+  {
+   "term": "WireGuard",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "wire guard"
+   ]
+  },
+  {
+   "term": "systemd",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "system d"
+   ]
+  },
+  {
+   "term": "cron",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "crontab",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "cron tab"
+   ]
+  },
+  {
+   "term": "launchd",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "launch d"
+   ]
+  },
+  {
+   "term": "VPC",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "CDN",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "DNS",
+   "category": "abbreviation",
+   "weight": 0.7
+  },
+  {
+   "term": "TLS",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "SSL",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "HTTPS",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "HTTP",
+   "category": "abbreviation",
+   "weight": 0.7
+  },
+  {
+   "term": "SSH",
+   "category": "abbreviation",
+   "weight": 0.9
+  },
+  {
+   "term": "VPN",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "CI/CD",
+   "category": "abbreviation",
+   "weight": 0.9,
+   "spoken_forms": [
+    "c i c d",
+    "ci cd"
+   ]
+  },
+  {
+   "term": "CI",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "DevOps",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "dev ops"
+   ]
+  },
+  {
+   "term": "SRE",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "Git",
+   "category": "identifier",
+   "weight": 0.9,
+   "ambiguous": true
+  },
+  {
+   "term": "GitHub",
+   "category": "product",
+   "weight": 1
+  },
+  {
+   "term": "GitHub Actions",
+   "category": "product",
+   "weight": 0.8
+  },
+  {
+   "term": "GitLab",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "git lab"
+   ]
+  },
+  {
+   "term": "Bitbucket",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "bit bucket"
+   ]
+  },
+  {
+   "term": "gh",
+   "category": "identifier",
+   "weight": 0.5
+  },
+  {
+   "term": "PR",
+   "category": "abbreviation",
+   "weight": 0.9
+  },
+  {
+   "term": "pull request",
+   "category": "term",
+   "weight": 0.8
+  },
+  {
+   "term": "rebase",
+   "category": "term",
+   "weight": 0.8,
+   "spoken_forms": [
+    "re base"
+   ]
+  },
+  {
+   "term": "cherry-pick",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "cherry pick"
+   ]
+  },
+  {
+   "term": "force-push",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "force push"
+   ]
+  },
+  {
+   "term": "worktree",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "work tree"
+   ]
+  },
+  {
+   "term": "monorepo",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "mono repo"
+   ]
+  },
+  {
+   "term": "lockfile",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "lock file"
+   ]
+  },
+  {
+   "term": ".gitignore",
+   "category": "identifier",
+   "weight": 0.7,
+   "spoken_forms": [
+    "git ignore",
+    "dot git ignore"
+   ]
+  },
+  {
+   "term": "README",
+   "category": "identifier",
+   "weight": 0.9,
+   "spoken_forms": [
+    "read me"
+   ]
+  },
+  {
+   "term": "CHANGELOG",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "change log"
+   ]
+  },
+  {
+   "term": "LGTM",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "WIP",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "Jira",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "jeera",
+    "gira"
+   ]
+  },
+  {
+   "term": "Linear",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Confluence",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Notion",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Slack",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "Discord",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "VS Code",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "v s code",
+    "visual studio code"
+   ]
+  },
+  {
+   "term": "Vim",
+   "category": "identifier",
+   "weight": 0.6
+  },
+  {
+   "term": "Neovim",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "neo vim"
+   ]
+  },
+  {
+   "term": "Emacs",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "e max",
+    "ee max"
+   ]
+  },
+  {
+   "term": "JetBrains",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "jet brains"
+   ]
+  },
+  {
+   "term": "IntelliJ",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "intelli j"
+   ]
+  },
+  {
+   "term": "Xcode",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "x code",
+    "ex code"
+   ]
+  },
+  {
+   "term": "Android Studio",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "iTerm2",
+   "category": "product",
+   "weight": 0.5,
+   "spoken_forms": [
+    "i term",
+    "eye term",
+    "iterm two"
+   ]
+  },
+  {
+   "term": "tmux",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "t mux",
+    "tee mux"
+   ]
+  },
+  {
+   "term": "Ghostty",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "ghosty",
+    "ghost tea"
+   ]
+  },
+  {
+   "term": "Warp",
+   "category": "product",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "Claude",
+   "category": "product",
+   "weight": 0.9,
+   "spoken_forms": [
+    "clawed",
+    "clod"
+   ]
+  },
+  {
+   "term": "Claude Code",
+   "category": "product",
+   "weight": 0.9,
+   "spoken_forms": [
+    "clawed code",
+    "clod code"
+   ]
+  },
+  {
+   "term": "Anthropic",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "an thropic"
+   ]
+  },
+  {
+   "term": "OpenAI",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "open a i",
+    "open ai"
+   ]
+  },
+  {
+   "term": "ChatGPT",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "chat g p t",
+    "chat gpt"
+   ]
+  },
+  {
+   "term": "Codex",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "GitHub Copilot",
+   "category": "product",
+   "weight": 0.7,
+   "spoken_forms": [
+    "git hub co pilot"
+   ]
+  },
+  {
+   "term": "Copilot",
+   "category": "product",
+   "weight": 0.6,
+   "spoken_forms": [
+    "co pilot"
+   ]
+  },
+  {
+   "term": "Cursor",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "Windsurf",
+   "category": "product",
+   "weight": 0.4,
+   "spoken_forms": [
+    "wind surf"
+   ]
+  },
+  {
+   "term": "Gemini",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "LLM",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "LLMs",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "MCP",
+   "category": "abbreviation",
+   "weight": 0.9
+  },
+  {
+   "term": "MCP server",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "m c p server"
+   ]
+  },
+  {
+   "term": "RAG",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "LoRA",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "GGUF",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "spoken_forms": [
+    "g g u f"
+   ]
+  },
+  {
+   "term": "embeddings",
+   "category": "term",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "prompt caching",
+   "category": "term",
+   "weight": 0.4
+  },
+  {
+   "term": "Parakeet",
+   "category": "product",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Whisper",
+   "category": "product",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "sudo",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "sue do",
+    "sue dough"
+   ]
+  },
+  {
+   "term": "chmod",
+   "category": "identifier",
+   "weight": 0.7,
+   "spoken_forms": [
+    "ch mod",
+    "c h mod",
+    "chamod"
+   ]
+  },
+  {
+   "term": "chown",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "ch own",
+    "c h own"
+   ]
+  },
+  {
+   "term": "grep",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "g rep"
+   ]
+  },
+  {
+   "term": "ripgrep",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "rip grep"
+   ]
+  },
+  {
+   "term": "rg",
+   "category": "identifier",
+   "weight": 0.3
+  },
+  {
+   "term": "sed",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "awk",
+   "category": "identifier",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "jq",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "j q",
+    "jay q"
+   ]
+  },
+  {
+   "term": "curl",
+   "category": "identifier",
+   "weight": 0.7,
+   "ambiguous": true
+  },
+  {
+   "term": "wget",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "w get"
+   ]
+  },
+  {
+   "term": "ssh-keygen",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "ssh keygen",
+    "ssh key gen"
+   ]
+  },
+  {
+   "term": "rsync",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "r sync",
+    "are sync"
+   ]
+  },
+  {
+   "term": "scp",
+   "category": "identifier",
+   "weight": 0.4
+  },
+  {
+   "term": "tar",
+   "category": "identifier",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "gzip",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "g zip",
+    "gee zip"
+   ]
+  },
+  {
+   "term": "xargs",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "x args"
+   ]
+  },
+  {
+   "term": "stdout",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "standard out",
+    "std out"
+   ]
+  },
+  {
+   "term": "stderr",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "standard error",
+    "std err"
+   ]
+  },
+  {
+   "term": "stdin",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "standard in",
+    "std in"
+   ]
+  },
+  {
+   "term": "/dev/null",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "dev null"
+   ]
+  },
+  {
+   "term": "PATH",
+   "category": "identifier",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "env var",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "n var",
+    "envy var"
+   ]
+  },
+  {
+   "term": ".env",
+   "category": "identifier",
+   "weight": 0.7,
+   "spoken_forms": [
+    "dot env"
+   ]
+  },
+  {
+   "term": "dotfiles",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "dot files"
+   ]
+  },
+  {
+   "term": "localhost",
+   "category": "identifier",
+   "weight": 0.9,
+   "spoken_forms": [
+    "local host"
+   ]
+  },
+  {
+   "term": "127.0.0.1",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "one two seven dot zero dot zero dot one"
+   ]
+  },
+  {
+   "term": "macOS",
+   "category": "product",
+   "weight": 0.8,
+   "spoken_forms": [
+    "mac o s",
+    "mac os"
+   ]
+  },
+  {
+   "term": "Linux",
+   "category": "product",
+   "weight": 0.8
+  },
+  {
+   "term": "Ubuntu",
+   "category": "product",
+   "weight": 0.6
+  },
+  {
+   "term": "Debian",
+   "category": "product",
+   "weight": 0.5
+  },
+  {
+   "term": "Alpine",
+   "category": "product",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "WSL",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "JSON",
+   "category": "abbreviation",
+   "weight": 1
+  },
+  {
+   "term": "JSONL",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "json l"
+   ]
+  },
+  {
+   "term": "YAML",
+   "category": "abbreviation",
+   "weight": 1,
+   "spoken_forms": [
+    "yammel",
+    "yamel",
+    "yam l"
+   ]
+  },
+  {
+   "term": "TOML",
+   "category": "abbreviation",
+   "weight": 0.8,
+   "spoken_forms": [
+    "tommel",
+    "tom l"
+   ]
+  },
+  {
+   "term": "XML",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "CSV",
+   "category": "abbreviation",
+   "weight": 0.7
+  },
+  {
+   "term": "Markdown",
+   "category": "term",
+   "weight": 0.8,
+   "spoken_forms": [
+    "mark down"
+   ]
+  },
+  {
+   "term": "package.json",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "package json",
+    "package dot json"
+   ]
+  },
+  {
+   "term": "package-lock.json",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "package lock json"
+   ]
+  },
+  {
+   "term": "tsconfig.json",
+   "category": "identifier",
+   "weight": 0.7,
+   "spoken_forms": [
+    "ts config",
+    "t s config"
+   ]
+  },
+  {
+   "term": "Cargo.toml",
+   "category": "identifier",
+   "weight": 0.8,
+   "spoken_forms": [
+    "cargo toml",
+    "cargo tommel"
+   ]
+  },
+  {
+   "term": "Cargo.lock",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "cargo lock"
+   ]
+  },
+  {
+   "term": "lib.rs",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "lib dot r s",
+    "lib rs"
+   ]
+  },
+  {
+   "term": "main.rs",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "main dot r s",
+    "main rs"
+   ]
+  },
+  {
+   "term": "vite.config.ts",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "vite config"
+   ]
+  },
+  {
+   "term": "docker-compose.yml",
+   "category": "identifier",
+   "weight": 0.5,
+   "spoken_forms": [
+    "docker compose yaml",
+    "docker compose yml"
+   ]
+  },
+  {
+   "term": "Makefile",
+   "category": "identifier",
+   "weight": 0.6,
+   "spoken_forms": [
+    "make file"
+   ]
+  },
+  {
+   "term": ".zshrc",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "z s h r c",
+    "zshrc"
+   ]
+  },
+  {
+   "term": "UTF-8",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "spoken_forms": [
+    "u t f eight",
+    "utf eight"
+   ]
+  },
+  {
+   "term": "Base64",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "base sixty four",
+    "base 64"
+   ]
+  },
+  {
+   "term": "regex",
+   "category": "term",
+   "weight": 0.8,
+   "spoken_forms": [
+    "redge ex",
+    "reg ex"
+   ]
+  },
+  {
+   "term": "glob",
+   "category": "term",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "SVG",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "PNG",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "ping file"
+   ]
+  },
+  {
+   "term": "WebP",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "spoken_forms": [
+    "web p"
+   ]
+  },
+  {
+   "term": "PDF",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "WAV",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "API",
+   "category": "abbreviation",
+   "weight": 1
+  },
+  {
+   "term": "APIs",
+   "category": "abbreviation",
+   "weight": 0.7
+  },
+  {
+   "term": "REST",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "GraphQL",
+   "category": "abbreviation",
+   "weight": 1,
+   "spoken_forms": [
+    "graph q l",
+    "graph ql",
+    "graph cue l"
+   ]
+  },
+  {
+   "term": "OAuth",
+   "category": "abbreviation",
+   "weight": 1,
+   "spoken_forms": [
+    "oh auth",
+    "o auth"
+   ]
+  },
+  {
+   "term": "OIDC",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "o i d c"
+   ]
+  },
+  {
+   "term": "JWT",
+   "category": "abbreviation",
+   "weight": 0.8,
+   "spoken_forms": [
+    "j w t"
+   ]
+  },
+  {
+   "term": "SSO",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "SAML",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "spoken_forms": [
+    "sam l",
+    "sammel"
+   ]
+  },
+  {
+   "term": "CORS",
+   "category": "abbreviation",
+   "weight": 0.7,
+   "spoken_forms": [
+    "course headers"
+   ]
+  },
+  {
+   "term": "CSP",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "CSRF",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "c surf",
+    "sea surf"
+   ]
+  },
+  {
+   "term": "XSS",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "CRUD",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "SDK",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "CLI",
+   "category": "abbreviation",
+   "weight": 0.9
+  },
+  {
+   "term": "GUI",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "UI",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "UX",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "URL",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "URI",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "UUID",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "spoken_forms": [
+    "u u i d"
+   ]
+  },
+  {
+   "term": "IPC",
+   "category": "abbreviation",
+   "weight": 0.6
+  },
+  {
+   "term": "RPC",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "CDP",
+   "category": "abbreviation",
+   "weight": 0.3
+  },
+  {
+   "term": "SPA",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "SSR",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "SEO",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "webhook",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "web hook"
+   ]
+  },
+  {
+   "term": "middleware",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "middle ware"
+   ]
+  },
+  {
+   "term": "endpoint",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "end point"
+   ]
+  },
+  {
+   "term": "async",
+   "category": "term",
+   "weight": 0.8,
+   "spoken_forms": [
+    "a sync",
+    "ay sync"
+   ]
+  },
+  {
+   "term": "await",
+   "category": "term",
+   "weight": 0.5,
+   "ambiguous": true
+  },
+  {
+   "term": "Promise",
+   "category": "term",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "callback",
+   "category": "term",
+   "weight": 0.4,
+   "spoken_forms": [
+    "call back"
+   ],
+   "ambiguous": true
+  },
+  {
+   "term": "closure",
+   "category": "term",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "mutex",
+   "category": "term",
+   "weight": 0.7,
+   "spoken_forms": [
+    "mew tex",
+    "mute ex"
+   ]
+  },
+  {
+   "term": "semaphore",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "sema four"
+   ]
+  },
+  {
+   "term": "deadlock",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "dead lock"
+   ]
+  },
+  {
+   "term": "race condition",
+   "category": "term",
+   "weight": 0.5
+  },
+  {
+   "term": "idempotent",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "i dem potent",
+    "idem potent"
+   ]
+  },
+  {
+   "term": "serialization",
+   "category": "term",
+   "weight": 0.4
+  },
+  {
+   "term": "deserialize",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "de serialize"
+   ]
+  },
+  {
+   "term": "refactor",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "re factor"
+   ]
+  },
+  {
+   "term": "linter",
+   "category": "term",
+   "weight": 0.5
+  },
+  {
+   "term": "transpile",
+   "category": "term",
+   "weight": 0.4,
+   "spoken_forms": [
+    "trans pile"
+   ]
+  },
+  {
+   "term": "polyfill",
+   "category": "term",
+   "weight": 0.4,
+   "spoken_forms": [
+    "poly fill"
+   ]
+  },
+  {
+   "term": "tree-shaking",
+   "category": "term",
+   "weight": 0.4,
+   "spoken_forms": [
+    "tree shaking"
+   ]
+  },
+  {
+   "term": "hydration",
+   "category": "term",
+   "weight": 0.3,
+   "ambiguous": true
+  },
+  {
+   "term": "Wi-Fi",
+   "category": "term",
+   "weight": 0.3,
+   "spoken_forms": [
+    "wifi",
+    "why fi"
+   ]
+  },
+  {
+   "term": "unit test",
+   "category": "term",
+   "weight": 0.5
+  },
+  {
+   "term": "end-to-end test",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "end to end test",
+    "e2e test"
+   ]
+  },
+  {
+   "term": "E2E",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "e two e",
+    "e to e"
+   ]
+  },
+  {
+   "term": "flaky test",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "flakey test"
+   ]
+  },
+  {
+   "term": "snapshot test",
+   "category": "term",
+   "weight": 0.4
+  },
+  {
+   "term": "stack trace",
+   "category": "term",
+   "weight": 0.6
+  },
+  {
+   "term": "segfault",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "seg fault"
+   ]
+  },
+  {
+   "term": "OOM",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "o o m",
+    "out of memory"
+   ]
+  },
+  {
+   "term": "repro",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "re pro"
+   ]
+  },
+  {
+   "term": "nit",
+   "category": "term",
+   "weight": 0.4,
+   "ambiguous": true
+  },
+  {
+   "term": "TODO",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "to do"
+   ],
+   "ambiguous": true
+  },
+  {
+   "term": "TDD",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "QA",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "CPU",
+   "category": "abbreviation",
+   "weight": 0.7
+  },
+  {
+   "term": "GPU",
+   "category": "abbreviation",
+   "weight": 0.8
+  },
+  {
+   "term": "NPU",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "RAM",
+   "category": "abbreviation",
+   "weight": 0.6,
+   "ambiguous": true
+  },
+  {
+   "term": "SSD",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "OS",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "ARM64",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "arm sixty four",
+    "arm 64"
+   ]
+  },
+  {
+   "term": "x86",
+   "category": "abbreviation",
+   "weight": 0.5,
+   "spoken_forms": [
+    "x eighty six",
+    "x 86"
+   ]
+  },
+  {
+   "term": "Apple Silicon",
+   "category": "term",
+   "weight": 0.6
+  },
+  {
+   "term": "M1",
+   "category": "identifier",
+   "weight": 0.4,
+   "spoken_forms": [
+    "m one"
+   ]
+  },
+  {
+   "term": "LTS",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "SemVer",
+   "category": "term",
+   "weight": 0.6,
+   "spoken_forms": [
+    "sem ver"
+   ]
+  },
+  {
+   "term": "MIT License",
+   "category": "term",
+   "weight": 0.5,
+   "spoken_forms": [
+    "m i t license"
+   ]
+  },
+  {
+   "term": "Apache-2.0",
+   "category": "term",
+   "weight": 0.4,
+   "spoken_forms": [
+    "apache two",
+    "apache 2.0"
+   ]
+  },
+  {
+   "term": "CRDT",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "spoken_forms": [
+    "c r d t"
+   ]
+  },
+  {
+   "term": "FFI",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "ABI",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "AST",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "JIT",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "GC",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "WASI",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "spoken_forms": [
+    "wazzy",
+    "wah see"
+   ]
+  },
+  {
+   "term": "P99",
+   "category": "abbreviation",
+   "weight": 0.4,
+   "spoken_forms": [
+    "p ninety nine"
+   ]
+  },
+  {
+   "term": "SLA",
+   "category": "abbreviation",
+   "weight": 0.4
+  },
+  {
+   "term": "KPI",
+   "category": "abbreviation",
+   "weight": 0.3
+  },
+  {
+   "term": "MVP",
+   "category": "abbreviation",
+   "weight": 0.5
+  },
+  {
+   "term": "POC",
+   "category": "abbreviation",
+   "weight": 0.4
+  }
+ ],
+ "corrections": [],
+ "snippets": []
+}

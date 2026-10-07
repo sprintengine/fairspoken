@@ -519,8 +519,13 @@ fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<H
         HeaderValue::from_str(&settings.language)
             .map_err(|err| format!("Invalid language header: {err}"))?,
     );
-    if !settings.vocabulary_hints.is_empty() {
-        let hints = serde_json::to_string(&settings.vocabulary_hints)
+    // The user's terms, then the enabled packs' always-on terms, capped.
+    let hints = crate::vocabulary_packs::remote_hints(
+        &settings.vocabulary_hints,
+        &settings.enabled_packs,
+    );
+    if !hints.is_empty() {
+        let hints = serde_json::to_string(&hints)
             .map_err(|err| format!("Failed to serialize vocabulary hints: {err}"))?;
         headers.insert(
             "x-fairspoken-vocabulary-hints",

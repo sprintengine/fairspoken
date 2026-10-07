@@ -424,6 +424,15 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .format-mapping-source { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
 #polishFormatPanel > .settings-card + .settings-card { margin-top: var(--sem-space-md); }
 
+/* Packs: a switch row per pack, then its source and a term preview that opens
+   under it. */
+.pack-detail { display: flex; flex-direction: column; gap: var(--sem-space-sm); padding: 0 var(--sem-space-xl) var(--sem-space-xl); }
+.pack-detail[hidden] { display: none; }
+.pack-source { margin: 0; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); line-height: var(--sem-font-line-relaxed); }
+.pack-terms { display: flex; flex-wrap: wrap; gap: var(--sem-space-xs); }
+.pack-terms .chip { padding-right: var(--sem-space-sm); }
+.pack-terms:empty::after { content: "No matching terms."; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
+
 /* ── Activity ────────────────────────────────────────────── */
 #activityList > .activity-row,
 #activityList > .empty { border-top: 1px solid var(--sem-color-border-subtle); }

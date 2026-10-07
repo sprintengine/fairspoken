@@ -56,6 +56,10 @@ base64 = "0.22"
 getrandom = "0.4"
 semver = "1"
 self-replace = "1"
+# Double Metaphone keys for vocabulary pack retrieval (a port of Apache
+# commons-codec). Default features embed Beider-Morse/Daitch-Mokotoff rule
+# files the app does not use.
+rphonetic = { version = "4", default-features = false }
 
 [dev-dependencies]
 # Host self-update tests sign throwaway archives with a generated keypair.

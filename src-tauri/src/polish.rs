@@ -204,6 +204,14 @@ fn maybe_polish_impl(
                     "polish inserted the dictionary term \"{term}\" that was not spoken"
                 ));
             }
+            // Pack terms nobody said, and one medicine turned into another.
+            if let Err(reason) = crate::vocabulary_packs::check_polish(
+                raw_transcript,
+                text,
+                &settings.enabled_packs,
+            ) {
+                return PolishDecision::Failed(format!("polish {reason}"));
+            }
             if !response.changed || text.is_empty() || text == raw_transcript.trim() {
                 PolishDecision::Unchanged {
                     duration_ms: response.duration_ms,
@@ -257,12 +265,10 @@ fn polish_transcript(
             tone,
         }),
         surrounding_text,
-        // Only the terms something in the transcript sounds like: the rest
-        // cannot help, tempt the model, and need not leave the device.
-        vocabulary: crate::transcript_cleanup::relevant_vocabulary(
-            raw_transcript,
-            &settings.vocabulary_hints,
-        ),
+        // Only the terms something in the transcript sounds like (the user's
+        // own, then the enabled packs'): the rest cannot help, tempt the
+        // model, and need not leave the device.
+        vocabulary: crate::vocabulary_packs::polish_vocabulary(raw_transcript, settings),
         format: target_app
             .map(|app| app.format)
             .filter(|format| *format != Format::Plain)
