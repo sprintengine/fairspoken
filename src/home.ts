@@ -4,6 +4,7 @@ import "./dashboardShell";
 import "./homeStats";
 import "./notes";
 import "./dictionary";
+import "./trainingData";
 import "./activity";
 import "./modelDashboard";
 import "./settingsModelSummaries";

@@ -181,6 +181,12 @@
         <!-- ════ DICTIONARY (vocab + corrections + snippets, driven by dictionary.ts) ════ -->
         <section class="screen" id="screen-dictionary">
           <div class="dict-stack">
+            <section class="settings-section" aria-labelledby="suggestionsTitle" id="suggestionsSection" hidden>
+              <h2 id="suggestionsTitle">Suggestions</h2>
+              <p class="settings-section-help">Fixes you made that Fairspoken will not apply on its own. Accept one to add it to your corrections.</p>
+              <div class="settings-card" id="suggestionRows"></div>
+            </section>
+
             <section class="settings-section" aria-labelledby="vocabTitle">
               <h2 id="vocabTitle">Vocabulary</h2>
               <p class="settings-section-help">Names and terms to bias transcription</p>
@@ -214,6 +220,21 @@
               </div>
               <p class="settings-section-help">Say a short trigger to expand it into longer text.</p>
               <div class="settings-card" id="snippetRows"></div>
+            </section>
+
+            <section class="settings-section" aria-labelledby="learningTitle">
+              <h2 id="learningTitle">Learning</h2>
+              <div class="settings-card">
+                <div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="learnFromEdits">Learn from my corrections</label>
+                    <div class="row-help">On macOS, when you fix a dictated word where it landed, misheard names join your vocabulary and a fix you make twice becomes a correction. Only the word and its fix are kept. Medicine names are only ever suggested. Turn this off for clinical dictation unless you review what it learns.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="learnFromEdits" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+              </div>
             </section>
           </div>
         </section>
@@ -319,6 +340,40 @@
                       <option value="10080">After 1 week</option>
                       <option value="43200">After 30 days</option>
                     </select>
+                  </div>
+                </div>
+</div></section>
+<section class="settings-section" aria-labelledby="trainingDataTitle"><h2 id="trainingDataTitle">Training data</h2><div class="settings-card">
+<div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="trainingCapture">Keep my dictations to improve models</label>
+                    <div class="row-help">Keeps each dictation's audio and text so you can export them to fine-tune speech or polish models.</div>
+                    <div class="row-help training-warning">Recordings may contain sensitive or patient information. They stay on this device and are never uploaded; only an export you make yourself leaves it.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="trainingCapture" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+<div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="trainingRetentionDays">Keep recordings</label>
+                  </div>
+                  <div class="row-control">
+                    <select id="trainingRetentionDays" class="setting-select w-sm">
+                      <option value="30">For 30 days</option>
+                      <option value="90">For 90 days</option>
+                      <option value="0">Until I delete them</option>
+                    </select>
+                  </div>
+                </div>
+<div class="row">
+                  <div class="row-text">
+                    <div class="row-label">Kept dictations</div>
+                    <div class="row-help" id="trainingDataSummary" aria-live="polite">None yet.</div>
+                  </div>
+                  <div class="row-control">
+                    <button class="btn" id="trainingDataExport" type="button">Export…</button>
+                    <button class="btn btn-ghost" id="trainingDataDelete" type="button">Delete all</button>
                   </div>
                 </div>
 </div></section></section>

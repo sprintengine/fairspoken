@@ -140,6 +140,34 @@ pub struct Settings {
     /// part of AI polish, and only when that is also enabled.
     #[serde(default)]
     pub context_awareness: bool,
+    /// The subset of `vocabulary_hints` the edit watcher added, shown with a
+    /// "Learned" chip. A separate list keeps `vocabulary_hints` a plain
+    /// string array for older builds and every other reader.
+    #[serde(default)]
+    pub learned_vocabulary_hints: Vec<String>,
+    /// Learn from the user fixing a dictated word in place (macOS): misheard
+    /// names join the vocabulary and repeated mishearings become corrections.
+    /// Only `heard → intended` word pairs are kept, never the sentence.
+    #[serde(default = "default_learn_from_edits")]
+    pub learn_from_edits: bool,
+    /// Opt-in: keep each dictation's audio and texts on this device so they
+    /// can be exported to fine-tune speech or polish models.
+    #[serde(default)]
+    pub training_capture: bool,
+    /// Days kept dictations live before they are deleted; 0 keeps them until
+    /// the user deletes them.
+    #[serde(default = "default_training_retention_days")]
+    pub training_retention_days: u16,
+}
+
+/// Who wrote a dictionary entry. Learned entries come from the edit watcher
+/// and carry a chip on the Dictionary screen.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EntryOrigin {
+    #[default]
+    Manual,
+    Learned,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -155,6 +183,27 @@ pub struct TranscriptCorrection {
     pub case_sensitive: bool,
     #[serde(default = "default_correction_whole_phrase")]
     pub whole_phrase: bool,
+    #[serde(default)]
+    pub origin: EntryOrigin,
+    /// Speech models (`Settings::speech_model_id`) the correction applies
+    /// to; empty means every model. Learned mappings are scoped to the models
+    /// that actually produced the mishearing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+}
+
+impl Default for TranscriptCorrection {
+    fn default() -> Self {
+        Self {
+            enabled: default_correction_enabled(),
+            from: String::new(),
+            to: String::new(),
+            case_sensitive: false,
+            whole_phrase: default_correction_whole_phrase(),
+            origin: EntryOrigin::Manual,
+            models: Vec::new(),
+        }
+    }
 }
 
 /// A text-expansion shortcut: when `trigger` is dictated, it is replaced with
@@ -204,6 +253,10 @@ impl Default for Settings {
             polish_model: default_polish_model(),
             polish_tones: HashMap::new(),
             context_awareness: false,
+            learned_vocabulary_hints: Vec::new(),
+            learn_from_edits: default_learn_from_edits(),
+            training_capture: false,
+            training_retention_days: default_training_retention_days(),
         }
     }
 }
@@ -306,6 +359,16 @@ impl Settings {
         }
     }
 
+    /// The id a correction's `models` scope matches: the local speech model,
+    /// or the location for remote engines, which choose their own model.
+    pub fn speech_model_id(&self) -> String {
+        match self.transcription_location {
+            TranscriptionLocation::Local => self.model.model_id().to_string(),
+            TranscriptionLocation::RemoteHost => "remote-host".to_string(),
+            TranscriptionLocation::Cloud => "cloud".to_string(),
+        }
+    }
+
     pub fn whisper_initial_prompt(&self) -> Option<String> {
         let mut terms = self.vocabulary_hints.clone();
         terms.extend(
@@ -327,6 +390,9 @@ impl Settings {
 }
 
 fn normalize(settings: Settings) -> Settings {
+    let vocabulary_hints = normalize_vocabulary_hints(settings.vocabulary_hints);
+    let learned_vocabulary_hints =
+        normalize_learned_hints(settings.learned_vocabulary_hints, &vocabulary_hints);
     Settings {
         input_gain: settings.input_gain.clamp(1, 6),
         max_recording_seconds: settings.max_recording_seconds.clamp(10, 600),
@@ -334,7 +400,11 @@ fn normalize(settings: Settings) -> Settings {
         remote_timeout_seconds: settings.remote_timeout_seconds.clamp(5, 300),
         cloud_auth_token: settings.cloud_auth_token.trim().to_string(),
         polish_tones: normalize_polish_tones(settings.polish_tones),
-        vocabulary_hints: normalize_vocabulary_hints(settings.vocabulary_hints),
+        vocabulary_hints,
+        learned_vocabulary_hints,
+        training_retention_days: normalize_training_retention_days(
+            settings.training_retention_days,
+        ),
         transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
         snippets: normalize_snippets(settings.snippets),
         recording_shortcut: normalize_shortcut(
@@ -367,6 +437,38 @@ fn default_transcript_stack_shortcut() -> String {
 
 fn default_correction_enabled() -> bool {
     true
+}
+
+fn default_learn_from_edits() -> bool {
+    true
+}
+
+/// Retention choices offered in Settings: 30 days, 90 days, or until deleted.
+const TRAINING_RETENTION_DAYS: &[u16] = &[0, 30, 90];
+
+fn default_training_retention_days() -> u16 {
+    30
+}
+
+fn normalize_training_retention_days(days: u16) -> u16 {
+    if TRAINING_RETENTION_DAYS.contains(&days) {
+        days
+    } else {
+        default_training_retention_days()
+    }
+}
+
+/// Learned markers only survive for hints that are still in the vocabulary,
+/// so removing a word also removes its chip.
+fn normalize_learned_hints(learned: Vec<String>, vocabulary: &[String]) -> Vec<String> {
+    let mut normalized: Vec<String> = Vec::new();
+    for hint in learned {
+        let hint = clean_text_setting(&hint, 100);
+        if vocabulary.contains(&hint) && !normalized.contains(&hint) {
+            normalized.push(hint);
+        }
+    }
+    normalized
 }
 
 fn default_interaction_sounds() -> bool {
@@ -402,12 +504,21 @@ fn normalize_transcript_corrections(
         if from.is_empty() || to.is_empty() {
             continue;
         }
+        let mut models: Vec<String> = Vec::new();
+        for model in correction.models {
+            let model = clean_text_setting(&model, 80);
+            if !model.is_empty() && !models.contains(&model) && models.len() < 8 {
+                models.push(model);
+            }
+        }
         normalized.push(TranscriptCorrection {
             enabled: correction.enabled,
             from,
             to,
             case_sensitive: correction.case_sensitive,
             whole_phrase: correction.whole_phrase,
+            origin: correction.origin,
+            models,
         });
         if normalized.len() >= 100 {
             break;
@@ -583,6 +694,74 @@ mod tests {
         assert_eq!(settings.cloud_auth_token, "");
         assert!(!settings.polish_enabled);
         assert!(settings.polish_tones.is_empty());
+    }
+
+    #[test]
+    fn dictionary_written_before_learning_loads_as_manual_entries() {
+        // A dictionary saved before learned entries existed: corrections have
+        // no origin or models, and there is no learned-hints list.
+        let legacy = serde_json::json!({
+            "language": "en",
+            "audioDevice": "",
+            "noiseSuppression": true,
+            "echoCancellation": true,
+            "inputGain": 2,
+            "postProcess": true,
+            "alwaysOnTop": true,
+            "maxRecordingSeconds": 120,
+            "vocabularyHints": ["Fairspoken", "Siobhán"],
+            "transcriptCorrections": [
+                {"enabled": true, "from": "fair spoken", "to": "Fairspoken", "caseSensitive": false, "wholePhrase": true}
+            ]
+        });
+
+        let settings = normalize(serde_json::from_value::<Settings>(legacy).unwrap());
+
+        assert_eq!(settings.vocabulary_hints, ["Fairspoken", "Siobhán"]);
+        assert!(settings.learned_vocabulary_hints.is_empty());
+        let correction = &settings.transcript_corrections[0];
+        assert_eq!(correction.origin, EntryOrigin::Manual);
+        assert!(correction.models.is_empty());
+        assert!(settings.learn_from_edits);
+        assert!(!settings.training_capture);
+        assert_eq!(settings.training_retention_days, 30);
+    }
+
+    #[test]
+    fn learned_entries_round_trip_and_markers_follow_the_vocabulary() {
+        let settings = normalize(Settings {
+            vocabulary_hints: vec!["Niamh".into(), "Tauri".into()],
+            learned_vocabulary_hints: vec!["Niamh".into(), "Removed".into(), "Niamh".into()],
+            transcript_corrections: vec![TranscriptCorrection {
+                from: "knee of".into(),
+                to: "Niamh".into(),
+                origin: EntryOrigin::Learned,
+                models: vec!["parakeet-tdt-0.6b-v3".into(), " ".into()],
+                ..TranscriptCorrection::default()
+            }],
+            training_retention_days: 45,
+            ..Settings::default()
+        });
+        assert_eq!(settings.learned_vocabulary_hints, ["Niamh"]);
+        assert_eq!(settings.training_retention_days, 30);
+
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["transcriptCorrections"][0]["origin"], "learned");
+        assert_eq!(json["transcriptCorrections"][0]["models"][0], "parakeet-tdt-0.6b-v3");
+        let restored: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.transcript_corrections[0].origin, EntryOrigin::Learned);
+        assert_eq!(restored.transcript_corrections[0].models, ["parakeet-tdt-0.6b-v3"]);
+
+        // Unscoped manual corrections serialize without a models key, so the
+        // file stays readable by builds that predate scoping.
+        let manual = serde_json::to_value(TranscriptCorrection {
+            from: "a".into(),
+            to: "b".into(),
+            ..TranscriptCorrection::default()
+        })
+        .unwrap();
+        assert!(manual.get("models").is_none());
+        assert_eq!(manual["origin"], "manual");
     }
 
     #[test]

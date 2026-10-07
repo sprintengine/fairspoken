@@ -398,6 +398,20 @@ fn mishearing_budget(term: &str) -> usize {
     }
 }
 
+/// Whether `intended` could be what the speaker said when the model wrote
+/// `heard` ("cloud" for "Claude", "rocket deck" for "RocketDeck"). Spacing,
+/// case and punctuation are ignored, and the user's fix gets one letter more
+/// leeway than `mishearing_budget`, because a person confirmed it.
+pub fn misheard_as(heard: &str, intended: &str) -> bool {
+    let heard: Vec<char> = normalize_term(heard).chars().collect();
+    let intended_key = normalize_term(intended);
+    let intended: Vec<char> = intended_key.chars().collect();
+    if heard.is_empty() || intended.is_empty() {
+        return false;
+    }
+    levenshtein_within(&heard, &intended, mishearing_budget(&intended_key) + 1)
+}
+
 /// The dictionary terms that something in `raw` plausibly refers to. A small
 /// model treats every term it is shown as a candidate word, so terms nobody
 /// said are never shown to it.
@@ -656,5 +670,16 @@ mod tests {
             repair_fragment_edges("send it to the", "Send it to the.", "", false),
             "Send it to the"
         );
+    }
+
+    #[test]
+    fn misheard_as_accepts_close_respellings_only() {
+        assert!(misheard_as("cloud code", "Claude Code"));
+        assert!(misheard_as("rocket deck", "RocketDeck"));
+        assert!(misheard_as("jon", "John"));
+        assert!(misheard_as("siobhan", "Siobhán"));
+        assert!(!misheard_as("board", "committee"));
+        assert!(!misheard_as("dog", "cat"));
+        assert!(!misheard_as("", "anything"));
     }
 }

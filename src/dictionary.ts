@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 // The Dictionary screen owns the vocabulary, corrections, and snippets. These
 // still live in Settings on disk, but only this screen edits them (the backend
 // save_dictionary command owns those fields), so there is no clobbering with
-// the Settings screen.
+// the Settings screen. Entries the edit watcher learned carry a "Learned" chip,
+// and fixes it will not apply on its own wait under Suggestions.
 
 interface Correction {
   enabled: boolean;
@@ -11,6 +13,17 @@ interface Correction {
   to: string;
   caseSensitive: boolean;
   wholePhrase: boolean;
+  origin?: "manual" | "learned";
+  /** Speech models a learned correction is scoped to; absent means all. */
+  models?: string[];
+}
+
+interface LearnedSuggestion {
+  id: string;
+  heard: string;
+  intended: string;
+  count: number;
+  reason?: string;
 }
 
 interface Snippet {
@@ -21,8 +34,10 @@ interface Snippet {
 
 interface DictionarySettings {
   vocabularyHints?: string[];
+  learnedVocabularyHints?: string[];
   transcriptCorrections?: Correction[];
   snippets?: Snippet[];
+  learnFromEdits?: boolean;
 }
 
 const vocabAdd = required<HTMLFormElement>("vocabAdd");
@@ -32,10 +47,15 @@ const addCorrectionBtn = required("addCorrection");
 const correctionRows = required("correctionRows");
 const addSnippetBtn = required("addSnippet");
 const snippetRows = required("snippetRows");
+const suggestionsSection = required("suggestionsSection");
+const suggestionRows = required("suggestionRows");
+const learnFromEdits = required<HTMLInputElement>("learnFromEdits");
 
 let vocabulary: string[] = [];
+let learnedVocabulary: string[] = [];
 let corrections: Correction[] = [];
 let snippets: Snippet[] = [];
+let suggestions: LearnedSuggestion[] = [];
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -48,8 +68,10 @@ async function persist(): Promise<void> {
     await invoke("save_dictionary", {
       update: {
         vocabularyHints: vocabulary,
+        learnedVocabularyHints: learnedVocabulary.filter((word) => vocabulary.includes(word)),
         transcriptCorrections: corrections,
         snippets,
+        learnFromEdits: learnFromEdits.checked,
       },
     });
   } catch (error) {
@@ -64,6 +86,7 @@ function renderChips(): void {
       const chip = document.createElement("span");
       chip.className = "chip";
       chip.append(document.createTextNode(word));
+      if (learnedVocabulary.includes(word)) chip.append(learnedChip("Learned from your corrections"));
 
       const remove = document.createElement("button");
       remove.type = "button";
@@ -94,6 +117,14 @@ vocabAdd.addEventListener("submit", (event) => {
 });
 
 // ── Shared row builders ─────────────────────────────────────
+function learnedChip(title: string): HTMLElement {
+  const chip = document.createElement("span");
+  chip.className = "learned-chip";
+  chip.textContent = "Learned";
+  chip.title = title;
+  return chip;
+}
+
 function enabledToggle(checked: boolean, label: string, onChange: (value: boolean) => void): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "checkbox";
@@ -161,19 +192,28 @@ function renderCorrections(): void {
         fieldInput(correction.from, "Mis-heard phrase", (value) => (corrections[index].from = value)),
         arrow(),
         fieldInput(correction.to, "Replacement", (value) => (corrections[index].to = value)),
+      );
+      const end = document.createElement("span");
+      end.className = "dict-row-end";
+      if (correction.origin === "learned") {
+        const scope = correction.models?.length ? ` Applies to ${correction.models.join(", ")}.` : "";
+        end.append(learnedChip(`Learned from your corrections.${scope}`));
+      }
+      end.append(
         deleteButton("Delete correction", () => {
           corrections.splice(index, 1);
           renderCorrections();
           void persist();
         }),
       );
+      row.append(end);
       return row;
     }),
   );
 }
 
 addCorrectionBtn.addEventListener("click", () => {
-  corrections.push({ enabled: true, from: "", to: "", caseSensitive: false, wholePhrase: true });
+  corrections.push({ enabled: true, from: "", to: "", caseSensitive: false, wholePhrase: true, origin: "manual" });
   renderCorrections();
   focusLastRowInput(correctionRows);
 });
@@ -213,18 +253,76 @@ addSnippetBtn.addEventListener("click", () => {
   focusLastRowInput(snippetRows);
 });
 
+// ── Learning ────────────────────────────────────────────────
+function renderSuggestions(): void {
+  suggestionsSection.hidden = suggestions.length === 0;
+  suggestionRows.replaceChildren(
+    ...suggestions.map((suggestion) => {
+      const row = document.createElement("div");
+      row.className = "dict-suggestion";
+      const text = document.createElement("div");
+      text.className = "dict-suggestion-text";
+      const pair = document.createElement("div");
+      pair.append(document.createTextNode(suggestion.heard), arrow(), document.createTextNode(suggestion.intended));
+      text.append(pair);
+      if (suggestion.reason) {
+        const reason = document.createElement("div");
+        reason.className = "dict-suggestion-reason";
+        reason.textContent = suggestion.reason;
+        text.append(reason);
+      }
+      const accept = document.createElement("button");
+      accept.type = "button";
+      accept.className = "btn";
+      accept.textContent = "Accept";
+      accept.addEventListener("click", () => void decide("accept_learned_suggestion", suggestion.id));
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.className = "btn btn-ghost";
+      dismiss.textContent = "Dismiss";
+      dismiss.addEventListener("click", () => void decide("dismiss_learned_suggestion", suggestion.id));
+      row.append(text, accept, dismiss);
+      return row;
+    }),
+  );
+}
+
+async function decide(command: string, id: string): Promise<void> {
+  try {
+    await invoke(command, { id });
+  } catch (error) {
+    console.error("dictionary:", error instanceof Error ? error.message : String(error));
+  }
+  await load();
+}
+
+learnFromEdits.addEventListener("change", () => void persist());
+
 async function load(): Promise<void> {
   try {
-    const settings = await invoke<DictionarySettings>("get_settings");
+    const [settings, learned] = await Promise.all([
+      invoke<DictionarySettings>("get_settings"),
+      invoke<LearnedSuggestion[]>("get_learned_suggestions"),
+    ]);
     vocabulary = settings.vocabularyHints ?? [];
+    learnedVocabulary = settings.learnedVocabularyHints ?? [];
     corrections = settings.transcriptCorrections ?? [];
     snippets = settings.snippets ?? [];
+    learnFromEdits.checked = settings.learnFromEdits ?? true;
+    suggestions = learned;
   } catch (error) {
     console.error("dictionary:", error instanceof Error ? error.message : String(error));
   }
   renderChips();
   renderCorrections();
   renderSnippets();
+  renderSuggestions();
 }
+
+// Learning edits the dictionary from the backend; show what it added unless
+// the user is typing in a row, which a re-render would interrupt.
+void listen("learned-updated", () => {
+  if (!document.activeElement?.closest(".dict-row, #vocabAdd")) void load();
+});
 
 void load();

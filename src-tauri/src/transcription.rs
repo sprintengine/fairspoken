@@ -1387,7 +1387,7 @@ fn peak_and_rms(samples: &[i16]) -> (f32, f32) {
     (peak, (sum_sq / samples.len() as f64).sqrt() as f32)
 }
 
-fn resample_i16_to_16khz_f32(samples: &[i16], source_rate: u32) -> Vec<f32> {
+pub(crate) fn resample_i16_to_16khz_f32(samples: &[i16], source_rate: u32) -> Vec<f32> {
     if source_rate == 16_000 {
         return samples
             .iter()

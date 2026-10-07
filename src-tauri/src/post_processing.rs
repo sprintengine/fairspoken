@@ -22,8 +22,13 @@ pub fn apply_transcript_post_processing(
     // contributes its raw tail.
     let mut text = crate::transcript_cleanup::tidy(transcript, &settings.language);
     let mut corrections_applied = 0;
+    // A scoped (learned) correction only fixes the speech models that made
+    // the mishearing; another model may hear that phrase correctly.
+    let speech_model = settings.speech_model_id();
     for correction in &settings.transcript_corrections {
-        if !correction.enabled {
+        if !correction.enabled
+            || !(correction.models.is_empty() || correction.models.contains(&speech_model))
+        {
             continue;
         }
 
@@ -139,6 +144,7 @@ mod tests {
             to: "Fairspoken".to_string(),
             case_sensitive: false,
             whole_phrase: true,
+            ..TranscriptCorrection::default()
         }]);
 
         let result = apply_transcript_post_processing("Open fair spoken settings.", &settings);
@@ -155,6 +161,7 @@ mod tests {
             to: "application".to_string(),
             case_sensitive: false,
             whole_phrase: true,
+            ..TranscriptCorrection::default()
         }]);
 
         let result = apply_transcript_post_processing("The app maps happen.", &settings);
@@ -187,6 +194,7 @@ mod tests {
             to: "Tauri".to_string(),
             case_sensitive: false,
             whole_phrase: true,
+            ..TranscriptCorrection::default()
         }]);
         settings.post_process = false;
 
@@ -194,6 +202,27 @@ mod tests {
 
         assert_eq!(result.text, "toury app");
         assert_eq!(result.corrections_applied, 0);
+    }
+
+    #[test]
+    fn model_scoped_correction_only_applies_to_its_speech_models() {
+        let mut settings = settings_with_corrections(vec![TranscriptCorrection {
+            from: "cloud code".to_string(),
+            to: "Claude Code".to_string(),
+            models: vec!["parakeet-tdt-0.6b-v2".to_string()],
+            ..TranscriptCorrection::default()
+        }]);
+        settings.model = crate::models::SttModel::ParakeetV2;
+        assert_eq!(
+            apply_transcript_post_processing("Ask cloud code.", &settings).text,
+            "Ask Claude Code."
+        );
+
+        settings.model = crate::models::SttModel::Parakeet;
+        assert_eq!(
+            apply_transcript_post_processing("Ask cloud code.", &settings).text,
+            "Ask cloud code."
+        );
     }
 
     #[test]

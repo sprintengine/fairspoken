@@ -411,3 +411,109 @@ pub fn focused_caret_context() -> Option<CaretContext> {
 
     Some(CaretContext { before, after_char })
 }
+
+/// Fields longer than this (UTF-16 code units) are not watched for edits:
+/// re-reading a whole long document is too slow for the AX timeout, and the
+/// fields people dictate into are far smaller.
+pub const WATCH_VALUE_CAP_UTF16: usize = 100_000;
+
+/// A retained element the edit watcher reads again after focus moves on.
+pub struct WatchedElement(AxElement);
+
+// SAFETY: an AXUIElementRef is an immutable CF object. Retain/release are
+// thread-safe and AX messaging may happen from any thread, which is what the
+// timeout helper's worker threads need.
+unsafe impl Send for WatchedElement {}
+
+impl Clone for WatchedElement {
+    fn clone(&self) -> Self {
+        WatchedElement(AxElement(self.0 .0.clone()))
+    }
+}
+
+/// The focused text field just before a dictation is inserted into it.
+pub struct WatchedField {
+    pub element: WatchedElement,
+    pub pid: i32,
+    pub bundle_id: String,
+    pub value: String,
+    /// `AXSelectedTextRange`, in UTF-16 code units.
+    pub selection_start: usize,
+    pub selection_length: usize,
+}
+
+/// Reads the focused field's text and selection for the edit watcher. Refuses
+/// password managers, secure fields (by role or subrole), fields with no
+/// plain-text value, and values over `WATCH_VALUE_CAP_UTF16`.
+pub fn snapshot_focused_field() -> Result<WatchedField, &'static str> {
+    let (pid, bundle_id) = frontmost_pid_and_bundle().ok_or("no frontmost app")?;
+    if is_password_manager(&bundle_id) {
+        return Err("password manager");
+    }
+    let application = application_element(pid).ok_or("no application element")?;
+    unsafe { AXUIElementSetMessagingTimeout(application.element_ref(), 0.1) };
+    let focused = AxElement(
+        application
+            .copy_attribute("AXFocusedUIElement")
+            .ok_or("no focused element")?,
+    );
+    unsafe { AXUIElementSetMessagingTimeout(focused.element_ref(), 0.1) };
+    if is_secure_field(&focused) {
+        return Err("secure field");
+    }
+    let value = read_capped_value(&focused).ok_or("no readable text, or too long")?;
+    let range = focused
+        .copy_attribute("AXSelectedTextRange")
+        .and_then(|range| read_cf_range(&range))
+        .ok_or("no selection range")?;
+    Ok(WatchedField {
+        element: WatchedElement(focused),
+        pid,
+        bundle_id,
+        value,
+        selection_start: range.location as usize,
+        selection_length: range.length as usize,
+    })
+}
+
+/// The watched field's current text, under the same exclusions.
+pub fn read_watched_value(element: &WatchedElement) -> Option<String> {
+    if is_secure_field(&element.0) {
+        return None;
+    }
+    read_capped_value(&element.0)
+}
+
+/// Whether `element` still has keyboard focus in the frontmost app.
+pub fn is_focused(element: &WatchedElement) -> Option<bool> {
+    let (pid, _) = frontmost_pid_and_bundle()?;
+    let focused = application_element(pid)?.copy_attribute("AXFocusedUIElement")?;
+    Some(focused == element.0 .0)
+}
+
+pub fn frontmost_pid() -> Option<i32> {
+    frontmost_pid_and_bundle().map(|(pid, _)| pid)
+}
+
+fn is_secure_field(element: &AxElement) -> bool {
+    element.role().as_deref() == Some(SECURE_FIELD_ROLE)
+        || element.string_attribute("AXSubrole").as_deref() == Some(SECURE_FIELD_ROLE)
+}
+
+/// `AXValue` as a string, checking `AXNumberOfCharacters` first so a huge
+/// value is never copied across the process boundary.
+fn read_capped_value(element: &AxElement) -> Option<String> {
+    use core_foundation::number::CFNumber;
+    let length = element
+        .copy_attribute("AXNumberOfCharacters")
+        .and_then(|value| value.downcast::<CFNumber>())
+        .and_then(|number| number.to_i64());
+    if length.is_some_and(|length| length < 0 || length as usize > WATCH_VALUE_CAP_UTF16) {
+        return None;
+    }
+    let value = element
+        .copy_attribute("AXValue")?
+        .downcast::<CFString>()?
+        .to_string();
+    (value.encode_utf16().count() <= WATCH_VALUE_CAP_UTF16).then_some(value)
+}

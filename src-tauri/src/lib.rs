@@ -7,8 +7,15 @@ mod audio;
 mod ax_context;
 mod clipboard;
 mod cursor_preview;
+// The edit watcher is macOS-only; its diffing stays platform-neutral and tested.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod edit_diff;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod edit_watch;
 mod host;
 mod hugging_face;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod learned;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod insertion;
 mod live_preview;
@@ -30,6 +37,7 @@ mod settings;
 mod sounds;
 mod speed_test;
 mod tailnet_discovery;
+mod training_capture;
 mod transcript_cleanup;
 mod transcript_history;
 mod transcription;
@@ -261,6 +269,8 @@ fn save_settings_inner(
     settings.vocabulary_hints = current_settings.vocabulary_hints.clone();
     settings.transcript_corrections = current_settings.transcript_corrections.clone();
     settings.snippets = current_settings.snippets.clone();
+    settings.learned_vocabulary_hints = current_settings.learned_vocabulary_hints.clone();
+    settings.learn_from_edits = current_settings.learn_from_edits;
 
     // Only newly chosen cloud options are refused, so a stale Cloud setting
     // never blocks saving unrelated changes.
@@ -504,6 +514,11 @@ struct DictionaryUpdate {
     transcript_corrections: Vec<TranscriptCorrection>,
     #[serde(default)]
     snippets: Vec<Snippet>,
+    /// Omitted by older frontends, which keeps the current value.
+    #[serde(default)]
+    learned_vocabulary_hints: Option<Vec<String>>,
+    #[serde(default)]
+    learn_from_edits: Option<bool>,
 }
 
 #[tauri::command]
@@ -527,6 +542,12 @@ fn save_dictionary(
     settings.vocabulary_hints = update.vocabulary_hints;
     settings.transcript_corrections = update.transcript_corrections;
     settings.snippets = update.snippets;
+    if let Some(learned) = update.learned_vocabulary_hints {
+        settings.learned_vocabulary_hints = learned;
+    }
+    if let Some(learn) = update.learn_from_edits {
+        settings.learn_from_edits = learn;
+    }
     services
         .settings
         .lock()
@@ -1090,6 +1111,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
         .operation
         .try_lock()
         .map_err(|_| "Dictation is still finishing".to_string())?;
+    edit_watch::flush(&app);
     let recording_active = services
         .audio
         .lock()
@@ -1694,6 +1716,21 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     {
         return Err("Transcription was cancelled".into());
     }
+    // Only the macOS edit watcher attaches edits to the kept dictation.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    let capture_id = training_capture::capture_dictation(
+        app,
+        &settings,
+        &recording,
+        training_capture::DictationTexts {
+            raw: &raw_transcript,
+            polished: polished.then_some(transcript_for_rules.as_str()),
+            final_text: clipboard_text.trim_end(),
+        },
+        frontmost_app
+            .as_ref()
+            .map_or("other", |target| app_categories::categorize(&target.bundle_id).id()),
+    );
     services.clipboard.write_text(&clipboard_text)?;
     let _ = app.emit(
         "transcript-history-updated",
@@ -1705,7 +1742,21 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(target_os = "macos")]
     {
         if will_insert_at_cursor && !cursor_preview::is_claimed(cursor_session) {
-            deliver_transcript_at_cursor(app, &clipboard_text, settings.accessibility_insert);
+            // Read the target field before inserting, so the edit watcher
+            // knows what surrounded the dictation.
+            let watched_field = edit_watch::prepare(&settings);
+            if deliver_transcript_at_cursor(app, &clipboard_text, settings.accessibility_insert) {
+                edit_watch::arm(
+                    app,
+                    watched_field,
+                    edit_watch::Dictation {
+                        inserted: clipboard_text.clone(),
+                        raw: raw_transcript.clone(),
+                        speech_model: settings.speech_model_id(),
+                        capture_id: capture_id.clone(),
+                    },
+                );
+            }
         } else {
             emit_backend_event(
                 app,
@@ -1807,8 +1858,9 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 ///
 /// The transcript always stays on the clipboard afterwards — paste or no
 /// paste — so the user can paste the same dictation into multiple targets.
+/// Returns whether an insertion was made (not verified, like the tiers).
 #[cfg(target_os = "macos")]
-fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_insert: bool) {
+fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_insert: bool) -> bool {
     use insertion::InsertionTier;
 
     let our_window_focused = app
@@ -1821,7 +1873,7 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_inser
             "info",
             "Insert at cursor skipped while a Fairspoken window is focused; transcript is on the clipboard",
         );
-        return;
+        return false;
     }
 
     let bundle_id = macos_input::frontmost_app().map(|frontmost| frontmost.bundle_id);
@@ -1846,7 +1898,7 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_inser
                         InsertionTier::AxInsert.label()
                     ),
                 );
-                return;
+                return true;
             }
             Some(Err(code)) => {
                 // A returned AX error means nothing was inserted — falling
@@ -1865,7 +1917,7 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_inser
                     "warning",
                     "AX insertion timed out; not retrying to avoid a double paste — transcript is on the clipboard",
                 );
-                return;
+                return false;
             }
         }
     }
@@ -1878,42 +1930,53 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_inser
             "warning",
             format!("Insert at cursor skipped: {err}; transcript is on the clipboard"),
         );
-        return;
+        return false;
     }
 
     if tier == InsertionTier::AppleScript {
-        match applescript_paste_keystroke() {
-            Ok(()) => emit_backend_event(
+        return match applescript_paste_keystroke() {
+            Ok(()) => {
+                emit_backend_event(
+                    app,
+                    "info",
+                    format!(
+                        "Transcript inserted via {} and kept on the clipboard",
+                        InsertionTier::AppleScript.label()
+                    ),
+                );
+                true
+            }
+            Err(err) => {
+                emit_backend_event(
+                    app,
+                    "warning",
+                    format!("AppleScript insertion failed ({err}); transcript is on the clipboard"),
+                );
+                false
+            }
+        };
+    }
+
+    match macos_input::paste_clipboard_at_cursor() {
+        Ok(()) => {
+            emit_backend_event(
                 app,
                 "info",
                 format!(
                     "Transcript inserted via {} and kept on the clipboard",
-                    InsertionTier::AppleScript.label()
+                    InsertionTier::CmdV.label()
                 ),
-            ),
-            Err(err) => emit_backend_event(
+            );
+            true
+        }
+        Err(err) => {
+            emit_backend_event(
                 app,
                 "warning",
-                format!("AppleScript insertion failed ({err}); transcript is on the clipboard"),
-            ),
+                format!("Insert at cursor failed ({err}); transcript is on the clipboard"),
+            );
+            false
         }
-        return;
-    }
-
-    match macos_input::paste_clipboard_at_cursor() {
-        Ok(()) => emit_backend_event(
-            app,
-            "info",
-            format!(
-                "Transcript inserted via {} and kept on the clipboard",
-                InsertionTier::CmdV.label()
-            ),
-        ),
-        Err(err) => emit_backend_event(
-            app,
-            "warning",
-            format!("Insert at cursor failed ({err}); transcript is on the clipboard"),
-        ),
     }
 }
 
@@ -2859,6 +2922,7 @@ pub fn run() {
                 emit_backend_event(handle, "warning", format!("Could not position pill: {err}"));
             }
             start_note_retention_sweeper(handle.clone());
+            training_capture::start_retention_sweeper(handle.clone());
             updates::start(handle.clone());
             let _ = open_home_window(handle.clone(), None);
             #[cfg(target_os = "macos")]
@@ -2934,6 +2998,12 @@ pub fn run() {
             restart_to_update,
             get_update_channel,
             set_update_channel,
+            learned::get_learned_suggestions,
+            learned::accept_learned_suggestion,
+            learned::dismiss_learned_suggestion,
+            training_capture::get_training_data_summary,
+            training_capture::export_training_data,
+            training_capture::delete_training_data,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -407,6 +407,18 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .dict-rows-empty { margin: 0; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
 .dict-arrow { color: var(--sem-color-text-muted); }
 .dict-row .setting-input { min-width: 0; }
+.dict-row-end { display: inline-flex; align-items: center; gap: var(--sem-space-xs); }
+.learned-chip {
+  display: inline-flex; align-items: center; padding: 0 var(--sem-space-xs);
+  border: 1px solid var(--sem-color-border-subtle); border-radius: var(--sem-radius-control);
+  color: var(--sem-color-text-muted); font-size: var(--fs-micro); line-height: 1.6; white-space: nowrap;
+}
+.settings-card > .dict-suggestion { padding: var(--sem-space-xl); border-top: 1px solid var(--sem-color-border-subtle); }
+.settings-card > .dict-suggestion:first-child { border-top: 0; }
+.dict-suggestion { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: var(--sem-space-sm); }
+.dict-suggestion-text { min-width: 0; }
+.dict-suggestion-reason { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
+.training-warning { color: var(--warning); }
 
 /* ── Activity ────────────────────────────────────────────── */
 #activityList > .activity-row,

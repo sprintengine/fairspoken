@@ -57,6 +57,9 @@ interface Settings {
   polishModel: string;
   polishTones: Record<string, string>;
   contextAwareness: boolean;
+  trainingCapture: boolean;
+  /** 30, 90, or 0 for "until deleted". */
+  trainingRetentionDays: number;
 }
 
 interface ModelStatus {
@@ -124,6 +127,8 @@ const DEFAULTS: Settings = {
   polishModel: "speakoflow-mini",
   polishTones: {},
   contextAwareness: false,
+  trainingCapture: false,
+  trainingRetentionDays: 30,
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
@@ -139,6 +144,8 @@ const alwaysOnTop = required<HTMLInputElement>("alwaysOnTop");
 const interactionSounds = required<HTMLInputElement>("interactionSounds");
 const maxRecordingSeconds = required<HTMLSelectElement>("maxRecordingSeconds");
 const noteRetentionMinutes = required<HTMLSelectElement>("noteRetentionMinutes");
+const trainingCapture = required<HTMLInputElement>("trainingCapture");
+const trainingRetentionDays = required<HTMLSelectElement>("trainingRetentionDays");
 const recordingModeSeg = segControl("recordingModeSeg");
 const recordingShortcutChip = required<HTMLButtonElement>("recordingShortcutChip");
 const transcriptStackShortcutChip = required<HTMLButtonElement>("transcriptStackShortcutChip");
@@ -348,6 +355,10 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     polishEnabled: settings.polishEnabled ?? DEFAULTS.polishEnabled,
     polishTones: normalizePolishTones(settings.polishTones ?? DEFAULTS.polishTones),
     contextAwareness: settings.contextAwareness ?? DEFAULTS.contextAwareness,
+    trainingCapture: settings.trainingCapture ?? DEFAULTS.trainingCapture,
+    trainingRetentionDays: [0, 30, 90].includes(Number(settings.trainingRetentionDays))
+      ? Number(settings.trainingRetentionDays)
+      : DEFAULTS.trainingRetentionDays,
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -404,6 +415,8 @@ function applyToForm(settings: Settings): void {
   interactionSounds.checked = settings.interactionSounds ?? true;
   maxRecordingSeconds.value = String(settings.maxRecordingSeconds);
   noteRetentionMinutes.value = String(settings.noteRetentionMinutes);
+  trainingCapture.checked = settings.trainingCapture;
+  trainingRetentionDays.value = String(settings.trainingRetentionDays);
   recordingModeSeg.set(settings.recordingShortcutMode);
   renderShortcutChip(recordingShortcutChip, settings.recordingShortcut);
   renderShortcutChip(transcriptStackShortcutChip, settings.transcriptStackShortcut);
@@ -472,6 +485,8 @@ function readFromForm(): Settings {
     interactionSounds: interactionSounds.checked,
     maxRecordingSeconds: Number(maxRecordingSeconds.value),
     noteRetentionMinutes: Number(noteRetentionMinutes.value),
+    trainingCapture: trainingCapture.checked,
+    trainingRetentionDays: Number(trainingRetentionDays.value),
     recordingShortcutMode: recordingModeSeg.get() as RecordingShortcutMode,
     recordingShortcut: recordingShortcutChip.dataset.shortcut ?? DEFAULTS.recordingShortcut,
     transcriptStackShortcut: transcriptStackShortcutChip.dataset.shortcut ?? DEFAULTS.transcriptStackShortcut,
@@ -1215,6 +1230,8 @@ interactionSounds.addEventListener("change", () => {
 });
 maxRecordingSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 noteRetentionMinutes.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+trainingCapture.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+trainingRetentionDays.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 recordingModeSeg.onChange(() => void persistSettings().catch(reportAsyncError));
 recordingShortcutChip.addEventListener("click", () => {
   beginShortcutCapture(recordingShortcutChip, "Recording");
