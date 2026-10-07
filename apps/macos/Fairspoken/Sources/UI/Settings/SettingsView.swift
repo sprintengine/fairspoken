@@ -24,16 +24,19 @@ struct SettingsView: View {
     }
 
     @Environment(AppModel.self) private var model
-    @Namespace private var tabGlass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var tabSelection
 
     var body: some View {
         @Bindable var app = model
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Settings").font(.system(size: 30, weight: .bold, design: .rounded))
-                .padding(.horizontal, 28)
-                .padding(.top, 22)
-            tabStrip(selection: $app.settingsTab)
-                .padding(.horizontal, 28)
+        VStack(alignment: .leading, spacing: Layout.gap) {
+            PageTitle("Settings")
+                .padding(.horizontal, Layout.pageH)
+                .padding(.top, Layout.pageTop)
+            GlassEffectContainer {
+                tabStrip(selection: $app.settingsTab)
+            }
+            .padding(.horizontal, Layout.pageH)
             Group {
                 switch model.settingsTab {
                 case .general: GeneralSettings()
@@ -48,45 +51,48 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
             .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, Layout.pageH - 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { model.permissions.beginPolling() }
         .onDisappear { model.permissions.endPolling() }
     }
 
-    /// Glass tab strip; the selection lozenge morphs between tabs.
+    /// One glass capsule; the selected tab is a flat accent wash that slides between tabs.
     private func tabStrip(selection: Binding<Tab>) -> some View {
-        GlassEffectContainer(spacing: 4) {
-            HStack(spacing: 4) {
-                ForEach(Tab.allCases) { tab in
-                    let selected = selection.wrappedValue == tab
-                    let badged = tab == .updates && model.updates.isUpdatePending
-                    Button {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { selection.wrappedValue = tab }
-                    } label: {
-                        Label(tab.title, systemImage: tab.symbol)
-                            .font(.callout.weight(selected ? .semibold : .regular))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                    .overlay(alignment: .topTrailing) {
-                        if badged {
-                            Circle().fill(Color.mvTeal).frame(width: 7, height: 7).offset(x: -6, y: 5).accessibilityHidden(true)
+        HStack(spacing: 2) {
+            ForEach(Tab.allCases) { tab in
+                let selected = selection.wrappedValue == tab
+                let badged = tab == .updates && model.updates.isUpdatePending
+                Button {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)) { selection.wrappedValue = tab }
+                } label: {
+                    Label(tab.title, systemImage: tab.symbol)
+                        .font(.callout.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Crystal.ink : Crystal.ink2)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 7)
+                        .background {
+                            if selected {
+                                Capsule().fill(Crystal.clientAccent.opacity(0.14))
+                                    .overlay(Capsule().strokeBorder(Crystal.clientAccent.opacity(0.22)))
+                                    .matchedGeometryEffect(id: "selection", in: tabSelection)
+                            }
                         }
-                    }
-                    .accessibilityLabel(badged ? "\(tab.title), update available" : tab.title)
-                    .foregroundStyle(selected ? Color.primary : .secondary)
-                    .glassEffect(selected ? .regular.tint(Color.mvTeal.opacity(0.22)).interactive() : .identity, in: .capsule)
-                    .glassEffectID(tab, in: tabGlass)
-                    .accessibilityAddTraits(selected ? .isSelected : [])
+                        .contentShape(.capsule)
                 }
+                .buttonStyle(.plain)
+                .overlay(alignment: .topTrailing) {
+                    if badged {
+                        Circle().fill(Crystal.clientAccent).frame(width: 7, height: 7).offset(x: -6, y: 5).accessibilityHidden(true)
+                    }
+                }
+                .accessibilityLabel(badged ? "\(tab.title), update available" : tab.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
-            .padding(4)
-            .glassEffect(.regular, in: .capsule)
         }
+        .padding(4)
+        .glassEffect(.regular, in: .capsule)
     }
 }
 
@@ -98,21 +104,21 @@ private struct GeneralSettings: View {
     var body: some View {
         let store = model.settings
         Form {
-            Section("Inserting text") {
-                Toggle("Paste into the app you're using", isOn: binding(\.insertAtCursor))
-                Text("Copies the transcript, then sends ⌘V to the frontmost app. Needs Accessibility. Password fields are never pasted into.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("Restore my clipboard afterwards", isOn: binding(\.restoreClipboard))
+            Section("Dictation") {
+                Toggle("Paste into the current app", isOn: binding(\.insertAtCursor))
+                    .tint(Crystal.clientAccent)
+                    .help("Sends ⌘V to the frontmost app. Needs Accessibility. Never pastes into password fields.")
+                Toggle("Restore clipboard afterwards", isOn: binding(\.restoreClipboard))
+                    .tint(Crystal.clientAccent)
                     .disabled(!store.settings.insertAtCursor)
-            }
-            Section("Feedback") {
-                Toggle("Play start and stop sounds", isOn: binding(\.interactionSounds))
+                Toggle("Start and stop sounds", isOn: binding(\.interactionSounds))
+                    .tint(Crystal.clientAccent)
             }
             Section("Permissions") {
                 PermissionRow(kind: .microphone)
                 PermissionRow(kind: .accessibility)
                 PermissionRow(kind: .inputMonitoring)
-                Button("Show setup guide…") { model.openOnboarding?() }
+                Button("Setup guide…") { model.openOnboarding?() }
             }
         }
     }
@@ -128,31 +134,36 @@ private struct ShortcutSettings: View {
     var body: some View {
         let s = model.settings.settings
         Form {
-            Section("Dictation shortcut") {
+            Section {
                 LabeledContent("Shortcut") {
                     KeyboardShortcuts.Recorder(for: .dictation) { _ in model.mirrorShortcut() }
                 }
                 Picker("Mode", selection: Binding(get: { s.recordingShortcutMode }, set: { v in model.settings.update { $0.recordingShortcutMode = v } })) {
-                    Text("Press to start, press again to stop").tag(RecordingShortcutMode.toggle)
-                    Text("Hold to talk, release to insert").tag(RecordingShortcutMode.pushToTalk)
+                    Text("Press to start and stop").tag(RecordingShortcutMode.toggle)
+                    Text("Hold to talk").tag(RecordingShortcutMode.pushToTalk)
                 }
                 .pickerStyle(.radioGroup)
-                Text("Press Esc while recording to cancel.").font(.caption).foregroundStyle(.secondary)
+                .tint(Crystal.clientAccent)
+            } footer: {
+                Text("Esc cancels a recording.").font(.caption).foregroundStyle(Crystal.ink3)
             }
-            Section("Hold the Fn / Globe key") {
-                Toggle("Hold fn to dictate", isOn: Binding(get: { s.fnPushToTalk }, set: { v in
+            Section {
+                Toggle("Hold fn (🌐) to dictate", isOn: Binding(get: { s.fnPushToTalk }, set: { v in
                     model.settings.update { $0.fnPushToTalk = v }
                     if v && !model.permissions.inputMonitoring.isGranted { model.permissions.request(.inputMonitoring) }
                     model.applyFnSetting()
                 }))
+                .tint(Crystal.clientAccent)
                 if s.fnPushToTalk {
                     PermissionRow(kind: .inputMonitoring)
                     if Permissions.globeKeyAction != 0 {
-                        Label("Your 🌐 key is set to “\(Permissions.globeKeyActionName)”. Set System Settings › Keyboard › “Press 🌐 key to” › Do Nothing so it only dictates.",
-                              systemImage: "globe")
-                            .font(.caption).foregroundStyle(Color.mvAmber)
-                        Button("Open Keyboard Settings") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
+                        HStack {
+                            Label("🌐 is set to “\(Permissions.globeKeyActionName)”. Set it to Do Nothing.", systemImage: "exclamationmark.triangle")
+                                .font(.callout).foregroundStyle(Crystal.warn)
+                            Spacer()
+                            Button("Keyboard Settings…") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
+                            }
                         }
                     }
                 }
@@ -172,28 +183,24 @@ private struct AudioSettings: View {
     var body: some View {
         let s = model.settings.settings
         Form {
-            Section("Microphone") {
-                Picker("Input", selection: Binding(get: { s.audioDevice }, set: { v in model.settings.update { $0.audioDevice = v } })) {
+            Section {
+                Picker("Microphone", selection: Binding(get: { s.audioDevice }, set: { v in model.settings.update { $0.audioDevice = v } })) {
                     Text("System default\(AudioCapture.defaultInputName().map { " (\($0))" } ?? "")").tag("")
                     ForEach(devices) { Text($0.name).tag($0.name) }
                 }
                 LabeledContent("Level") {
                     HStack(spacing: 12) {
                         LevelBars(meter: model.dictation.meter, active: testing || model.dictation.phase.isListening, bars: 28,
-                                  color: .mvTeal)
+                                  color: Crystal.clientAccent)
                             .frame(width: 200, height: 22)
                         Button(testing ? "Stop" : "Test") { toggleTest() }
-                            .buttonStyle(.glass)
                             .disabled(model.dictation.phase.isActive && !testing)
                     }
                 }
-            }
-            Section("Recording") {
                 Stepper(value: Binding(get: { s.maxRecordingSeconds }, set: { v in model.settings.update { $0.maxRecordingSeconds = v } }),
                         in: 10...600, step: 10) {
-                    LabeledContent("Maximum length", value: Format.duration(Double(s.maxRecordingSeconds)))
+                    LabeledContent("Longest recording", value: Format.duration(Double(s.maxRecordingSeconds)))
                 }
-                Text("Recordings shorter than 0.35 s or with no speech are ignored.").font(.caption).foregroundStyle(.secondary)
             }
         }
         .onAppear { devices = AudioCapture.inputDevices() }
@@ -213,214 +220,197 @@ private struct AudioSettings: View {
     }
 }
 
+// MARK: - Transcription
+
 private struct TranscriptionSettings: View {
     @Environment(AppModel.self) private var model
-    @State private var token = ""
-    @State private var machine = ""
-    @FocusState private var tokenFocused: Bool
+    @State private var showManual = false
 
     var body: some View {
         let s = model.settings.settings
-        @Bindable var finder = model.hostFinder
+        let remote = s.transcriptionLocation == .remoteHost
         Form {
-            Section("Where speech is recognised") {
-                Picker("Engine", selection: Binding(get: { s.transcriptionLocation == .remoteHost ? TranscriptionLocation.remoteHost : .local },
-                                                     set: { v in
-                                                         model.settings.update { $0.transcriptionLocation = v }
-                                                         if v == .local { model.models.prepare(model.settings.settings.model) }
-                                                     })) {
-                    Text("Neural Engine on this Mac").tag(TranscriptionLocation.local)
-                    Text("My transcription host").tag(TranscriptionLocation.remoteHost)
+            Section {
+                Picker("Transcribe on", selection: Binding(get: { remote ? TranscriptionLocation.remoteHost : .local },
+                                                           set: { v in
+                                                               model.settings.update { $0.transcriptionLocation = v }
+                                                               if v == .local { model.models.prepare(model.settings.settings.model) }
+                                                           })) {
+                    Text("This Mac").tag(TranscriptionLocation.local)
+                    Text("My host").tag(TranscriptionLocation.remoteHost)
                 }
                 .pickerStyle(.segmented)
-                if s.transcriptionLocation == .local {
+                .tint(Crystal.clientAccent)
+                if !remote {
                     Picker("Model", selection: Binding(get: { s.model }, set: { v in
                         model.settings.update { $0.model = v }
                         model.models.prepare(v)
                     })) {
                         ForEach(SpeechModelCatalog.all) { info in
-                            Text(info.name + (FluidAudioEngine.isInstalled(info.id) ? "" : " (downloads \(Format.bytes(info.approxBytes)))")).tag(info.id)
+                            Text(info.name + (FluidAudioEngine.isInstalled(info.id) ? "" : " (\(Format.bytes(info.approxBytes)) download)")).tag(info.id)
                         }
                     }
-                    LabeledContent("Status", value: model.models.engineState.label)
+                    let state = model.models.engineState
+                    LabeledContent("Status") {
+                        HStack(spacing: 6) {
+                            StatusDot(color: state.tint, pulsing: state.isBusy)
+                            Text(state.label)
+                        }
+                    }
                 }
             }
-            FindHostSection(machine: $machine)
-            Section("My host") {
-                TextField("Host URL", text: Binding(get: { s.remoteUrl }, set: { v in model.settings.update { $0.remoteUrl = v } }),
-                          prompt: Text("http://practice-mini.local:48173"))
-                    .onSubmit { model.hostStatus.refresh(force: true) }
-                SecureField("Token", text: $token, prompt: Text("Bearer token"))
-                    .focused($tokenFocused)
-                    .onSubmit { model.settings.remoteToken = token; model.hostStatus.refresh(force: true) }
-                    .onChange(of: token) { _, v in model.settings.remoteToken = v }
-                if let host = finder.needsToken, host.url.absoluteString == s.remoteUrl, token.isEmpty {
-                    Label("\(host.name) needs its token. Fairspoken Server shows it under Connect.", systemImage: "key")
-                        .font(.caption).foregroundStyle(Color.mvAmber)
-                }
-                Stepper(value: Binding(get: { s.remoteTimeoutSeconds }, set: { v in model.settings.update { $0.remoteTimeoutSeconds = v } }),
-                        in: 5...300, step: 5) {
-                    LabeledContent("Timeout", value: "\(s.remoteTimeoutSeconds) s")
-                }
-                HostStatusLine(status: model.hostStatus)
-                HStack {
-                    Button(model.hostStatus.state == .checking ? "Testing…" : "Test connection") { model.hostStatus.refresh(force: true) }
-                        .buttonStyle(.glass)
-                        .disabled(model.hostStatus.state == .checking || s.remoteUrl.isEmpty)
-                }
-                Text("HTTPS is required except for this Mac, your local network, Tailscale (100.64.0.0/10, *.ts.net) and .local names. The token is stored in your Keychain. Fairspoken Server shows its address and token under Connect.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if remote {
+                HostListSection()
+                ManualHostSection(expanded: $showManual)
             }
         }
-        .onAppear {
-            token = model.settings.remoteToken
-            model.hostStatus.refresh()
-        }
-        // Pairing writes the token; show it here too.
-        .onChange(of: model.settings.remoteToken) { _, v in if token != v { token = v } }
-        .onChange(of: finder.needsToken) { _, host in if host != nil { tokenFocused = true } }
-        .sheet(item: $finder.pairing) { host in PairingSheet(host: host) }
+        .onAppear { model.hostStatus.refresh() }
+        // A host that takes a token opens manual entry with the token field waiting.
+        .onChange(of: model.hostFinder.needsToken) { _, host in if host != nil { showManual = true } }
     }
 }
 
-/// "Find hosts on my tailnet", what answered, and a field for a machine name or name:port.
-private struct FindHostSection: View {
+/// My host: the one in use, then every host the tailnet scan found (this Mac's first). Pick one,
+/// type its password if it has one, done.
+private struct HostListSection: View {
     @Environment(AppModel.self) private var model
-    @Binding var machine: String
 
     var body: some View {
         let finder = model.hostFinder
         let s = model.settings.settings
         let searching = finder.scan == .searching
+        let hosts = finder.hosts.filter(\.isThisMac) + finder.hosts.filter { !$0.isThisMac }
         Section {
+            if !s.remoteUrl.isEmpty {
+                CurrentHostRow(status: model.hostStatus)
+            }
+            ForEach(hosts) { host in
+                DiscoveredHostRow(host: host,
+                                  inUse: s.remoteUrl == host.url.absoluteString,
+                                  pairing: finder.pairing?.id == host.id)
+            }
             HStack(spacing: 10) {
-                Button {
-                    finder.findHosts()
-                } label: {
-                    Label(searching ? "Searching your tailnet…" : "Find hosts on my tailnet", systemImage: "magnifyingglass")
-                }
-                .buttonStyle(.glass)
-                .disabled(searching)
+                Button(searching ? "Searching…" : "Find hosts", systemImage: "magnifyingglass") { finder.findHosts() }
+                    .disabled(searching)
                 if searching { ProgressView().controlSize(.small) }
-            }
-            switch finder.scan {
-            case .failed(let message):
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(Color.mvAmber)
-                    .fixedSize(horizontal: false, vertical: true)
-            case .done where finder.hosts.isEmpty:
-                Text("No Fairspoken host answered on your tailnet. Check that the host is running and reachable over Tailscale, or type its machine name below.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            default:
-                EmptyView()
-            }
-            ForEach(finder.hosts) { host in
-                DiscoveredHostRow(host: host, inUse: s.transcriptionLocation == .remoteHost && s.remoteUrl == host.url.absoluteString,
-                                  busy: finder.pairingBusy && finder.pairing?.id == host.id) {
-                    finder.choose(host)
+                Spacer()
+                switch finder.scan {
+                case .failed(let message):
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(Crystal.warn).lineLimit(2)
+                case .done where finder.hosts.isEmpty:
+                    Text("None found on your tailnet").font(.caption).foregroundStyle(Crystal.ink2)
+                default:
+                    EmptyView()
                 }
-            }
-            HStack {
-                TextField("Machine name", text: $machine, prompt: Text("studio-mac or studio-mac:48173"))
-                    .onSubmit(lookUp)
-                Button(finder.lookingUp ? "Looking…" : "Look up", action: lookUp)
-                    .buttonStyle(.glass)
-                    .disabled(finder.lookingUp || machine.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            if let error = finder.lookupError {
-                Text(error).font(.caption).foregroundStyle(Color.mvCoral)
             }
         } header: {
-            Text("Find my host")
-        } footer: {
-            Text("Looks for Fairspoken hosts on your Tailscale network. If Tailscale's command-line tool isn't on this Mac, or the host uses another port, type its machine name.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("My host")
         }
-    }
-
-    private func lookUp() {
-        let entry = machine.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !entry.isEmpty else { return }
-        model.hostFinder.lookUp(entry)
+        .onAppear {
+            if finder.scan == .idle && AppInfo.screenshotDirectory == nil { finder.findHosts() }
+        }
     }
 }
 
-/// One host that answered: its name, machine and URL, a lock when it needs a password.
-private struct DiscoveredHostRow: View {
-    var host: DiscoveredHost
-    var inUse: Bool
-    var busy: Bool
-    var choose: () -> Void
+/// The host in use: its address, whether it answers, and Test.
+private struct CurrentHostRow: View {
+    var status: HostStatus
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: host.isThisMac ? "desktopcomputer" : "server.rack")
-                .font(.title3)
-                .foregroundStyle(Color.mvTeal)
-                .frame(width: 30)
+            HostIcon(symbol: "link")
             VStack(alignment: .leading, spacing: 2) {
+                Text(status.hostName).font(.fsData(.body, weight: .medium)).foregroundStyle(Crystal.ink)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 HStack(spacing: 6) {
-                    Text(host.name).font(.body.weight(.medium))
-                    if host.auth == .password {
-                        Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
-                            .accessibilityLabel("Needs a password")
-                    }
+                    StatusDot(color: status.tint, pulsing: status.state == .checking)
+                    Text([status.stateLabel, status.detail].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(Crystal.ink2).lineLimit(2)
                 }
-                Text("\(host.machine)\(host.isThisMac ? " (this Mac)" : "") · \(host.url.absoluteString)")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
-                    .textSelection(.enabled)
             }
             Spacer()
-            if inUse {
-                Label("In use", systemImage: "checkmark.circle.fill").foregroundStyle(Color.mvGreen).font(.callout.weight(.medium))
-            } else {
-                Button(host.auth == .password ? "Pair…" : "Use", action: choose)
-                    .buttonStyle(.glass)
-                    .disabled(busy)
-            }
+            Button(status.state == .checking ? "Testing…" : "Test") { status.refresh(force: true) }
+                .disabled(status.state == .checking)
         }
         .accessibilityElement(children: .combine)
     }
 }
 
-/// Asks for the host's pairing password and trades it for the token.
-private struct PairingSheet: View {
+private struct HostIcon: View {
+    var symbol: String
+    var tint: Color = Crystal.ink2
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(tint)
+            .frame(width: 30, height: 30)
+            .well(cornerRadius: 8)
+            .accessibilityHidden(true)
+    }
+}
+
+/// One host that answered. Choosing a password host opens the password field in place.
+private struct DiscoveredHostRow: View {
     var host: DiscoveredHost
+    var inUse: Bool
+    var pairing: Bool
     @Environment(AppModel.self) private var model
     @State private var password = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         let finder = model.hostFinder
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Pair with \(host.name)", systemImage: "lock.fill")
-                .font(.title3.weight(.semibold))
-            Text("Enter the pairing password set on \(host.machine). \(AppInfo.displayName) keeps the host's token in your Keychain.")
-                .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            SecureField("Pairing password", text: $password)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(pair)
-            if let error = finder.pairingError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(Color.mvCoral)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack {
-                if finder.pairingBusy { ProgressView().controlSize(.small) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                HostIcon(symbol: host.isThisMac ? "desktopcomputer" : "server.rack")
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(host.name).font(.body.weight(.medium)).foregroundStyle(Crystal.ink)
+                        if host.auth == .password {
+                            Image(systemName: "lock.fill").font(.caption2).foregroundStyle(Crystal.ink3)
+                                .accessibilityLabel("Needs a password")
+                        }
+                    }
+                    Text(host.isThisMac ? "This Mac" : host.machine)
+                        .font(.caption).foregroundStyle(Crystal.ink2).lineLimit(1)
+                }
+                .help(host.url.absoluteString)
                 Spacer()
-                Button("Cancel", role: .cancel) { finder.cancelPairing() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Pair", action: pair)
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.glassProminent)
-                    .tint(.mvTeal)
-                    .disabled(!canPair)
+                if inUse {
+                    Label("In use", systemImage: "checkmark").font(.callout.weight(.medium)).foregroundStyle(Crystal.ok)
+                } else if !pairing {
+                    Button(host.auth == .password ? "Pair" : "Use") { finder.choose(host) }
+                }
+            }
+            if pairing {
+                HStack(spacing: 8) {
+                    SecureField("Password", text: $password, prompt: Text("Password set on \(host.machine)"))
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                        .focused($focused)
+                        .onSubmit(pair)
+                    if finder.pairingBusy { ProgressView().controlSize(.small) }
+                    Button("Cancel") { finder.cancelPairing() }
+                        .keyboardShortcut(.cancelAction)
+                    Button("Pair", action: pair)
+                        .buttonStyle(.glassProminent)
+                        .tint(Crystal.clientAccent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!canPair)
+                }
+                .padding(.leading, 42)
+                if let error = finder.pairingError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(Crystal.error)
+                        .padding(.leading, 42)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .padding(22)
-        .frame(width: 400)
+        .onChange(of: pairing, initial: true) { _, on in
+            if on { password = ""; focused = true }
+        }
     }
 
     /// Pairing passwords are 6–128 characters.
@@ -432,32 +422,65 @@ private struct PairingSheet: View {
     }
 }
 
-/// "Using host: practice-mini.local:48173 · connected", with the reason when it isn't.
-struct HostStatusLine: View {
-    var status: HostStatus
+/// "Enter address manually": look a machine up by name, or type the URL and token.
+private struct ManualHostSection: View {
+    @Binding var expanded: Bool
+    @Environment(AppModel.self) private var model
+    @State private var machine = ""
+    @State private var token = ""
+    @FocusState private var tokenFocused: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            StatusDot(color: color, pulsing: status.state == .checking)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(status.summary).font(.callout)
-                if let detail = status.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        let s = model.settings.settings
+        let finder = model.hostFinder
+        Section {
+            DisclosureGroup("Enter address manually", isExpanded: $expanded) {
+                LabeledContent("Machine name") {
+                    HStack {
+                        TextField("Machine name", text: $machine, prompt: Text("studio-mac or studio-mac:48173"))
+                            .labelsHidden()
+                            .onSubmit(lookUp)
+                        Button(finder.lookingUp ? "Looking…" : "Look up", action: lookUp)
+                            .disabled(finder.lookingUp || machine.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
                 }
+                if let error = finder.lookupError {
+                    Text(error).font(.caption).foregroundStyle(Crystal.error)
+                }
+                TextField("Address", text: Binding(get: { s.remoteUrl }, set: { v in model.settings.update { $0.remoteUrl = v } }),
+                          prompt: Text("http://practice-mini.local:48173"))
+                    .font(.fsData(.body))
+                    .onSubmit { model.hostStatus.refresh(force: true) }
+                SecureField("Token", text: $token, prompt: Text("From Fairspoken Server › Connect"))
+                    .focused($tokenFocused)
+                    .onSubmit { model.settings.remoteToken = token; model.hostStatus.refresh(force: true) }
+                    .onChange(of: token) { _, v in model.settings.remoteToken = v }
+                if let host = finder.needsToken, host.url.absoluteString == s.remoteUrl, token.isEmpty {
+                    Label("\(host.name) needs its token", systemImage: "key")
+                        .font(.caption).foregroundStyle(Crystal.warn)
+                }
+                Stepper(value: Binding(get: { s.remoteTimeoutSeconds }, set: { v in model.settings.update { $0.remoteTimeoutSeconds = v } }),
+                        in: 5...300, step: 5) {
+                    LabeledContent("Timeout", value: "\(s.remoteTimeoutSeconds) s")
+                }
+                Text("HTTPS is required outside this Mac, your network and your tailnet. Tokens are kept in your Keychain.")
+                    .font(.caption).foregroundStyle(Crystal.ink3)
             }
         }
-        .accessibilityElement(children: .combine)
+        .onAppear { token = model.settings.remoteToken }
+        // Pairing writes the token; show it here too.
+        .onChange(of: model.settings.remoteToken) { _, v in if token != v { token = v } }
+        .onChange(of: finder.needsToken) { _, host in if host != nil { tokenFocused = true } }
     }
 
-    private var color: Color {
-        switch status.state {
-        case .connected: .mvGreen
-        case .checking: .mvAmber
-        case .failed: .mvCoral
-        case .notConfigured: .secondary
-        }
+    private func lookUp() {
+        let entry = machine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !entry.isEmpty else { return }
+        model.hostFinder.lookUp(entry)
     }
 }
+
+// MARK: - Vocabulary, About
 
 private struct VocabularySettings: View {
     @Environment(AppModel.self) private var model
@@ -468,28 +491,29 @@ private struct VocabularySettings: View {
         Form {
             Section {
                 HStack {
-                    TextField("Add a name, drug or term", text: $newTerm)
+                    TextField("Add a term", text: $newTerm, prompt: Text("A name, drug or term"))
+                        .labelsHidden()
                         .onSubmit(add)
-                    Button("Add", action: add).buttonStyle(.glass).disabled(newTerm.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Add", action: add).disabled(newTerm.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                if hints.isEmpty {
-                    Text("No terms yet.").foregroundStyle(.secondary)
-                } else {
-                    ForEach(hints, id: \.self) { term in
-                        HStack {
-                            Text(term)
-                            Spacer()
-                            Button { remove(term) } label: { Image(systemName: "minus.circle.fill") }
-                                .buttonStyle(.plain).foregroundStyle(.secondary)
-                                .accessibilityLabel("Remove \(term)")
-                        }
+                ForEach(hints, id: \.self) { term in
+                    HStack {
+                        Text(term)
+                        Spacer()
+                        Button { remove(term) } label: { Image(systemName: "minus.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(Crystal.ink3)
+                            .accessibilityLabel("Remove \(term)")
                     }
                 }
             } header: {
-                Text("Vocabulary (\(hints.count)/50)")
+                HStack {
+                    Text("Vocabulary")
+                    Spacer()
+                    Text("\(hints.count) of 50").monospacedDigit()
+                }
             } footer: {
-                Text("Your spelling and capitalisation are applied to every dictation, and the list is sent to your host as hints. Neural Engine vocabulary boosting comes in a later update.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Your spelling is applied to every dictation and sent to your host as hints.")
+                    .font(.caption).foregroundStyle(Crystal.ink3)
             }
         }
     }
@@ -510,29 +534,30 @@ private struct AboutSettings: View {
     var body: some View {
         Form {
             Section {
-                HStack(spacing: 16) {
-                    BrandMark(size: 56)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(AppInfo.displayName).font(.title2.weight(.semibold))
+                HStack(spacing: 14) {
+                    BrandMark(size: 52)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(AppInfo.displayName).font(.title3.weight(.semibold))
                         Text("Version \(AppInfo.version) (\(AppInfo.build))\(AppInfo.isDevBuild ? " · development build" : "")")
-                            .foregroundStyle(.secondary)
+                            .font(.callout).foregroundStyle(Crystal.ink2).textSelection(.enabled)
                     }
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
             }
-            Section("This build") {
-                LabeledContent("Bundle identifier", value: AppInfo.bundleID)
+            Section {
+                LabeledContent("Bundle identifier") { Text(AppInfo.bundleID).font(.fsData(.callout)).textSelection(.enabled) }
                 LabeledContent("Speech engine", value: "FluidAudio 0.17.5 · CoreML")
                 LabeledContent("Settings folder") {
                     Button(AppInfo.supportDirectory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                         NSWorkspace.shared.open(AppInfo.supportDirectory)
                     }
                     .buttonStyle(.link)
+                    .tint(Crystal.clientAccent)
                 }
             }
             Section("Privacy") {
-                Text("Audio is processed in memory and never written to disk. Recent dictations are kept on this Mac only (the last 50). When you use your own host, audio streams to that host and nowhere else.")
-                    .font(.callout).foregroundStyle(.secondary)
+                Text("Audio stays in memory and is never saved. Your last 50 dictations stay on this Mac. With your own host, audio goes to that host only.")
+                    .font(.callout).foregroundStyle(Crystal.ink2)
             }
         }
     }
@@ -541,26 +566,29 @@ private struct AboutSettings: View {
 /// Live permission status with an action button.
 struct PermissionRow: View {
     var kind: Permissions.Kind
+    var optional = false
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let status = model.permissions.status(kind)
         HStack(spacing: 12) {
             Image(systemName: info.symbol)
-                .font(.title3)
-                .foregroundStyle(status.isGranted ? Color.mvGreen : Color.mvAmber)
-                .frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(info.title).font(.body.weight(.medium))
-                Text(info.why).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Crystal.ink2)
+                .frame(width: 30, height: 30)
+                .well(cornerRadius: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(info.title).font(.body.weight(.medium)).foregroundStyle(Crystal.ink)
+                    if optional { Tag(text: "Optional", color: Crystal.ink3) }
+                }
+                Text(info.why).font(.caption).foregroundStyle(Crystal.ink2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             if status.isGranted {
-                Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(Color.mvGreen).font(.callout.weight(.medium))
+                Label("Allowed", systemImage: "checkmark").foregroundStyle(Crystal.ok).font(.callout.weight(.medium))
             } else {
-                Button(status == .notDetermined ? "Allow…" : "Open Settings") { model.permissions.request(kind) }
-                    .buttonStyle(.glassProminent)
-                    .tint(.mvTeal)
+                Button(status == .notDetermined ? "Allow" : "Open Settings") { model.permissions.request(kind) }
             }
         }
         .accessibilityElement(children: .combine)
@@ -568,9 +596,9 @@ struct PermissionRow: View {
 
     private var info: (title: String, why: String, symbol: String) {
         switch kind {
-        case .microphone: ("Microphone", "Hear you while you dictate — only while the shortcut is active.", "mic.fill")
-        case .accessibility: ("Accessibility", "Paste the text into the app you're using (sends ⌘V) and skip password fields.", "accessibility")
-        case .inputMonitoring: ("Input Monitoring", "Notice when you hold the fn key. Only needed for hold-fn dictation.", "keyboard")
+        case .microphone: ("Microphone", "Only while you dictate", "mic")
+        case .accessibility: ("Accessibility", "Paste into the current app", "accessibility")
+        case .inputMonitoring: ("Input Monitoring", "Hold fn to dictate", "keyboard")
         }
     }
 }

@@ -4,13 +4,13 @@ import SwiftUI
 /// A Liquid Glass panel. Content cards share one `GlassEffectContainer` per screen so
 /// they sample the same backdrop (glass can't sample glass) and render efficiently.
 public struct GlassCard<Content: View>: View {
-    var cornerRadius: CGFloat = 24
+    var cornerRadius: CGFloat = 20
     var padding: CGFloat = 20
     var tint: Color? = nil
     var fillHeight = false
     @ViewBuilder var content: Content
 
-    public init(cornerRadius: CGFloat = 24, padding: CGFloat = 20, tint: Color? = nil, fillHeight: Bool = false, @ViewBuilder content: () -> Content) {
+    public init(cornerRadius: CGFloat = 20, padding: CGFloat = 20, tint: Color? = nil, fillHeight: Bool = false, @ViewBuilder content: () -> Content) {
         self.cornerRadius = cornerRadius
         self.padding = padding
         self.tint = tint
@@ -45,7 +45,7 @@ public struct Eyebrow: View {
         }
         .font(.caption.weight(.semibold))
         .tracking(0.6)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Crystal.ink2)
     }
 }
 
@@ -59,8 +59,9 @@ public struct Keycap: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .frame(minWidth: 26)
-            .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.primary.opacity(0.12)))
+            .foregroundStyle(Crystal.ink)
+            .background(Crystal.well, in: .rect(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Crystal.hairline))
             .accessibilityLabel(label)
     }
 }
@@ -126,7 +127,7 @@ public struct Chip: View {
     public var body: some View {
         HStack(spacing: 6) {
             if let dot { StatusDot(color: dot) }
-            if let symbol { Image(systemName: symbol).imageScale(.small).foregroundStyle(tint ?? .secondary) }
+            if let symbol { Image(systemName: symbol).imageScale(.small).foregroundStyle(tint ?? Crystal.ink2) }
             Text(text).lineLimit(1)
         }
         .font(.callout.weight(.medium))
@@ -156,20 +157,32 @@ public struct Tag: View {
     }
 }
 
-/// Brand mark: placeholder until naming settles. Built from SF Symbols so it scales.
+/// Brand mark: a silver (light) / graphite (dark) crystal tile with the waveform, its lower
+/// edge catching a faint hint of `accent`. Built from SF Symbols so it scales.
 public struct BrandMark: View {
     var size: CGFloat = 28
-    public init(size: CGFloat = 28) { self.size = size }
+    var accent: Color = Crystal.clientAccent
+    @Environment(\.colorScheme) private var scheme
+    public init(size: CGFloat = 28, accent: Color = Crystal.clientAccent) { self.size = size; self.accent = accent }
     public var body: some View {
+        let dark = scheme == .dark
+        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                .fill(LinearGradient(colors: [Color.mvTeal, Color.mvTeal.mix(with: .mvIndigo, by: 0.55)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+            shape.fill(LinearGradient(colors: dark ? [Color(white: 0.30), Color(white: 0.14)]
+                                                   : [Color(white: 1.0), Color(white: 0.80)],
+                                      startPoint: .top, endPoint: .bottom))
+            // The crystal facet: a soft diagonal sheen across the top half.
+            shape.fill(LinearGradient(colors: [.white.opacity(dark ? 0.16 : 0.7), .clear],
+                                      startPoint: .topLeading, endPoint: .center))
+            shape.strokeBorder(LinearGradient(colors: [.white.opacity(dark ? 0.28 : 0.95), Crystal.hairline],
+                                              startPoint: .top, endPoint: .bottom), lineWidth: max(0.75, size / 40))
             Image(systemName: "waveform")
-                .font(.system(size: size * 0.52, weight: .bold))
-                .foregroundStyle(.white)
+                .font(.system(size: size * 0.5, weight: .bold))
+                .foregroundStyle(LinearGradient(colors: [Crystal.ink, Crystal.ink.mix(with: accent, by: dark ? 0.55 : 0.45)],
+                                                startPoint: .top, endPoint: .bottom))
         }
         .frame(width: size, height: size)
+        .shadow(color: .black.opacity(dark ? 0.35 : 0.10), radius: size * 0.08, y: size * 0.04)
         .accessibilityHidden(true)
     }
 }
@@ -182,7 +195,7 @@ public struct DotMeter: View {
     public var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<5, id: \.self) { i in
-                Capsule().fill(i < value ? color : Color.primary.opacity(0.12)).frame(width: 12, height: 5)
+                Capsule().fill(i < value ? color : Crystal.hairline).frame(width: 12, height: 5)
             }
         }
         .accessibilityElement()
@@ -191,7 +204,8 @@ public struct DotMeter: View {
 }
 
 extension ComputePlacement {
-    public var tint: Color { self == .remoteHost ? .mvIndigo : .mvTeal }
+    /// Neutral for your host, the accent for this Mac's Neural Engine.
+    public var tint: Color { self == .remoteHost ? Crystal.ink2 : Crystal.clientAccent }
 }
 
 public enum Format {

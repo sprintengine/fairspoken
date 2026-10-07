@@ -65,7 +65,7 @@ final class ScreenshotHarness {
             if section == .settings { model.settingsTab = .general }
             try? await Task.sleep(for: .milliseconds(1600))
             await freshFrame()
-            if let window = windows.dashboard { capture(window, as: "\(section.rawValue)-\(suffix)") }
+            if let window = windows.dashboard { await capture(window, as: "\(section.rawValue)-\(suffix)") }
         }
         // Home while listening, to show the live mic rings.
         windows.showDashboard(.home)
@@ -73,14 +73,22 @@ final class ScreenshotHarness {
         let feeder = feedLevels(into: model.dictation.meter)
         try? await Task.sleep(for: .milliseconds(1400))
         await freshFrame()
-        if let window = windows.dashboard { capture(window, as: "home-listening-\(suffix)") }
+        if let window = windows.dashboard { await capture(window, as: "home-listening-\(suffix)") }
         feeder.cancel()
         model.dictation.showcase(.idle)
         model.settingsTab = .transcription
         windows.showDashboard(.settings)
         try? await Task.sleep(for: .milliseconds(1000))
         await freshFrame()
-        if let window = windows.dashboard { capture(window, as: "settings-transcription-\(suffix)") }
+        if let window = windows.dashboard { await capture(window, as: "settings-transcription-\(suffix)") }
+        // The same tab with My host chosen (the sample host; no tailnet scan, so no real machines).
+        let location = model.settings.settings.transcriptionLocation
+        model.settings.update { $0.transcriptionLocation = .remoteHost }
+        model.hostStatus.refresh(force: true)
+        try? await Task.sleep(for: .milliseconds(800))
+        await freshFrame()
+        if let window = windows.dashboard { await capture(window, as: "settings-host-\(suffix)") }
+        model.settings.update { $0.transcriptionLocation = location }
         windows.dashboard?.orderOut(nil)
     }
 
@@ -95,7 +103,7 @@ final class ScreenshotHarness {
                 windows.showDashboard(.home)
                 try? await Task.sleep(for: .milliseconds(900))
                 await freshFrame()
-                if let window = windows.dashboard { capture(window, as: "update-\(name)-\(suffix)") }
+                if let window = windows.dashboard { await capture(window, as: "update-\(name)-\(suffix)") }
                 model.updates.dismissToast()
             }
             model.updates.simulate(.available(version: "0.3.0"))
@@ -103,7 +111,7 @@ final class ScreenshotHarness {
             windows.showDashboard(.settings)
             try? await Task.sleep(for: .milliseconds(1000))
             await freshFrame()
-            if let window = windows.dashboard { capture(window, as: "settings-updates-\(suffix)") }
+            if let window = windows.dashboard { await capture(window, as: "settings-updates-\(suffix)") }
         }
     }
 
@@ -118,7 +126,7 @@ final class ScreenshotHarness {
             window.center()
             window.makeKeyAndOrderFront(nil)
             try? await Task.sleep(for: .milliseconds(1200))
-            capture(window, as: "onboarding-\(step == .welcome ? "welcome" : "permissions")-\(suffix)")
+            await capture(window, as: "onboarding-\(step == .welcome ? "welcome" : "permissions")-\(suffix)")
             window.orderOut(nil)
         }
     }
@@ -155,7 +163,7 @@ final class ScreenshotHarness {
         window.contentViewController = NSHostingController(rootView: PillShowcase(controllers: controllers, shortcut: HotkeyController.currentShortcutSymbols))
         window.setContentSize(NSSize(width: 760, height: 470))
         try? await Task.sleep(for: .milliseconds(250))
-        capture(window, as: "pill-\(suffix)")
+        await capture(window, as: "pill-\(suffix)")
         feeders.forEach { $0.cancel() }
         window.orderOut(nil)
     }
@@ -187,9 +195,14 @@ final class ScreenshotHarness {
 
     /// `CGWindowListCreateImage` is unavailable to Swift in the macOS 15+ SDK but still works at
     /// runtime for the calling app's own windows (no Screen Recording grant needed). Dev-only.
-    private func capture(_ window: NSWindow, as name: String) {
-        window.makeKeyAndOrderFront(nil)
-        _ = NSApp.perform(NSSelectorFromString("activateIgnoringOtherApps:"), with: true as NSNumber)
+    private func capture(_ window: NSWindow, as name: String) async {
+        // Activation is cooperative and can lag; wait (briefly) for the window to be key so it
+        // renders in its active state (coloured controls, prominent buttons).
+        for _ in 0..<20 where !window.isKeyWindow || !NSApp.isActive {
+            window.makeKeyAndOrderFront(nil)
+            _ = NSApp.perform(NSSelectorFromString("activateIgnoringOtherApps:"), with: true as NSNumber)
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         window.displayIfNeeded()
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return }
         let create = unsafeBitCast(symbol, to: CreateImage.self)
@@ -207,10 +220,11 @@ private struct PillShowcase: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 0.16, green: 0.42, blue: 0.55), Color(red: 0.55, green: 0.47, blue: 0.75),
-                                    Color(red: 0.95, green: 0.62, blue: 0.48)],
+            // A quiet, wallpaper-like backdrop: cool slate with a soft sage glow.
+            LinearGradient(colors: [Color(red: 0.36, green: 0.42, blue: 0.47), Color(red: 0.58, green: 0.63, blue: 0.66),
+                                    Color(red: 0.80, green: 0.82, blue: 0.80)],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
-            Circle().fill(.white.opacity(0.25)).frame(width: 420).blur(radius: 80).offset(x: -220, y: -120)
+            Circle().fill(Color(red: 0.55, green: 0.75, blue: 0.64).opacity(0.35)).frame(width: 420).blur(radius: 90).offset(x: -220, y: -120)
             VStack(spacing: 18) {
                 ForEach(Array(controllers.enumerated()), id: \.offset) { _, c in
                     PillView(dictation: c, shortcut: shortcut).frame(width: 520, height: 76)
