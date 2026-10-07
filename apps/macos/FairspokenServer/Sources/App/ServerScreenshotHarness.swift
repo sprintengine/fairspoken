@@ -50,6 +50,20 @@ final class ServerScreenshotHarness {
                     await freshFrame()
                     if let window = delegate.mainWindow { capture(window, as: "\(section.rawValue)-\(name)") }
                 }
+                // Connect again as "This Mac only" on a Mac without Tailscale.
+                controller.presentSampleAccess(tailnet: false)
+                delegate.showWindow(.connect)
+                try? await Task.sleep(for: .milliseconds(1200))
+                await freshFrame()
+                if let window = delegate.mainWindow { capture(window, as: "connect-this-mac-\(name)") }
+                controller.presentSampleAccess(tailnet: true)
+                // Configuration with Advanced open, scrolled to it.
+                controller.revealAdvanced = true
+                delegate.showWindow(.configuration)
+                await freshFrame()
+                try? await Task.sleep(for: .milliseconds(900))
+                if let window = delegate.mainWindow { capture(window, as: "configuration-advanced-\(name)") }
+                controller.revealAdvanced = false
             }
             NSApp.terminate(nil)
         }
