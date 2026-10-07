@@ -30,6 +30,13 @@ pub struct RemoteTranscriptionResponse {
     pub backend: String,
     pub model: String,
     pub server_version: Option<String>,
+    /// `used | shed | unavailable | off`, present when the request asked
+    /// for super mode (`x-fairspoken-super-mode`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub super_mode: Option<String>,
+    /// The Whisper model a host paired with the primary when super mode ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_model: Option<String>,
 }
 
 /// The remote endpoint a session talks to, resolved from the transcription
@@ -533,7 +540,17 @@ fn transcription_headers(settings: &Settings, target: &RemoteTarget) -> Result<H
                 .map_err(|err| format!("Invalid vocabulary hints header: {err}"))?,
         );
     }
+    if wants_host_super_mode(settings) {
+        headers.insert("x-fairspoken-super-mode", HeaderValue::from_static("1"));
+    }
     Ok(headers)
+}
+
+/// Super mode on a remote host costs this device nothing, so `auto` asks
+/// too and the host sheds it when busy. Fairspoken Cloud has no super mode.
+fn wants_host_super_mode(settings: &Settings) -> bool {
+    settings.transcription_location == crate::settings::TranscriptionLocation::RemoteHost
+        && settings.super_mode != crate::settings::SuperModeSetting::Off
 }
 
 fn percent_encode(input: &str) -> String {
@@ -698,6 +715,39 @@ mod tests {
         // 100.0.0.0/8 outside the CGNAT /10 is public address space.
         assert!(validate_remote_base_url("http://100.128.0.1:48173").is_err());
         assert!(validate_remote_base_url("http://evil.ts.net.example.com:48173").is_err());
+    }
+
+    #[test]
+    fn super_mode_header_goes_only_to_a_remote_host_when_asked_for() {
+        let host = |mode| Settings {
+            transcription_location: TranscriptionLocation::RemoteHost,
+            remote_url: "https://host.example.com".to_string(),
+            super_mode: mode,
+            ..Settings::default()
+        };
+        let header = |settings: &Settings| {
+            let target = resolve_remote_target(settings).expect("remote host target");
+            super::transcription_headers(settings, &target)
+                .unwrap()
+                .get("x-fairspoken-super-mode")
+                .map(|value| value.to_str().unwrap().to_string())
+        };
+        assert_eq!(header(&host(crate::settings::SuperModeSetting::On)).as_deref(), Some("1"));
+        assert_eq!(header(&host(crate::settings::SuperModeSetting::Auto)).as_deref(), Some("1"));
+        assert_eq!(header(&host(crate::settings::SuperModeSetting::Off)), None);
+        let cloud = Settings {
+            transcription_location: TranscriptionLocation::Cloud,
+            super_mode: crate::settings::SuperModeSetting::On,
+            ..Settings::default()
+        };
+        assert!(!super::wants_host_super_mode(&cloud));
+
+        let old_host: super::RemoteTranscriptionResponse = serde_json::from_str(
+            r#"{"text":"hi","durationSeconds":1,"backend":"parakeet","model":"m","serverVersion":"0.1.0"}"#,
+        )
+        .unwrap();
+        assert_eq!(old_host.super_mode, None);
+        assert!(!serde_json::to_string(&old_host).unwrap().contains("superMode"));
     }
 
     #[test]

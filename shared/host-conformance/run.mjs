@@ -18,6 +18,7 @@ import clients from './checks/clients.mjs';
 import batch from './checks/batch.mjs';
 import stream from './checks/stream.mjs';
 import capacity from './checks/capacity.mjs';
+import superMode from './checks/super-mode.mjs';
 import download from './checks/download.mjs';
 import update from './checks/update.mjs';
 import audit from './checks/audit.mjs';
@@ -56,6 +57,7 @@ const CHECKS = [
   eventsStreamOrder,
   eventsBatch,
   ...capacity,
+  ...superMode,
   ...download,
   ...update,
   ...audit,

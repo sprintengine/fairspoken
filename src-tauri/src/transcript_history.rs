@@ -30,6 +30,9 @@ pub struct TranscriptHistoryItem {
     /// dictations. Holds labels only, never a title or URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<FormatDecision>,
+    /// What super mode did, with its disagreements; absent when it was off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub super_mode: Option<crate::super_mode::SuperModeOutcome>,
 }
 
 /// Where the wait between releasing the key and seeing text went.
@@ -57,6 +60,7 @@ pub struct NewTranscriptHistoryItem {
     pub raw_text: Option<String>,
     pub timings: Option<DictationTimings>,
     pub format: Option<FormatDecision>,
+    pub super_mode: Option<crate::super_mode::SuperModeOutcome>,
 }
 
 pub struct TranscriptHistoryService {
@@ -103,6 +107,7 @@ impl TranscriptHistoryService {
             raw_text: item.raw_text.filter(|raw| !raw.trim().is_empty()),
             timings: item.timings,
             format: item.format,
+            super_mode: item.super_mode,
         };
         self.items.insert(0, stored.clone());
         self.items.truncate(MAX_TRANSCRIPTS);
@@ -229,6 +234,7 @@ mod tests {
             raw_text: None,
             timings: None,
             format: None,
+            super_mode: None,
         }
     }
 

@@ -1,8 +1,11 @@
 use crate::audio::{AudioFrame, Recording};
+use crate::ensemble::{EnergyProfile, Hypothesis, Word};
 use crate::models::{ModelService, SttModel};
 use crate::settings::Settings;
+use crate::super_mode::{SuperModeEngines, SuperModeOutcome};
 use parakeet_rs::{ParakeetTDT, Transcriber};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -73,6 +76,8 @@ const MIN_AVG_TOKEN_PROBABILITY: f32 = 0.12;
 /// Sentinel returned by the chunking worker when no audio was ever streamed, so
 /// the caller can fall back to a direct (whole-recording) transcription.
 const NO_STREAMED_AUDIO: &str = "No audio frames were streamed to the transcriber";
+/// What an engine answers for a chunk with nothing to transcribe.
+pub(crate) const NO_SPEECH: &str = "No speech was transcribed";
 
 /// A loaded speech-to-text engine that can transcribe a single block of PCM.
 /// Both Parakeet and (optionally) Whisper implement this so the chunked
@@ -93,12 +98,36 @@ pub trait ChunkTranscriber: Send + Sync {
         language: &str,
         initial_prompt: Option<&str>,
     ) -> Result<String, String>;
+    /// The same transcription word by word, with whatever confidences and
+    /// timings the engine reports; super mode merges two of these. `abort`
+    /// lets a caller that stopped waiting cut a long decode short.
+    fn transcribe_detailed(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        language: &str,
+        initial_prompt: Option<&str>,
+        _abort: Option<Arc<AtomicBool>>,
+    ) -> Result<Hypothesis, String> {
+        self.transcribe_pcm(samples, sample_rate, language, initial_prompt)
+            .map(|text| Hypothesis::from_text(&text))
+    }
+    /// The user has released the key: the chunks still to come are on the
+    /// critical path to the text appearing.
+    fn on_release(&self) {}
 }
 
 #[derive(Default)]
 pub struct TranscriptionService {
     active: ActiveEngine,
     session: Option<SessionHandle>,
+    /// Super mode's second engine when this app runs it locally.
+    secondary: ActiveEngine,
+    /// Engines a host worker lent the next session (`arm_super_mode`).
+    armed: Option<SuperModeEngines>,
+    /// The super mode result of the session in progress, then of the last one.
+    super_mode: Option<SuperModeOutcome>,
+    super_tally: Option<Arc<crate::super_mode::SessionTally>>,
 }
 
 pub struct TranscriptionSessionStart {
@@ -155,6 +184,7 @@ impl TranscriptionService {
             return Err("Transcription session already in progress".to_string());
         }
 
+        self.super_mode = None;
         self.active
             .ensure(settings.model, models, settings.use_gpu)?;
         Ok(None)
@@ -173,9 +203,18 @@ impl TranscriptionService {
 
         self.active
             .ensure(settings.model, models, settings.use_gpu)?;
+        let primary = self
+            .active
+            .transcriber
+            .clone()
+            .ok_or_else(|| "Transcription engine is unavailable".to_string())?;
+        let transcriber = match self.super_mode_engines(settings, models, &primary) {
+            Some(engines) => self.start_ensemble(engines, settings, trace.clone())?,
+            None => primary,
+        };
         let handle = self
             .active
-            .start_chunked_session(settings, preview_tx, trace)?;
+            .start_chunked_session(transcriber, settings, preview_tx, trace)?;
         let audio_tx = handle.audio_tx.clone();
         let cancel_handle = handle.cancel_handle();
         self.session = Some(handle);
@@ -210,7 +249,9 @@ impl TranscriptionService {
             self.cancel_session();
         }
         if let Some(handle) = self.session.take() {
-            match handle.finish() {
+            let result = handle.finish();
+            self.close_super_tally();
+            match result {
                 Ok(transcript) => return Ok(transcript),
                 Err(err) if err == NO_STREAMED_AUDIO => {}
                 Err(err) => return Err(err),
@@ -219,6 +260,25 @@ impl TranscriptionService {
 
         self.active
             .ensure(settings.model, models, settings.use_gpu)?;
+        // A whole recording (a host batch upload) with engines lent for it.
+        if let Some(engines) = self.armed.take() {
+            let model = engines.secondary_model.clone();
+            self.super_mode = Some(SuperModeOutcome::new(
+                crate::super_mode::SuperModeStatus::Used,
+                Some(model),
+                None,
+            ));
+            let ensemble = self.start_ensemble(engines, settings, None)?;
+            let result = ensemble.transcribe_pcm(
+                &recording.pcm_i16,
+                recording.sample_rate,
+                &settings.language,
+                None,
+            );
+            drop(ensemble);
+            self.close_super_tally();
+            return result;
+        }
         self.active.transcribe_recording(recording, settings)
     }
 
@@ -226,11 +286,101 @@ impl TranscriptionService {
         if let Some(handle) = self.session.take() {
             handle.cancel();
         }
+        self.super_tally = None;
     }
 
     pub fn unload(&mut self) {
         self.cancel_session();
         self.active = ActiveEngine::default();
+        self.secondary = ActiveEngine::default();
+        self.armed = None;
+    }
+
+    /// The loaded engine, for a host worker to lend to a super mode session
+    /// running on another worker. Engines are `Send + Sync`.
+    pub fn loaded_engine(&self) -> Option<Arc<dyn ChunkTranscriber>> {
+        self.active
+            .transcriber
+            .clone()
+            .filter(|engine| engine.ready().is_ok())
+    }
+
+    /// Runs the next session (or whole recording) in super mode on these
+    /// engines instead of deciding from the settings.
+    pub fn arm_super_mode(&mut self, engines: SuperModeEngines) {
+        self.armed = Some(engines);
+    }
+
+    /// What super mode did in the last session; `None` when it was not
+    /// considered at all. Also drops engines armed for a session that never
+    /// started.
+    pub fn take_super_mode_outcome(&mut self) -> Option<SuperModeOutcome> {
+        self.armed = None;
+        self.super_mode.take()
+    }
+
+    fn super_mode_engines(
+        &mut self,
+        settings: &Settings,
+        models: &ModelService,
+        primary: &Arc<dyn ChunkTranscriber>,
+    ) -> Option<SuperModeEngines> {
+        use crate::super_mode::{LocalDecision, SuperModeStatus};
+        self.super_tally = None;
+        if let Some(engines) = self.armed.take() {
+            self.super_mode = Some(SuperModeOutcome::new(
+                SuperModeStatus::Used,
+                Some(engines.secondary_model.clone()),
+                None,
+            ));
+            return Some(engines);
+        }
+        match crate::super_mode::local_decision(settings, models) {
+            LocalDecision::Off => {
+                self.super_mode = None;
+                None
+            }
+            LocalDecision::Skip(outcome) => {
+                self.super_mode = Some(outcome);
+                None
+            }
+            LocalDecision::Run(model) => {
+                let id = model.model_id().to_string();
+                if let Err(err) = self.secondary.ensure(model, models, settings.use_gpu) {
+                    self.super_mode = Some(SuperModeOutcome::new(
+                        SuperModeStatus::Unavailable,
+                        Some(id),
+                        Some(&err),
+                    ));
+                    return None;
+                }
+                let secondary = self.secondary.transcriber.clone()?;
+                self.super_mode = Some(SuperModeOutcome::new(SuperModeStatus::Used, Some(id.clone()), None));
+                Some(SuperModeEngines {
+                    primary: Arc::clone(primary),
+                    secondary,
+                    secondary_model: id,
+                })
+            }
+        }
+    }
+
+    fn start_ensemble(
+        &mut self,
+        engines: SuperModeEngines,
+        settings: &Settings,
+        trace: Option<crate::note_debug::Trace>,
+    ) -> Result<Arc<dyn ChunkTranscriber>, String> {
+        let tally = Arc::new(crate::super_mode::SessionTally::default());
+        self.super_tally = Some(Arc::clone(&tally));
+        let ensemble = crate::super_mode::EnsembleTranscriber::start(engines, settings, tally, trace)?;
+        Ok(Arc::new(ensemble))
+    }
+
+    fn close_super_tally(&mut self) {
+        if let (Some(tally), Some(outcome)) = (self.super_tally.take(), self.super_mode.as_mut()) {
+            outcome.absorb(&tally);
+        }
     }
 }
 
@@ -288,14 +438,11 @@ impl ActiveEngine {
 
     fn start_chunked_session(
         &self,
+        transcriber: Arc<dyn ChunkTranscriber>,
         settings: &Settings,
         preview_tx: Option<TranscriptionPreviewSender>,
         trace: Option<crate::note_debug::Trace>,
     ) -> Result<SessionHandle, String> {
-        let transcriber = self
-            .transcriber
-            .clone()
-            .ok_or_else(|| "Transcription engine is unavailable".to_string())?;
         let initial_prompt = if settings.model.is_whisper() {
             settings.whisper_initial_prompt()
         } else {
@@ -389,6 +536,17 @@ impl ChunkTranscriber for LazyTranscriber {
         self.get()?
             .transcribe_pcm(samples, sample_rate, language, initial_prompt)
     }
+    fn transcribe_detailed(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        language: &str,
+        initial_prompt: Option<&str>,
+        abort: Option<Arc<AtomicBool>>,
+    ) -> Result<Hypothesis, String> {
+        self.get()?
+            .transcribe_detailed(samples, sample_rate, language, initial_prompt, abort)
+    }
 }
 
 /// The default (and only, in a default build) engine: NVIDIA Parakeet TDT run
@@ -410,6 +568,33 @@ impl ParakeetTranscriber {
     }
 }
 
+impl ParakeetTranscriber {
+    fn transcribe_tokens(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+    ) -> Result<parakeet_rs::TranscriptionResult, String> {
+        if samples.is_empty() {
+            return Err("No audio samples were captured".to_string());
+        }
+        if !contains_probable_speech(samples, sample_rate) {
+            return Err(NO_SPEECH.to_string());
+        }
+
+        // Parakeet expects 16 kHz mono f32; resample to match before handing
+        // it the block. Token mode (the default) keeps the text exactly as
+        // decoded; its per-token times come for free.
+        let audio = resample_i16_to_16khz_f32(samples, sample_rate);
+        let mut model = self
+            .model
+            .lock()
+            .map_err(|_| "Parakeet model lock was poisoned".to_string())?;
+        model
+            .transcribe_samples(audio, 16_000, 1, None)
+            .map_err(|err| format!("Parakeet transcription failed: {err}"))
+    }
+}
+
 impl ChunkTranscriber for ParakeetTranscriber {
     fn transcribe_pcm(
         &self,
@@ -418,29 +603,62 @@ impl ChunkTranscriber for ParakeetTranscriber {
         _language: &str,
         _initial_prompt: Option<&str>,
     ) -> Result<String, String> {
-        if samples.is_empty() {
-            return Err("No audio samples were captured".to_string());
-        }
-        if !contains_probable_speech(samples, sample_rate) {
-            return Err("No speech was transcribed".to_string());
-        }
-
-        // Parakeet expects 16 kHz mono f32; resample to match before handing
-        // it the block. No timestamps are requested.
-        let audio = resample_i16_to_16khz_f32(samples, sample_rate);
-        let mut model = self
-            .model
-            .lock()
-            .map_err(|_| "Parakeet model lock was poisoned".to_string())?;
-        let result = model
-            .transcribe_samples(audio, 16_000, 1, None)
-            .map_err(|err| format!("Parakeet transcription failed: {err}"))?;
+        let result = self.transcribe_tokens(samples, sample_rate)?;
         let transcript = result.text.trim().to_string();
         if transcript.is_empty() {
-            return Err("No speech was transcribed".to_string());
+            return Err(NO_SPEECH.to_string());
         }
         Ok(transcript)
     }
+
+    /// Words with timings and no confidences: parakeet-rs's greedy TDT
+    /// decoder discards the logits.
+    fn transcribe_detailed(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        _language: &str,
+        _initial_prompt: Option<&str>,
+        _abort: Option<Arc<AtomicBool>>,
+    ) -> Result<Hypothesis, String> {
+        let result = self.transcribe_tokens(samples, sample_rate)?;
+        let hypothesis = words_from_timed_tokens(
+            result
+                .tokens
+                .iter()
+                .map(|token| (token.text.as_str(), token.start, token.end)),
+        );
+        if hypothesis.is_empty() {
+            return Err(NO_SPEECH.to_string());
+        }
+        Ok(hypothesis)
+    }
+}
+
+/// Groups subword tokens into whitespace-separated words, each spanning its
+/// tokens' times. The words are exactly the decoded text's.
+fn words_from_timed_tokens<'a>(tokens: impl Iterator<Item = (&'a str, f32, f32)>) -> Hypothesis {
+    let mut words: Vec<Word> = Vec::new();
+    let mut open = false;
+    for (text, start, end) in tokens {
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                open = false;
+                continue;
+            }
+            if !open {
+                words.push(Word {
+                    start: Some(start),
+                    ..Word::default()
+                });
+                open = true;
+            }
+            let word = words.last_mut().expect("a word was just opened");
+            word.text.push(ch);
+            word.end = Some(end);
+        }
+    }
+    Hypothesis { words }
 }
 
 #[cfg(feature = "whisper")]
@@ -489,6 +707,24 @@ impl ChunkTranscriber for WhisperTranscriber {
             sample_rate,
             language,
             initial_prompt,
+        )
+    }
+
+    fn transcribe_detailed(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        language: &str,
+        initial_prompt: Option<&str>,
+        abort: Option<Arc<AtomicBool>>,
+    ) -> Result<Hypothesis, String> {
+        transcribe_whisper_detailed(
+            &self.context,
+            samples,
+            sample_rate,
+            language,
+            initial_prompt,
+            abort,
         )
     }
 }
@@ -603,6 +839,7 @@ fn run_chunked_session(
     trace: Option<crate::note_debug::Trace>,
 ) -> Result<String, String> {
     let chunk_seconds = usize::from(chunk_seconds.clamp(5, 60));
+    let release_hook = Arc::clone(&transcriber);
     let (job_tx, job_rx) = mpsc::channel::<WhisperChunkJob>();
     let (chunk_result_tx, chunk_result_rx) = mpsc::channel::<Result<ChunkResult, String>>();
     let worker = thread::Builder::new()
@@ -707,6 +944,7 @@ fn run_chunked_session(
         }
         collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
+    release_hook.on_release();
 
     for frame in audio_rx.try_iter() {
         if frame.pcm_i16.is_empty() {
@@ -1084,24 +1322,7 @@ fn transcribe_whisper_pcm(
         .create_state()
         .map_err(|err| format!("Failed to create Whisper state: {err}"))?;
     let audio = resample_i16_to_16khz_f32(samples, sample_rate);
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 0 });
-    params.set_n_threads(default_thread_count());
-    params.set_print_special(false);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-    params.set_no_context(true);
-    params.set_suppress_nst(false);
-    if let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
-        params.set_initial_prompt(initial_prompt);
-    }
-
-    if language == "auto" {
-        params.set_language(None);
-        params.set_detect_language(true);
-    } else {
-        params.set_language(Some(language));
-    }
+    let params = whisper_params(language, initial_prompt);
 
     state
         .full(params, &audio)
@@ -1120,6 +1341,140 @@ fn transcribe_whisper_pcm(
     }
 
     Ok(transcript)
+}
+
+#[cfg(feature = "whisper")]
+fn whisper_params<'a>(language: &'a str, initial_prompt: Option<&str>) -> FullParams<'a, 'a> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 0 });
+    params.set_n_threads(default_thread_count());
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_no_context(true);
+    params.set_suppress_nst(false);
+    if let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+        // whisper.cpp takes a C string; a NUL would panic the binding.
+        params.set_initial_prompt(&initial_prompt.replace('\0', " "));
+    }
+
+    if language == "auto" {
+        params.set_language(None);
+        params.set_detect_language(true);
+    } else {
+        params.set_language(Some(language));
+    }
+    params
+}
+
+/// Whisper's transcript word by word: each word's mean token probability
+/// and its token-level timings, from the same accepted segments as
+/// `transcribe_whisper_pcm`.
+#[cfg(feature = "whisper")]
+fn transcribe_whisper_detailed(
+    context: &WhisperContext,
+    samples: &[i16],
+    sample_rate: u32,
+    language: &str,
+    initial_prompt: Option<&str>,
+    abort: Option<Arc<AtomicBool>>,
+) -> Result<Hypothesis, String> {
+    if samples.is_empty() {
+        return Err("No audio samples were captured".to_string());
+    }
+    if !contains_probable_speech(samples, sample_rate) {
+        return Err(NO_SPEECH.to_string());
+    }
+    let mut state = context
+        .create_state()
+        .map_err(|err| format!("Failed to create Whisper state: {err}"))?;
+    let audio = resample_i16_to_16khz_f32(samples, sample_rate);
+    let mut params = whisper_params(language, initial_prompt);
+    params.set_token_timestamps(true);
+    // whisper-rs 0.16's `set_abort_callback_safe` hands whisper.cpp a pointer
+    // to a boxed trait object but reads it back as the closure type, so it
+    // aborts decodes at random. The raw callback reads our flag directly.
+    unsafe extern "C" fn abort_requested(flag: *mut std::ffi::c_void) -> bool {
+        // SAFETY: `flag` is the `AtomicBool` kept alive by `abort` below for
+        // as long as `state.full` runs.
+        unsafe { (*(flag as *const AtomicBool)).load(std::sync::atomic::Ordering::Relaxed) }
+    }
+    if let Some(abort) = &abort {
+        // SAFETY: the callback only reads the flag, which outlives the decode.
+        unsafe {
+            params.set_abort_callback(Some(abort_requested));
+            params.set_abort_callback_user_data(Arc::as_ptr(abort) as *mut std::ffi::c_void);
+        }
+    }
+    let decoded = state.full(params, &audio);
+    drop(abort);
+    decoded.map_err(|err| format!("Whisper transcription failed: {err}"))?;
+
+    /// A word while its tokens arrive; bytes because a multibyte character
+    /// can be split across tokens.
+    struct PendingWord {
+        bytes: Vec<u8>,
+        probabilities: Vec<f32>,
+        start: Option<f32>,
+        end: Option<f32>,
+    }
+    let end_of_text = context.token_eot();
+    let mut words: Vec<PendingWord> = Vec::new();
+    for segment in state.as_iter() {
+        if accepted_segment_text(&segment).is_none() {
+            continue;
+        }
+        for index in 0..segment.n_tokens() {
+            let Some(token) = segment.get_token(index) else {
+                continue;
+            };
+            // Special tokens (timestamps, start/end markers) sort after EOT.
+            if token.token_id() >= end_of_text {
+                continue;
+            }
+            let Ok(bytes) = token.to_bytes() else {
+                continue;
+            };
+            let data = token.token_data();
+            let time = |centiseconds: i64| (centiseconds >= 0).then(|| centiseconds as f32 / 100.0);
+            let probability = token.token_probability();
+            let starts_word = bytes.first().is_some_and(u8::is_ascii_whitespace) || words.is_empty();
+            let text = bytes.trim_ascii();
+            if text.is_empty() {
+                continue;
+            }
+            if starts_word {
+                words.push(PendingWord {
+                    bytes: Vec::new(),
+                    probabilities: Vec::new(),
+                    start: time(data.t0),
+                    end: None,
+                });
+            }
+            let word = words.last_mut().expect("a word was just opened");
+            word.bytes.extend_from_slice(text);
+            if probability.is_finite() {
+                word.probabilities.push(probability);
+            }
+            word.end = time(data.t1);
+        }
+    }
+    let words: Vec<Word> = words
+        .into_iter()
+        .map(|word| Word {
+            text: String::from_utf8_lossy(&word.bytes).into_owned(),
+            confidence: (!word.probabilities.is_empty()).then(|| {
+                word.probabilities.iter().sum::<f32>() / word.probabilities.len() as f32
+            }),
+            start: word.start,
+            end: word.end,
+        })
+        .filter(|word| !word.text.is_empty())
+        .collect();
+    if words.is_empty() {
+        return Err(NO_SPEECH.to_string());
+    }
+    Ok(Hypothesis { words })
 }
 
 #[cfg(feature = "whisper")]
@@ -1377,6 +1732,22 @@ fn audio_activity_stats(samples: &[i16], sample_rate: u32) -> AudioActivityStats
         peak,
         rms,
         active_speech_ms: active_windows * SPEECH_WINDOW_MS,
+    }
+}
+
+/// Which 30 ms windows of a chunk carry speech-level energy, with the same
+/// thresholds the chunker cuts on.
+pub(crate) fn speech_activity_profile(samples: &[i16], sample_rate: u32) -> EnergyProfile {
+    let window_samples = (sample_rate as usize * SPEECH_WINDOW_MS / 1000).max(1);
+    EnergyProfile {
+        window_seconds: window_samples as f32 / sample_rate.max(1) as f32,
+        active: samples
+            .chunks(window_samples)
+            .map(|window| {
+                let (peak, rms) = peak_and_rms(window);
+                peak >= SPEECH_WINDOW_PEAK_THRESHOLD || rms >= SPEECH_WINDOW_RMS_THRESHOLD
+            })
+            .collect(),
     }
 }
 
@@ -2127,6 +2498,17 @@ mod tests {
         let samples = vec![30_i16; 48_000];
 
         assert!(!contains_probable_speech(&samples, 48_000));
+    }
+
+    #[test]
+    fn parakeet_tokens_group_into_the_decoded_words_with_their_times() {
+        let tokens = [(" De", 0.1, 0.2), ("ploy", 0.2, 0.4), (" it", 0.4, 0.5), (".", 0.5, 0.51), (" ", 0.6, 0.6), ("Now", 0.7, 0.9)];
+        let hypothesis = super::words_from_timed_tokens(tokens.into_iter());
+        assert_eq!(hypothesis.text(), "Deploy it. Now");
+        assert_eq!(hypothesis.words[0].start, Some(0.1));
+        assert_eq!(hypothesis.words[0].end, Some(0.4));
+        assert_eq!(hypothesis.words[1].end, Some(0.51));
+        assert!(hypothesis.words.iter().all(|w| w.confidence.is_none()));
     }
 
     #[test]

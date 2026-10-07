@@ -12,6 +12,7 @@ mod cursor_preview;
 mod edit_diff;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod edit_watch;
+mod ensemble;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod format_classifier;
 mod format_context;
@@ -42,6 +43,9 @@ mod remote_transcription;
 mod settings;
 mod sounds;
 mod speed_test;
+mod super_mode;
+#[cfg(test)]
+mod super_mode_eval;
 mod tailnet_discovery;
 mod training_capture;
 mod transcript_cleanup;
@@ -1531,7 +1535,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         s.full_text(cursor_session, &raw_transcript, false, false)
     });
     if let Some(trace) = &trace {
-        trace.event("full-transcription", serde_json::json!({"text":raw_transcript,"droppedStreamFrames":stats.dropped_stream_frames,"backend":raw_transcription.backend}));
+        trace.event("full-transcription", serde_json::json!({"text":raw_transcript,"droppedStreamFrames":stats.dropped_stream_frames,"backend":raw_transcription.backend,"superMode":raw_transcription.super_mode}));
     }
 
     // AI polish sits between the raw transcript and the user's deterministic
@@ -1712,6 +1716,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .add(NewTranscriptHistoryItem {
             text: transcript.clone(),
             backend: raw_transcription.backend,
+            super_mode: raw_transcription.super_mode,
             location: location_id(settings.transcription_location).to_string(),
             duration_seconds: stats.duration_seconds,
             polished,
@@ -2151,6 +2156,7 @@ fn stop_and_validate_recording(
 struct RawTranscription {
     text: String,
     backend: String,
+    super_mode: Option<super_mode::SuperModeOutcome>,
 }
 
 /// Finish the active transcription session and return the raw transcript (no
@@ -2163,16 +2169,20 @@ fn finish_transcription_raw(
 ) -> Result<RawTranscription, String> {
     let raw_transcription = match settings.transcription_location {
         TranscriptionLocation::Local => {
-            let result = services
-                .transcription
-                .lock()
-                .map_err(|_| "Transcription service lock failed".to_string())?
-                .finish_session(recording, settings, &services.models);
+            let (result, super_mode) = {
+                let mut transcription = services
+                    .transcription
+                    .lock()
+                    .map_err(|_| "Transcription service lock failed".to_string())?;
+                let result = transcription.finish_session(recording, settings, &services.models);
+                (result, transcription.take_super_mode_outcome())
+            };
             clear_local_transcription_cancel(services)?;
             match result {
                 Ok(transcript) => RawTranscription {
                     text: transcript,
                     backend: remote_transcription::BACKEND_ID.to_string(),
+                    super_mode,
                 },
                 Err(_)
                     if services
@@ -2194,6 +2204,7 @@ fn finish_transcription_raw(
                 .ok_or_else(|| "No remote transcription session is active".to_string())?
                 .finish()?;
             RawTranscription {
+                super_mode: super_mode::outcome_from_response(&response),
                 text: response.text,
                 backend: response.backend,
             }

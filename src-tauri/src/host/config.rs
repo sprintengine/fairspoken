@@ -27,6 +27,7 @@ pub(super) struct HostRuntimeConfig {
     pub(super) max_recording_seconds: u16,
     pub(super) use_gpu: bool,
     pub(super) worker_models: Vec<SttModel>,
+    pub(super) super_mode: super::super_mode::SuperModePolicy,
 }
 
 impl HostRuntimeConfig {
@@ -58,6 +59,7 @@ impl HostRuntimeConfig {
             ),
             use_gpu: env_bool("FAIRSPOKEN_HOST_USE_GPU", true),
             worker_models,
+            super_mode: super::super_mode::SuperModePolicy::from_env()?,
         })
     }
 }
@@ -119,6 +121,10 @@ pub(super) struct PersistedHostConfig {
     /// Display name in `/v1/hello`; `FAIRSPOKEN_HOST_NAME` overrides it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) name: Option<String>,
+    /// `"allow"` or `"off"`; absent in files written before super mode, which
+    /// then keep the environment's value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) super_mode: Option<super::super_mode::SuperModePolicy>,
 }
 
 impl PersistedHostConfig {
@@ -134,6 +140,7 @@ impl PersistedHostConfig {
             token: None,
             pairing_password: None,
             name: None,
+            super_mode: None,
         }
     }
 }
@@ -186,6 +193,9 @@ pub(super) fn overlay_persisted_config(
         MAX_HOST_MAX_RECORDING_SECONDS,
     );
     config.use_gpu = persisted.use_gpu;
+    if let Some(policy) = persisted.super_mode {
+        config.super_mode = policy;
+    }
     if persisted.worker_models.len() == config.worker_count {
         config.worker_models = persisted.worker_models;
     } else if let Some(first) = persisted.worker_models.first().copied() {
@@ -224,6 +234,7 @@ pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<
             token: auth.saved_token,
             pairing_password: auth.saved_pairing_password,
             name: live.saved_name(),
+            super_mode: Some(live.super_mode),
         },
     )
 }
@@ -278,6 +289,8 @@ pub(super) struct HostLiveConfig {
     /// The display name in `/v1/hello`, and the config file's `name` (kept
     /// as found so a rewrite of the file doesn't drop or bake in a default).
     name: Mutex<(String, Option<String>)>,
+    /// Restart-only: whether clients may get super mode at all.
+    pub(super) super_mode: super::super_mode::SuperModePolicy,
 }
 
 impl HostLiveConfig {
@@ -290,6 +303,7 @@ impl HostLiveConfig {
             update_prefs: Mutex::new(UpdatePrefs::default()),
             auth: Mutex::new(HostAuth::default()),
             name: Mutex::new((String::new(), None)),
+            super_mode: config.super_mode,
         }
     }
 

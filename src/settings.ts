@@ -65,9 +65,13 @@ interface Settings {
   /** 30, 90, or 0 for "until deleted". */
   trainingRetentionDays: number;
   formatAiDetection: boolean;
+  superMode: SuperMode;
+  superModeModel: string;
 }
 
 type LocalPolishPrompt = "tagged" | "instructed" | "speakoflow";
+type SuperMode = "off" | "auto" | "on";
+const SUPER_MODE_MODELS = ["tiny", "base", "small", "large-v3-turbo"];
 
 interface ModelStatus {
   model: SttModel;
@@ -140,6 +144,8 @@ const DEFAULTS: Settings = {
   trainingCapture: false,
   trainingRetentionDays: 30,
   formatAiDetection: false,
+  superMode: "off",
+  superModeModel: "small",
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
@@ -169,6 +175,12 @@ const fnPushToTalk = required<HTMLInputElement>("fnPushToTalk");
 const fnPushToTalkRow = required<HTMLElement>("fnPushToTalkRow");
 const useGpu = required<HTMLInputElement>("useGpu");
 const useGpuRow = required<HTMLElement>("useGpuRow");
+const superModeSelect = required<HTMLSelectElement>("superModeSelect");
+const superModeRow = required<HTMLElement>("superModeRow");
+const superModeHelp = required<HTMLElement>("superModeHelp");
+const superModeHelpLocal = superModeHelp.textContent ?? "";
+const superModeModelSelect = required<HTMLSelectElement>("superModeModelSelect");
+const superModeModelRow = required<HTMLElement>("superModeModelRow");
 const inputMeter = required<HTMLElement>("inputMeter");
 const modelDownload = required<HTMLElement>("modelDownload");
 const modelField = required<HTMLElement>("modelField");
@@ -391,6 +403,10 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     accessibilityInsert: settings.accessibilityInsert ?? DEFAULTS.accessibilityInsert,
     fnPushToTalk: settings.fnPushToTalk ?? DEFAULTS.fnPushToTalk,
     useGpu: settings.useGpu ?? DEFAULTS.useGpu,
+    superMode: settings.superMode === "auto" || settings.superMode === "on" ? settings.superMode : "off",
+    superModeModel: settings.superModeModel && SUPER_MODE_MODELS.includes(settings.superModeModel)
+      ? settings.superModeModel
+      : DEFAULTS.superModeModel,
   };
 }
 
@@ -451,6 +467,8 @@ function applyToForm(settings: Settings): void {
   accessibilityInsert.checked = settings.accessibilityInsert;
   fnPushToTalk.checked = settings.fnPushToTalk;
   useGpu.checked = settings.useGpu;
+  superModeSelect.value = settings.superMode;
+  superModeModelSelect.value = settings.superModeModel;
   polishEnabled.checked = settings.polishEnabled;
   contextAwareness.checked = settings.contextAwareness;
   formatAiDetection.checked = settings.formatAiDetection;
@@ -530,6 +548,8 @@ function readFromForm(): Settings {
     recordingShortcut: recordingShortcutChip.dataset.shortcut ?? DEFAULTS.recordingShortcut,
     transcriptStackShortcut: transcriptStackShortcutChip.dataset.shortcut ?? DEFAULTS.transcriptStackShortcut,
     useGpu: useGpu.checked,
+    superMode: superModeSelect.value as SuperMode,
+    superModeModel: superModeModelSelect.value,
     insertAtCursor: insertAtCursor.checked,
     accessibilityInsert: accessibilityInsert.checked,
     fnPushToTalk: fnPushToTalk.checked,
@@ -865,6 +885,21 @@ function updateUseGpuUi(): void {
   const gpuCapableEngine = !modelSelect.value.startsWith("parakeet");
   useGpuRow.hidden = !local || !gpuCapableEngine;
   useGpu.disabled = !local || !gpuCapableEngine;
+  updateSuperModeUi();
+}
+
+// Super mode pairs Parakeet with Whisper. Locally the user picks the Whisper
+// model; a remote host pairs whatever its operator serves; Fairspoken Cloud
+// has no super mode.
+function updateSuperModeUi(): void {
+  const location = locationSeg.get();
+  const parakeet = modelSelect.value.startsWith("parakeet");
+  const local = location === "local";
+  superModeRow.hidden = location === "cloud" || (local && !parakeet);
+  superModeModelRow.hidden = !local || !parakeet || superModeSelect.value === "off";
+  superModeHelp.textContent = location === "remote-host"
+    ? "Asks your host to also run Whisper on the same audio and merge the two. The host runs it only when it serves both engines and has spare workers, and reports whether it did. Auto and On both ask."
+    : superModeHelpLocal;
 }
 
 function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
@@ -1292,6 +1327,11 @@ transcriptStackShortcutChip.addEventListener("click", () => {
   beginShortcutCapture(transcriptStackShortcutChip, "Copied messages");
 });
 useGpu.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+superModeSelect.addEventListener("change", () => {
+  updateSuperModeUi();
+  void persistSettings().catch(reportAsyncError);
+});
+superModeModelSelect.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 insertAtCursor.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 accessibilityInsert.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 fnPushToTalk.addEventListener("change", () => void persistSettings().catch(reportAsyncError));

@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod events;
 mod pairing;
+mod super_mode;
 mod update;
 
 use crate::audio::{AudioFrame, Recording};
@@ -400,7 +401,7 @@ fn handle_batch_transcription(
             return respond_error(request, StatusCode(413), &err);
         }
     };
-    let settings = match settings_from_headers(&request) {
+    let mut settings = match settings_from_headers(&request) {
         Ok(settings) => settings,
         Err(err) => return respond_error(request, StatusCode(400), &err),
     };
@@ -413,16 +414,18 @@ fn handle_batch_transcription(
         runtime.record_rejection(client.as_deref());
         return respond_error(request, StatusCode(413), &err);
     }
+    let super_request = runtime.request_super_mode(&request, &mut settings);
     let outcome = match runtime.transcribe(recording, settings, "batch", client) {
         Ok(outcome) => outcome,
         Err(HostRuntimeError::QueueFull(message)) => {
-            return respond_error(request, StatusCode(429), &message)
+            runtime.cancel_super_grant(super_request);
+            return respond_error(request, StatusCode(429), &message);
         }
         Err(HostRuntimeError::WorkerFailed(message)) => {
             return respond_error(request, StatusCode(500), &message)
         }
     };
-    let response = transcription_response(outcome, duration_seconds);
+    let response = transcription_response(outcome, duration_seconds, super_request);
     respond_json(
         request,
         StatusCode(200),
@@ -437,7 +440,7 @@ fn handle_stream_transcription(
 ) -> Result<(), String> {
     let client = client_ip(&request);
     runtime.record_client_request(client.as_deref());
-    let settings = match settings_from_headers(&request) {
+    let mut settings = match settings_from_headers(&request) {
         Ok(settings) => settings,
         Err(err) => return respond_error(request, StatusCode(400), &err),
     };
@@ -445,6 +448,8 @@ fn handle_stream_transcription(
         Ok(guard) => guard,
         Err(message) => return respond_error(request, StatusCode(429), &message),
     };
+    // Decided once per dictation, before any audio arrives.
+    let super_request = runtime.request_super_mode(&request, &mut settings);
     // Queue the job before reading the body so a worker starts decoding while
     // the client is still speaking.
     let (frame_tx, frame_rx) = mpsc::channel::<StreamInput>();
@@ -457,7 +462,8 @@ fn handle_stream_transcription(
     ) {
         Ok(result_rx) => result_rx,
         Err(HostRuntimeError::QueueFull(message)) => {
-            return respond_error(request, StatusCode(429), &message)
+            runtime.cancel_super_grant(super_request);
+            return respond_error(request, StatusCode(429), &message);
         }
         Err(HostRuntimeError::WorkerFailed(message)) => {
             return respond_error(request, StatusCode(500), &message)
@@ -493,7 +499,7 @@ fn handle_stream_transcription(
             return respond_error(request, StatusCode(500), &message)
         }
     };
-    let response = transcription_response(outcome, duration_seconds);
+    let response = transcription_response(outcome, duration_seconds, super_request);
     respond_json(
         request,
         StatusCode(200),
@@ -826,6 +832,8 @@ struct TranscriptionOutcome {
     text: String,
     backend: String,
     model: String,
+    /// Set for a job granted super mode.
+    super_mode: Option<crate::super_mode::SuperModeOutcome>,
 }
 
 #[derive(Debug)]
@@ -1112,6 +1120,21 @@ fn run_host_worker(
             }
         }
 
+        // Super mode: publish the warm engine so another worker can borrow
+        // it, and take no jobs while it is lent out.
+        let own_engine = (loaded == Some(target))
+            .then(|| transcription.loaded_engine())
+            .flatten()
+            .map(|engine| (assigned_model, engine));
+        if let Ok(mut metrics) = metrics.lock() {
+            metrics.register_engine(worker_index, own_engine.clone());
+            if metrics.worker_lent(worker_index) {
+                drop(metrics);
+                thread::sleep(super_mode::LENT_POLL);
+                continue;
+            }
+        }
+
         let job = {
             let receiver = match job_rx.lock() {
                 Ok(receiver) => receiver,
@@ -1137,11 +1160,15 @@ fn run_host_worker(
         // The worker's assigned model serves every job it takes; the client's
         // requested model (if any header survived) is deliberately ignored.
         let model = assigned_model.model_id().to_string();
-        let settings = Settings {
+        let mut settings = Settings {
             model: assigned_model,
             use_gpu: target.1,
             ..job.settings
         };
+        // A super mode grant rides in the job's settings (see
+        // `request_super_mode`); the worker arms it with a borrowed partner.
+        let super_job = std::mem::replace(&mut settings.super_mode, crate::settings::SuperModeSetting::Off)
+            != crate::settings::SuperModeSetting::Off;
         let source = job.source;
         let client = job.client.clone();
         let needs_load = loaded != Some(target);
@@ -1159,6 +1186,16 @@ fn run_host_worker(
                     started_at: Instant::now(),
                 },
             );
+        }
+
+        let super_lease = if super_job {
+            super_mode::lend_partner(&metrics, worker_index, own_engine)
+        } else {
+            None
+        };
+        let (super_lease, super_engines) = super_lease.unzip();
+        if let Some(engines) = super_engines {
+            transcription.arm_super_mode(engines);
         }
 
         let mut started = Instant::now();
@@ -1224,10 +1261,20 @@ fn run_host_worker(
             }
         }
 
+        let super_end = super_job.then(|| {
+            super_mode::finish_super_job(&metrics, super_lease, transcription.take_super_mode_outcome())
+        });
+        // With super mode used the response names the Parakeet side, even
+        // when the Whisper worker served the job.
+        let (backend, model) = match super_end.as_ref().and_then(|end| end.primary_model) {
+            Some(primary) => (job_backend(primary).to_string(), primary.model_id().to_string()),
+            None => (backend.clone(), model.clone()),
+        };
         let outcome = result.map(|text| TranscriptionOutcome {
             text,
-            backend: backend.clone(),
-            model: model.clone(),
+            backend,
+            model,
+            super_mode: super_end.map(|end| end.outcome),
         });
         if job.result_tx.send(outcome).is_err() {
             eprintln!(
@@ -1241,13 +1288,18 @@ fn run_host_worker(
 fn transcription_response(
     outcome: TranscriptionOutcome,
     duration_seconds: f32,
+    super_request: super_mode::SuperModeRequest,
 ) -> RemoteTranscriptionResponse {
+    let (super_mode, secondary_model) =
+        super_mode::response_fields(super_request, outcome.super_mode.as_ref());
     RemoteTranscriptionResponse {
         text: outcome.text,
         duration_seconds,
         backend: outcome.backend,
         model: outcome.model,
         server_version: Some(SERVER_VERSION.to_string()),
+        super_mode,
+        secondary_model,
     }
 }
 
@@ -1697,6 +1749,7 @@ struct HostMetrics {
     clients: HashMap<String, ClientStats>,
     model_download: Option<ModelDownloadState>,
     events: Arc<EventHub>,
+    super_mode: super_mode::SuperModeState,
 }
 
 /// Progress of an operator-initiated model download, published through
@@ -1740,6 +1793,7 @@ impl HostMetrics {
             clients: HashMap::new(),
             model_download: None,
             events: Arc::new(EventHub::default()),
+            super_mode: super_mode::SuperModeState::new(config.worker_count),
         }
     }
 
@@ -2175,6 +2229,7 @@ impl HostMetrics {
             streams,
             clients,
             recent: self.recent.iter().collect(),
+            super_mode: self.super_mode_stats(live.super_mode),
         }
     }
 }
@@ -2292,6 +2347,7 @@ struct StatsSnapshot<'a> {
     streams: Vec<StreamSnapshot>,
     clients: Vec<ClientSnapshot>,
     recent: Vec<&'a TranscriptionRecord>,
+    super_mode: super_mode::SuperModeStats,
 }
 
 #[cfg(test)]
@@ -2337,6 +2393,7 @@ mod tests {
             max_recording_seconds: 10,
             use_gpu: true,
             worker_models: vec![SttModel::Parakeet],
+            super_mode: super::super_mode::SuperModePolicy::Allow,
         }
     }
 
@@ -2364,6 +2421,7 @@ mod tests {
             text: text.to_string(),
             backend: "whisper".to_string(),
             model: "base".to_string(),
+            super_mode: None,
         }
     }
 
@@ -2529,6 +2587,7 @@ mod tests {
                 text: "transcript".to_string(),
                 backend: "whisper".to_string(),
                 model: "large-v3-turbo".to_string(),
+                super_mode: None,
             }))
             .expect("send result");
 
@@ -2680,6 +2739,7 @@ mod tests {
             max_recording_seconds: 120,
             use_gpu: true,
             worker_models: vec![SttModel::Parakeet, SttModel::Parakeet],
+            ..test_config()
         };
         let live = HostLiveConfig::new(&config);
         let models = ModelService::default();
@@ -3126,6 +3186,7 @@ mod tests {
                 token: None,
                 pairing_password: None,
                 name: None,
+                super_mode: None,
             },
         );
         assert_eq!(config.max_active_streams, 32);

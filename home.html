@@ -612,6 +612,33 @@
                     <input id="useGpu" class="switch" type="checkbox" role="switch" />
                   </div>
                 </div>
+<div class="row" id="superModeRow">
+                  <div class="row-text">
+                    <label class="row-label" for="superModeSelect">Super mode</label>
+                    <div class="row-help" id="superModeHelp">Also runs a Whisper model on the same audio and keeps Parakeet's text except where Whisper spells one of your dictionary terms. That is roughly twice the speech work and the Whisper model's memory on top of Parakeet's, so expect more battery drain. Auto runs it only on mains power. Install the Whisper model in Models first.</div>
+                  </div>
+                  <div class="row-control">
+                    <select id="superModeSelect" class="setting-select w-sm">
+                      <option value="off">Off</option>
+                      <option value="auto">Auto</option>
+                      <option value="on">On</option>
+                    </select>
+                  </div>
+                </div>
+<div class="row" id="superModeModelRow">
+                  <div class="row-text">
+                    <label class="row-label" for="superModeModelSelect">Super mode Whisper model</label>
+                    <div class="row-help">Extra memory while dictating: Tiny about 0.2 GB, Base about 0.3 GB, Small about 0.8 GB, Large v3 Turbo about 2 GB.</div>
+                  </div>
+                  <div class="row-control">
+                    <select id="superModeModelSelect" class="setting-select w-md">
+                      <option value="tiny">Whisper Tiny</option>
+                      <option value="base">Whisper Base</option>
+                      <option value="small">Whisper Small</option>
+                      <option value="large-v3-turbo">Whisper Large v3 Turbo</option>
+                    </select>
+                  </div>
+                </div>
 </div></section>
 <section class="settings-section" aria-labelledby="outputTitle"><h2 id="outputTitle">Output</h2><div class="settings-card">
 <div class="row" id="insertAtCursorRow">

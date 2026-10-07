@@ -1,4 +1,4 @@
-use crate::models::SttModel;
+use crate::models::{SttModel, WhisperModel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -35,6 +35,21 @@ pub fn cloud_url() -> Option<String> {
     crate::app_dirs::env_var("FAIRSPOKEN_CLOUD_URL")
         .and_then(|url| normalize(&url))
         .or_else(|| BUILD_CLOUD_URL.and_then(normalize))
+}
+
+/// Super mode runs Whisper next to Parakeet on the same audio and merges the
+/// two (`super_mode.rs`). `Auto` runs it only on mains power.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuperModeSetting {
+    #[default]
+    Off,
+    Auto,
+    On,
+}
+
+fn default_super_mode_model() -> WhisperModel {
+    WhisperModel::Small
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -195,6 +210,14 @@ pub struct Settings {
     /// title, site host and field labels to that provider.
     #[serde(default)]
     pub format_ai_detection: bool,
+    /// Run a second engine (Whisper) on the same audio and merge the results.
+    /// Locally `auto` means only on mains power; with a remote host the host
+    /// decides by its own capacity.
+    #[serde(default)]
+    pub super_mode: SuperModeSetting,
+    /// The Whisper model super mode pairs with Parakeet.
+    #[serde(default = "default_super_mode_model")]
+    pub super_mode_model: WhisperModel,
 }
 
 /// Who wrote a dictionary entry. Learned entries come from the edit watcher
@@ -299,6 +322,8 @@ impl Default for Settings {
             training_capture: false,
             training_retention_days: default_training_retention_days(),
             format_ai_detection: false,
+            super_mode: SuperModeSetting::Off,
+            super_mode_model: default_super_mode_model(),
         }
     }
 }
@@ -383,6 +408,9 @@ impl Settings {
         self.transcription_location != next.transcription_location
             || self.model != next.model
             || self.use_gpu != next.use_gpu
+            // Frees the second engine's memory when super mode changes.
+            || self.super_mode != next.super_mode
+            || self.super_mode_model != next.super_mode_model
     }
 
     /// A session-scoped copy of these settings with screen-harvested terms
@@ -411,7 +439,9 @@ impl Settings {
         }
     }
 
-    pub fn whisper_initial_prompt(&self) -> Option<String> {
+    /// The user's dictionary: vocabulary hints, then the targets of enabled
+    /// corrections, deduplicated and capped.
+    pub fn dictionary_terms(&self) -> Vec<String> {
         let mut terms = self.vocabulary_hints.clone();
         terms.extend(
             self.transcript_corrections
@@ -422,12 +452,13 @@ impl Settings {
                     (!term.is_empty()).then(|| term.to_string())
                 }),
         );
-        // The user's terms first, then the enabled packs' always-on terms,
-        // inside the budget Whisper actually keeps.
-        crate::vocabulary_packs::whisper_prompt(
-            &normalize_vocabulary_hints(terms),
-            &self.enabled_packs,
-        )
+        normalize_vocabulary_hints(terms)
+    }
+
+    /// The user's terms first, then the enabled packs' always-on terms,
+    /// inside the budget Whisper actually keeps.
+    pub fn whisper_initial_prompt(&self) -> Option<String> {
+        crate::vocabulary_packs::whisper_prompt(&self.dictionary_terms(), &self.enabled_packs)
     }
 }
 

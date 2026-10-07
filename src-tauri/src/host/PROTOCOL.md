@@ -148,6 +148,8 @@ Request headers: `x-fairspoken-language` (default `en`),
 `x-fairspoken-vocabulary-hints` (percent-encoded JSON string array),
 `x-fairspoken-backend` (`parakeet`/`whisper`; anything else is `400`).
 `x-fairspoken-model` and `x-fairspoken-client` are accepted and ignored.
+`x-fairspoken-super-mode: 1` asks for super mode on this request and on
+`/v1/transcriptions/stream` (see [Super mode](#super-mode-optional)).
 
 Status: `413` over the size/duration limit, `429` queue or stream capacity
 reached, `500` worker failure.
@@ -342,3 +344,68 @@ a 256-frame buffer; one that falls further behind is disconnected (never
 blocking transcription) and should reconnect to resync from a new snapshot.
 A vanished client is detected at the next failed write (at worst one
 heartbeat later), which frees its slot.
+
+## Super mode (optional)
+
+Super mode runs two engines on the same dictation, Parakeet and Whisper,
+and merges their transcripts: Parakeet's text stands except where Whisper
+spells one of the request's vocabulary hints that Parakeet only sounds
+like. A host that does not implement it ignores the header and never sends
+the fields below; clients must treat their absence as `off`.
+
+**Request.** `x-fairspoken-super-mode: 1` (also `true`; `0`/`false` or
+absent means not asked) on `POST /v1/transcriptions` or
+`POST /v1/transcriptions/stream`. The host decides once, when the request
+arrives (for a stream: before its first frame is read), and never changes
+the decision during the dictation.
+
+**Response.** When, and only when, the request carried the header, the
+response JSON gains:
+
+| Field | Value |
+| --- | --- |
+| `superMode` | `"used"` both engines ran and were merged · `"shed"` skipped for capacity · `"unavailable"` the host lacks a loaded Parakeet or Whisper engine · `"off"` the operator turned super mode off |
+| `secondaryModel` | Only with `"used"`: the model id of the Whisper side. |
+
+With `"used"`, `backend` and `model` name the Parakeet side of the pair
+(whichever worker served the job) and `secondaryModel` the Whisper side;
+otherwise they name the serving worker's engine and model as usual.
+Shedding is never an error: the dictation is transcribed by one engine
+as usual and answers `200`.
+
+**Decision rule.** The host grants super mode only when all hold:
+
+1. the operator allows it (`superMode: "allow"`, the default);
+2. some worker has a Parakeet engine loaded and some worker a Whisper
+   engine loaded;
+3. the job queue is empty;
+4. free workers (idle, model loaded, not lent) ≥ 2 × the dictations that
+   want super mode right now (this one plus those granted but not yet
+   started), with at least one free worker of each engine.
+
+Otherwise the answer is `"unavailable"` (2 fails) or `"shed"` (3 or 4
+fail). A granted job is taken by any free worker, which then borrows an
+idle worker serving the other engine for the length of the dictation; if
+none is free by then the job runs on one engine and answers `"shed"`. A
+lent worker takes no queued jobs. Lending does not appear in
+`/v1/events` (the dictation is one job on its serving worker).
+
+**Stats.** `/v1/stats` (and the events `snapshot`) gains:
+
+```jsonc
+"superMode": {
+  "policy": "allow",       // allow | off
+  "available": true,       // a Parakeet and a Whisper engine are loaded
+  "used": 12,              // dictations merged from both engines
+  "shed": 3,               // asked for but skipped for capacity
+  "unavailable": 0,        // asked for while an engine was missing
+  "lentWorkers": [1]       // workers lent to another worker's job right now
+}
+```
+
+**Configuration.** Host config file key `superMode`: `"allow"` (default)
+or `"off"`; environment `FAIRSPOKEN_HOST_SUPER_MODE` (`allow`/`off`, legacy
+`MULTIVOICE_HOST_SUPER_MODE`) seeds it. Restart-only; it is not part of
+`POST /v1/config`. To serve super mode, run at least two workers with both
+engines, e.g. `FAIRSPOKEN_HOST_WORKERS=2
+FAIRSPOKEN_HOST_MODEL=parakeet-tdt-0.6b-v3,base`.
