@@ -9,43 +9,34 @@ struct ActivityView: View {
     @Environment(ServerController.self) private var controller
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                PageHeader(title: "Activity", subtitle: subtitle)
-                NoticeBanner()
-                if controller.source == .live && !controller.runState.isRunning {
-                    NotServingBanner()
-                }
-                MetricsRow(live: controller.live, stats: controller.stats)
-                SurfaceCard(padding: 0) {
-                    ZStack {
-                        RuledBackground().clipShape(.rect(cornerRadius: 18))
-                        HostGraphView(live: controller.live, animator: controller.animator, accelerated: controller.stats.useGpu || controller.source == .demo)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 18)
-                    }
-                    .frame(height: 560)
-                }
-                HStack(alignment: .top, spacing: 16) {
-                    LatencyCard(live: controller.live).frame(maxWidth: .infinity)
-                    RecentJobsCard(records: controller.stats.recent).frame(width: 470)
-                }
-                .fixedSize(horizontal: false, vertical: true)
+        CrystalPage {
+            PageHeader(title: "Activity", subtitle: subtitle)
+            NoticeBanner()
+            if controller.source == .live && !controller.runState.isRunning {
+                NotServingBanner()
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 22)
+            MetricsRow(live: controller.live, stats: controller.stats)
+            SurfaceCard(padding: 0) {
+                HostGraphView(live: controller.live, animator: controller.animator, accelerated: controller.stats.useGpu || controller.source == .demo)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 18)
+                    .frame(height: 540)
+            }
+            HStack(alignment: .top, spacing: 16) {
+                LatencyCard(live: controller.live).frame(maxWidth: .infinity)
+                RecentJobsCard(records: controller.stats.recent).frame(width: 460)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
     }
 
     private var subtitle: String {
-        if controller.source == .demo { return "Demo · a simulated practice server · nothing here is real traffic" }
+        if controller.source == .demo { return "Demo data, simulated traffic" }
         let s = controller.stats
-        var parts = [controller.addresses.localHostName ?? "This Mac"]
+        var parts = [controller.hostName]
         if !s.serverVersion.isEmpty { parts.append("v\(s.serverVersion)") }
         if controller.runState.isRunning {
             parts.append("up \(ServerFormat.duration(controller.live.estimatedUptime(now: Date().timeIntervalSince1970 * 1000)))")
-            parts.append("\(s.workerCount) worker\(s.workerCount == 1 ? "" : "s")")
         }
         return parts.joined(separator: " · ")
     }
@@ -56,48 +47,57 @@ private struct NotServingBanner: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "pause.circle.fill").font(.title2).foregroundStyle(Color.fsGorseText)
-            VStack(alignment: .leading, spacing: 2) {
-                if case .failed(let message) = controller.runState {
-                    Text("The server isn't running").font(.callout.weight(.semibold))
-                    Text(message).font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("The server is stopped").font(.callout.weight(.semibold))
-                    Text("Clients can't connect until you start it. Switch to Demo to see what a busy server looks like.")
-                        .font(.caption).foregroundStyle(.secondary)
+            if case .failed(let message) = controller.runState {
+                Image(systemName: "exclamationmark.triangle.fill").font(.title3).foregroundStyle(Crystal.error)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Not serving").font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink)
+                    Text(message).font(.caption).foregroundStyle(Crystal.ink2).lineLimit(2)
                 }
+            } else {
+                Image(systemName: "pause.circle.fill").font(.title3).foregroundStyle(Crystal.warn)
+                Text("Stopped. Clients can't connect.").font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink)
             }
             Spacer()
-            Button("Start serving") { Task { await controller.start() } }.buttonStyle(.glass)
         }
         .padding(14)
-        .background(Color.fsGorse.opacity(0.14), in: .rect(cornerRadius: 14))
+        .crystalWell()
     }
 }
 
+/// The five counters, in one glass strip.
 struct MetricsRow: View {
     var live: HostLiveState
     var stats: HostStats
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let now = ctx.date.timeIntervalSince1970 * 1000
-            let m = live.metrics(now: now)
-            let longestWait = live.queue.map { now - $0.enqueuedAt }.max()
-            HStack(spacing: 14) {
-                MetricTile(title: "In flight", value: "\(m.running + m.queueDepth)", unit: "",
-                           footnote: "\(m.activeStreams) streaming · \(m.running) of \(live.workers.count) workers busy")
-                MetricTile(title: "Queue", value: "\(m.queueDepth)", unit: "/ \(max(live.queueCapacity, 0))",
-                           footnote: longestWait.map { "longest wait \(ServerFormat.ms($0))" } ?? "nothing waiting")
-                MetricTile(title: "Release → text, p50", value: m.latencyP50Ms.map { "\(Int($0.rounded()))" } ?? "–", unit: m.latencyP50Ms == nil ? "" : "ms",
-                           footnote: "p95 \(ServerFormat.ms(m.latencyP95Ms))")
-                MetricTile(title: "Throughput", value: String(format: "%.0f", m.jobsPerMinute), unit: "jobs/min",
-                           footnote: String(format: "%.1f min of audio per min", m.audioSecondsPerMinute / 60))
-                MetricTile(title: "Served", value: live.totalTranscriptions.formatted(), unit: "",
-                           footnote: "\(stats.failedJobs) failed · \(stats.rejectedJobs) turned away")
+        SurfaceCard(padding: 0) {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let now = ctx.date.timeIntervalSince1970 * 1000
+                let m = live.metrics(now: now)
+                let longestWait = live.queue.map { now - $0.enqueuedAt }.max()
+                HStack(spacing: 0) {
+                    MetricTile(title: "In flight", value: "\(m.running + m.queueDepth)", unit: "",
+                               footnote: "\(m.running) of \(live.workers.count) workers busy")
+                    divider
+                    MetricTile(title: "Queue", value: "\(m.queueDepth)", unit: "/ \(max(live.queueCapacity, 0))",
+                               footnote: longestWait.map { "longest \(ServerFormat.ms($0))" } ?? "nothing waiting")
+                    divider
+                    MetricTile(title: "Release → text", value: m.latencyP50Ms.map { "\(Int($0.rounded()))" } ?? "–", unit: m.latencyP50Ms == nil ? "" : "ms",
+                               footnote: "p50 · p95 \(ServerFormat.ms(m.latencyP95Ms))")
+                    divider
+                    MetricTile(title: "Throughput", value: String(format: "%.0f", m.jobsPerMinute), unit: "jobs/min",
+                               footnote: String(format: "%.1f min audio/min", m.audioSecondsPerMinute / 60))
+                    divider
+                    MetricTile(title: "Served", value: live.totalTranscriptions.formatted(), unit: "",
+                               footnote: "\(stats.failedJobs) failed · \(stats.rejectedJobs) turned away")
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(Crystal.hairline).frame(width: 1).padding(.vertical, 16)
     }
 }
 
@@ -108,63 +108,78 @@ struct MetricTile: View {
     var footnote: String
 
     var body: some View {
-        SurfaceCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(value).font(.mvNumber(30, weight: .semibold)).contentTransition(.numericText())
-                    if !unit.isEmpty { Text(unit).font(.callout).foregroundStyle(.secondary) }
-                }
-                Text(footnote).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.callout).foregroundStyle(Crystal.ink2).lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value).font(.mvNumber(28, weight: .semibold)).foregroundStyle(Crystal.ink).contentTransition(.numericText())
+                if !unit.isEmpty { Text(unit).font(.callout).foregroundStyle(Crystal.ink3) }
             }
+            Text(footnote).font(.caption).foregroundStyle(Crystal.ink3).lineLimit(1)
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 }
 
+/// Release → text over the last jobs: a graphite line, with the median as the one accent.
 struct LatencyCard: View {
     var live: HostLiveState
 
     var body: some View {
         let points = Array(live.completions.filter { !$0.failed }.suffix(60).enumerated())
         let m = live.metrics(now: Date().timeIntervalSince1970 * 1000)
-        SurfaceCard(padding: 20) {
+        SurfaceCard {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Release → text, last \(points.count) jobs").font(.headline)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Release → text").font(.headline).foregroundStyle(Crystal.ink)
+                    Text("last \(points.count) jobs").font(.callout).foregroundStyle(Crystal.ink3)
                     Spacer()
-                    HStack(spacing: 6) {
-                        StatusDot(color: .fsSuccess)
-                        Text("p50 \(ServerFormat.ms(m.latencyP50Ms)) · p95 \(ServerFormat.ms(m.latencyP95Ms))").font(.fsData(.caption))
+                    HStack(spacing: 10) {
+                        legend(Crystal.serverAccent, "p50 \(ServerFormat.ms(m.latencyP50Ms))")
+                        Text("p95 \(ServerFormat.ms(m.latencyP95Ms))").foregroundStyle(Crystal.ink2)
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color.primary.opacity(0.05), in: .capsule)
+                    .font(.fsData(.caption))
                 }
                 if points.isEmpty {
-                    Text("No finished jobs yet").font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 150)
+                    Text("No finished jobs yet").font(.callout).foregroundStyle(Crystal.ink3).frame(maxWidth: .infinity, minHeight: 150)
                 } else {
-                    Chart(points, id: \.offset) { i, c in
-                        AreaMark(x: .value("Job", i), y: .value("ms", c.latencyMs))
-                            .foregroundStyle(LinearGradient(colors: [Color.fsBlue.opacity(0.22), Color.fsBlue.opacity(0.0)], startPoint: .top, endPoint: .bottom))
-                            .interpolationMethod(.monotone)
-                        LineMark(x: .value("Job", i), y: .value("ms", c.latencyMs))
-                            .foregroundStyle(Color.fsBlue)
-                            .lineStyle(StrokeStyle(lineWidth: 2))
-                            .interpolationMethod(.monotone)
+                    Chart {
+                        ForEach(points, id: \.offset) { i, c in
+                            AreaMark(x: .value("Job", i), y: .value("ms", c.latencyMs))
+                                .foregroundStyle(LinearGradient(colors: [Crystal.ink2.opacity(0.16), Crystal.ink2.opacity(0)], startPoint: .top, endPoint: .bottom))
+                                .interpolationMethod(.monotone)
+                            LineMark(x: .value("Job", i), y: .value("ms", c.latencyMs))
+                                .foregroundStyle(Crystal.ink2)
+                                .lineStyle(StrokeStyle(lineWidth: 1.6))
+                                .interpolationMethod(.monotone)
+                        }
+                        if let p50 = m.latencyP50Ms {
+                            RuleMark(y: .value("p50", p50))
+                                .foregroundStyle(Crystal.serverAccent)
+                                .lineStyle(StrokeStyle(lineWidth: 1.4, dash: [4, 4]))
+                        }
                     }
                     .chartXAxis(.hidden)
                     .chartYAxis {
-                        AxisMarks(position: .leading) { v in
-                            AxisGridLine().foregroundStyle(Color.fsRuling.opacity(0.6))
-                            AxisValueLabel { if let ms = v.as(Double.self) { Text("\(Int(ms)) ms").font(.fsData(.caption2)) } }
+                        AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { v in
+                            AxisGridLine().foregroundStyle(Crystal.hairline)
+                            AxisValueLabel { if let ms = v.as(Double.self) { Text("\(Int(ms)) ms").font(.fsData(.caption2)).foregroundStyle(Crystal.ink3) } }
                         }
                     }
                     .frame(height: 150)
                     .accessibilityLabel("Release to text for recent jobs")
+                    .help("From the end of the upload to the transcript leaving the server, including any wait for a worker.")
                 }
-                Text("From the end of the upload to the transcript leaving the server, including any wait for a worker.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func legend(_ color: Color, _ text: String) -> some View {
+        HStack(spacing: 5) {
+            Capsule().fill(color).frame(width: 12, height: 2)
+            Text(text).foregroundStyle(Crystal.ink)
         }
     }
 }
@@ -173,27 +188,27 @@ struct RecentJobsCard: View {
     var records: [HostStats.Record]
 
     var body: some View {
-        SurfaceCard(padding: 20) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Recent jobs").font(.headline)
+        SurfaceCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Recent jobs").font(.headline).foregroundStyle(Crystal.ink)
+                    .help("The server keeps timings only. Transcripts go back to the client and aren't stored.")
                 if records.isEmpty {
-                    Text("No jobs yet").font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 150)
+                    Text("No jobs yet").font(.callout).foregroundStyle(Crystal.ink3).frame(maxWidth: .infinity, minHeight: 150)
                 }
-                ForEach(Array(records.prefix(6).enumerated()), id: \.offset) { _, r in
+                ForEach(Array(records.prefix(6).enumerated()), id: \.offset) { i, r in
+                    if i > 0 { Rectangle().fill(Crystal.hairline).frame(height: 1) }
                     HStack(spacing: 10) {
-                        Text(ServerFormat.clock(r.completedAtMs)).font(.fsData(.callout)).foregroundStyle(.secondary)
-                        Text(HostLiveState.displayName(forClient: HostLiveState.key(r.client))).font(.callout.weight(.semibold)).lineLimit(1)
-                        Text(String(format: "%.1f s", r.durationSeconds)).font(.callout).foregroundStyle(.secondary)
+                        Text(ServerFormat.clock(r.completedAtMs)).font(.fsData(.callout)).foregroundStyle(Crystal.ink3)
+                        Text(HostLiveState.displayName(forClient: HostLiveState.key(r.client))).font(.callout.weight(.medium))
+                            .foregroundStyle(Crystal.ink).lineLimit(1)
                         Spacer(minLength: 4)
-                        Text(HostLiveState.prettyModelName(r.model)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        Text(ServerFormat.ms(r.source == "stream" ? r.processingMs : r.processingMs + r.queueWaitMs)).font(.fsData(.callout, weight: .semibold))
+                        Text(HostLiveState.prettyModelName(r.model)).font(.caption).foregroundStyle(Crystal.ink3).lineLimit(1)
+                        Text(ServerFormat.ms(r.source == "stream" ? r.processingMs : r.processingMs + r.queueWaitMs))
+                            .font(.fsData(.callout, weight: .semibold)).foregroundStyle(Crystal.ink)
                             .frame(width: 64, alignment: .trailing)
                     }
-                    Divider().opacity(0.5)
+                    .padding(.vertical, 2)
                 }
-                Spacer(minLength: 0)
-                Label("The server keeps timings only. Transcripts go back to the client and aren't stored.", systemImage: "lock")
-                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

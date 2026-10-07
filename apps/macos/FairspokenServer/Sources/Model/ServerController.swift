@@ -242,14 +242,61 @@ final class ServerController {
 
     static let pairingPasswordHint = "The pairing password needs \(HostConfiguration.pairingPasswordLength.lowerBound) to \(HostConfiguration.pairingPasswordLength.upperBound) characters. Six digits are fine."
 
+    /// Who can reach the server: the one choice on the Connect screen.
+    enum Access: Equatable {
+        /// 127.0.0.1: only apps on this Mac.
+        case thisMac
+        /// This Mac's Tailscale address (the host also answers on 127.0.0.1 there).
+        case tailnet
+        /// Anything else (every interface, one LAN address), set under Configuration › Advanced.
+        case custom
+    }
+
+    var access: Access {
+        if isLoopbackOnly { return .thisMac }
+        if NetworkAddresses.isTailscale(configuration.bindAddress) { return .tailnet }
+        return .custom
+    }
+
+    /// "This Mac only", "Tailnet" or the address, for the toolbar and the menu bar item.
+    var accessSummary: String {
+        switch access {
+        case .thisMac: "This Mac only"
+        case .tailnet: "This Mac and tailnet"
+        case .custom: configuration.bindAddr
+        }
+    }
+
+    /// Saves the choice and restarts the server on the new address.
+    func setAccess(_ access: Access) async -> SaveOutcome {
+        switch access {
+        case .thisMac:
+            var next = configuration
+            next.bindAddress = "127.0.0.1"
+            return await save(next)
+        case .tailnet:
+            return await listenOnTailscale()
+        case .custom:
+            return .saved
+        }
+    }
+
     /// Listens on this Mac's Tailscale address (default port), where clients scanning the
     /// tailnet look. Restarts the server.
     func listenOnTailscale() async -> SaveOutcome {
-        addresses = .current()
-        guard let tailscale = addresses.tailscale else { return .failed("This Mac has no Tailscale address. Is Tailscale connected?") }
+        refreshAddresses()
+        guard let tailscale = addresses.tailscale else { return .failed("Tailscale isn't connected on this Mac.") }
         var next = configuration
         next.bindAddress = tailscale.address
         next.port = HostConfiguration.defaultPort
+        return await save(next)
+    }
+
+    /// Sets, changes or (with "") turns off the pairing password. Applies at once, unless
+    /// pairing needs a new token, which restarts the server.
+    func setPairingPassword(_ password: String) async -> SaveOutcome {
+        var next = configuration
+        next.pairingPassword = password
         return await save(next)
     }
 
@@ -401,6 +448,7 @@ final class ServerController {
     struct Endpoint: Identifiable, Equatable {
         var label: String
         var url: String
+        var isLoopback = false
         var id: String { url }
     }
 
@@ -412,48 +460,69 @@ final class ServerController {
     // MARK: Screenshots
 
     @ObservationIgnored private var presenting = false
+    /// Screenshot mode: Configuration opens with Advanced expanded.
+    @ObservationIgnored var revealAdvanced = false
 
     /// Screenshot mode: the demo simulator, a sample configuration and sample addresses,
     /// shown as serving. Nothing is bound and nothing is written to the real config file.
     func prepareForScreenshots() {
         presenting = true
         var sample = HostConfiguration()
-        sample.bindAddress = "0.0.0.0"
+        sample.bindAddress = "100.101.102.103"
         sample.workerCount = 3
         sample.workerModels = ["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v3", "parakeet-ultra"]
         sample.token = "k7pq2m9xw4hr8tcv3nd6jy5bfz2ga8es" // gitleaks:allow (made-up sample for screenshots)
+        sample.pairingPassword = "482913" // gitleaks:allow (made-up sample for screenshots)
+        sample.displayName = "Practice mini"
         configuration = sample
         configIssue = nil
-        addresses = NetworkAddresses(localHostName: "practice-mini.local", interfaces: [
-            .init(name: "en0", address: "192.168.1.20", kind: .lan),
-            .init(name: "utun4", address: "100.101.102.103", kind: .tailscale),
-        ])
+        addresses = Self.sampleAddresses(tailscale: true)
         runState = .running
         source = .demo
         restartFeed()
     }
 
-    /// URLs clients use to reach this server, for the Connect panel and the menu.
+    /// Screenshot mode: shows Connect as "This Mac only" on a Mac without Tailscale (or back).
+    func presentSampleAccess(tailnet: Bool) {
+        guard presenting else { return }
+        addresses = Self.sampleAddresses(tailscale: tailnet)
+        configuration.bindAddress = tailnet ? "100.101.102.103" : "127.0.0.1"
+        configuration.pairingPassword = tailnet ? "482913" : "" // gitleaks:allow (made-up sample)
+    }
+
+    private static func sampleAddresses(tailscale: Bool) -> NetworkAddresses {
+        var interfaces: [NetworkAddresses.Interface] = [.init(name: "en0", address: "192.168.1.20", kind: .lan)]
+        if tailscale { interfaces.append(.init(name: "utun4", address: "100.101.102.103", kind: .tailscale)) }
+        return NetworkAddresses(localHostName: "practice-mini.local", interfaces: interfaces)
+    }
+
+    /// URLs clients use to reach this server, for the Connect panel and the menu. Bound to
+    /// one non-loopback address, the host also listens on 127.0.0.1, so apps on this Mac keep
+    /// working.
     var endpoints: [Endpoint] {
         let port = configuration.port
         let bind = configuration.bindAddress
         func url(_ host: String) -> String { host.contains(":") ? "http://[\(host)]:\(port)" : "http://\(host):\(port)" }
+        let thisMac = Endpoint(label: "This Mac", url: url("127.0.0.1"), isLoopback: true)
         switch bind {
         case "127.0.0.1", "::1":
-            return [Endpoint(label: "This Mac", url: url(bind))]
+            return [Endpoint(label: "This Mac", url: url(bind), isLoopback: true)]
         case "0.0.0.0", "::":
-            var list: [Endpoint] = []
-            if let name = addresses.localHostName { list.append(Endpoint(label: "Local network name", url: url(name))) }
+            var list = [thisMac]
+            if let t = addresses.tailscale { list.append(Endpoint(label: "Tailnet", url: url(t.address))) }
+            if let name = addresses.localHostName { list.append(Endpoint(label: "Local name", url: url(name))) }
             for i in addresses.lan { list.append(Endpoint(label: "Local network (\(i.name))", url: url(i.address))) }
-            if let t = addresses.tailscale { list.append(Endpoint(label: "Tailscale", url: url(t.address))) }
-            list.append(Endpoint(label: "This Mac", url: url("127.0.0.1")))
             return list
         default:
-            return [Endpoint(label: NetworkAddresses.isTailscale(bind) ? "Tailscale" : "This address", url: url(bind))]
+            return [thisMac, Endpoint(label: NetworkAddresses.isTailscale(bind) ? "Tailnet" : "Network", url: url(bind))]
         }
     }
 
-    var primaryEndpoint: Endpoint? { endpoints.first }
+    /// The address to give another device: the first one that isn't loopback, else this Mac's.
+    var primaryEndpoint: Endpoint? { shareableEndpoint ?? endpoints.first }
+
+    /// The first address another device can reach; nil when only this Mac can connect.
+    var shareableEndpoint: Endpoint? { endpoints.first { !$0.isLoopback } }
 
     /// The name clients scanning the tailnet see (`/v1/hello`).
     var hostName: String {
@@ -478,8 +547,13 @@ final class ServerController {
     var isLoopbackOnly: Bool { ["127.0.0.1", "::1"].contains(configuration.bindAddress) }
 
     /// What the QR code carries: the dashboard URL with the token (it authenticates GETs).
-    var pairingURL: String? {
-        guard let endpoint = primaryEndpoint else { return nil }
+    /// Nil when no other device can reach the server.
+    var pairingURL: String? { shareableEndpoint.map(dashboardURL) }
+
+    /// The web dashboard, signed in, at the address other devices use (or this Mac's).
+    var dashboardURL: String? { primaryEndpoint.map(dashboardURL) }
+
+    private func dashboardURL(at endpoint: Endpoint) -> String {
         guard let token = configuration.authToken else { return endpoint.url + "/" }
         return endpoint.url + "/?token=" + (token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? token)
     }
