@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Fairspoken</string>
+    <string name="ime_label">Fairspoken voice</string>
+    <string name="ime_subtype">Voice (your Fairspoken host)</string>
+    <string name="a11y_label">Fairspoken dock</string>
+    <string name="a11y_description">Lets the Fairspoken floating dock type your dictation into the text field you are using, and show the dock only while a keyboard is open. It reads the focused text field only to insert at the cursor; nothing is stored or sent anywhere.</string>
+    <string name="dock_channel">Floating dock</string>
+</resources>

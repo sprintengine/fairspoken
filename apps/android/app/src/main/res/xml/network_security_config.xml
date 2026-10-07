@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hosts are reached over Tailscale, which encrypts every packet with
+     WireGuard, so plain HTTP to a tailnet address is allowed. Hosts published
+     with `tailscale serve` over HTTPS are used first when they answer. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
