@@ -13,7 +13,7 @@ struct PillView: View {
         content
             .padding(.horizontal, 16)
             .frame(height: 46)
-            .glassEffect(.regular.tint(tint.opacity(0.14)), in: .capsule)
+            .glassEffect(dictation.phase.isListening ? .regular.tint(Crystal.live.opacity(0.08)) : .regular, in: .capsule)
         .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82), value: stateKey)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
@@ -24,13 +24,13 @@ struct PillView: View {
         switch dictation.phase {
         case .listening(let since):
             HStack(spacing: 12) {
-                StatusDot(color: .mvCoral, pulsing: true)
-                LevelBars(meter: dictation.meter, active: true, bars: 22, color: .mvCoral)
+                StatusDot(color: Crystal.live, pulsing: true)
+                LevelBars(meter: dictation.meter, active: true, bars: 22, color: Crystal.live)
                     .frame(width: 118, height: 24)
                 TimelineView(.periodic(from: since, by: 1)) { ctx in
                     Text(Self.clock(ctx.date.timeIntervalSince(since)))
                         .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Crystal.ink2)
                 }
             }
             .accessibilityLabel("Listening")
@@ -42,34 +42,24 @@ struct PillView: View {
             .accessibilityLabel("Transcribing")
         case .done(let result):
             HStack(spacing: 9) {
-                Image(systemName: icon(for: result.delivery)).foregroundStyle(Color.mvGreen)
+                Image(systemName: icon(for: result.delivery)).foregroundStyle(Crystal.ok)
                     .symbolEffect(.bounce, value: result.text)
                 Text(headline(for: result)).font(.callout.weight(.semibold)).lineLimit(1)
                 Text("\(result.words) words · \(Format.ms(Double(result.latencyMs)))")
-                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.callout).foregroundStyle(Crystal.ink2).lineLimit(1)
             }
         case .failed(let message):
             HStack(spacing: 9) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.mvAmber)
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Crystal.warn)
                 Text(message.count > 64 ? message.prefix(62) + "…" : message)
                     .font(.callout.weight(.medium)).lineLimit(1)
             }
         case .idle:
             HStack(spacing: 8) {
-                Image(systemName: "waveform").foregroundStyle(Color.mvTeal)
+                Image(systemName: "waveform").foregroundStyle(Crystal.clientAccent)
                 Text("Ready").font(.callout.weight(.medium))
-                Text(shortcut).font(.callout).foregroundStyle(.secondary)
+                Text(shortcut).font(.callout).foregroundStyle(Crystal.ink2)
             }
-        }
-    }
-
-    private var tint: Color {
-        switch dictation.phase {
-        case .listening: .mvCoral
-        case .transcribing: .mvTeal
-        case .done: .mvGreen
-        case .failed: .mvAmber
-        case .idle: .clear
         }
     }
 
