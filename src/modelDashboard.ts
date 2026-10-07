@@ -171,7 +171,7 @@ function progressUpdate(value: Download): void {
 function render(): void {
   const focusedId = root.contains(document.activeElement) ? (document.activeElement as HTMLElement).id : "";
   rows.clear();
-  root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "Available speech models for this device." : `Currently using ${settings.transcriptionLocation === "cloud" ? "Fairspoken Cloud" : "your remote host"}. Choose Use to switch to local dictation.`;
+  root.querySelector("#dictationProvider")!.textContent = settings.transcriptionLocation === "local" ? "" : `Dictating on ${settings.transcriptionLocation === "cloud" ? "Fairspoken Cloud" : "your host"}. Choose Use to dictate on this device.`;
   const speechList = root.querySelector("#dictationModels")!; speechList.replaceChildren();
   for (const family of ["parakeet", "whisper"]) {
     const options = speech.filter(m => m.model.startsWith("parakeet") === (family === "parakeet"));
@@ -181,11 +181,11 @@ function render(): void {
     variants.set(family, m.model);
     const parakeet = family === "parakeet";
     const selected = settings.transcriptionLocation === "local" && settings.model === m.model;
-    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? parakeetVariant(m.model).publisher : "OpenAI", parakeet ? parakeetVariant(m.model).detail : "OpenAI · Multilingual speech recognition", selected && m.cached ? "Selected" : m.cached ? "Downloaded" : "Available to download");
+    const r = row(m.model, parakeet ? "Parakeet" : "Whisper", parakeet ? parakeetVariant(m.model).publisher : "OpenAI", parakeet ? parakeetVariant(m.model).detail : "OpenAI · Multilingual speech recognition", "");
     r.element.id = `family-${family}`;
     const picker = variantPicker(family, parakeet ? "Parakeet" : "Whisper", options.map(option => ({
       value: option.model,
-      label: `${parakeet ? parakeetVariant(option.model).label : option.model}${option.cached ? " · Downloaded" : ""}${settings.model === option.model && settings.transcriptionLocation === "local" ? " · Selected" : ""}`,
+      label: `${parakeet ? parakeetVariant(option.model).label : option.model}${option.cached ? " · Downloaded" : ""}`,
     })), m.model);
     r.element.querySelector(".ds-list-row-content")!.append(picker);
     r.actions.append(button(m.cached ? (selected ? "Selected" : "Use") : speechDownload === m.model ? "Downloading…" : "Download", async () => {
@@ -198,13 +198,13 @@ function render(): void {
     if (progress && !progress.done) { current.status.textContent = progress.message; current.progress.hidden = false; current.progress.value = progress.percentage; }
     speechList.append(r.element);
   }
-  root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Polish is off. Dictionary corrections still apply." : settings.polishProvider === "local" ? "Local cleanup stays on this device." : "Cloud cleanup sends text to your configured service.";
+  root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Off" : settings.polishProvider === "local" ? "On this device" : "Fairspoken Cloud";
   const providerActions = root.querySelector("#polishProviderActions")!;
   providerActions.replaceChildren(button("Off", () => choose({ polishEnabled: false }), !settings.polishEnabled));
   if (cloudAvailable) providerActions.append(button("Use cloud", () => choose({ polishProvider: "cloud", polishEnabled: true }), !settings.cloudAuthToken || (settings.polishEnabled && settings.polishProvider === "cloud")));
   const polishList = root.querySelector("#polishModels")!; polishList.replaceChildren();
   for (const m of catalog.polish) {
-    const r = row(m.id, m.name, m.publisher, `${m.publisher} · ${m.description} · ${size(m.bytes)} download${m.downloads !== null ? ` · ${m.downloads.toLocaleString()} Hub downloads` : ""}`, !m.supported ? "Unavailable on this platform" : m.selected && m.installed ? (m.loaded ? "Selected · loaded in memory" : "Selected · loads when needed") : m.installed ? "Downloaded" : "Available to download");
+    const r = row(m.id, m.name, m.publisher, `${m.description} · ${size(m.bytes)}${m.downloads !== null ? ` · ${m.downloads.toLocaleString()} downloads` : ""}`, !m.supported ? "Unavailable on this platform" : m.selected && m.installed && m.loaded ? "Loaded" : "");
     if (busyDownload() && download?.model === m.id) {
       r.actions.append(button("Cancel download", async () => { await invoke("cancel_local_model_download"); say("Cancelling download…"); }));
     } else {
@@ -431,7 +431,7 @@ function scheduleSearch(): void {
   searchResults.replaceChildren(); searchResults.setAttribute("aria-busy", "false");
   if (!query) {
     closePopover();
-    searchStatus.textContent = "Search speech models on this device and Hugging Face.";
+    searchStatus.textContent = "";
     return;
   }
   const local = localHits(query);

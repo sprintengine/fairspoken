@@ -4,15 +4,15 @@ import FairspokenCore
 import FairspokenUpdates
 import SwiftUI
 
-/// Main window: Liquid Glass sidebar and toolbar (the control layer) over a limestone /
-/// night page; content sits on opaque surfaces, per design/brand/README.md §8.
+/// Main window: the Crystal theme (design/crystal/README.md) with the server's garnet hint.
+/// Liquid Glass sidebar and toolbar; each page's cards share one `GlassEffectContainer`.
 struct ServerWindowView: View {
     @Environment(ServerController.self) private var controller
     @Environment(UpdateController.self) private var updates
 
     var body: some View {
         NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 290)
+            sidebar.navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
         } detail: {
             ZStack {
                 PageBackground().backgroundExtensionEffect()
@@ -41,24 +41,22 @@ struct ServerWindowView: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top) {
             HStack(spacing: 10) {
-                FairspokenMark(size: 30)
+                FairspokenMark(size: 28, monochrome: Crystal.ink)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Fairspoken").font(.headline)
-                    Text("Server").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Fairspoken").font(.headline).foregroundStyle(Crystal.ink)
+                    Text("Server").font(.subheadline).foregroundStyle(Crystal.serverAccent)
                 }
                 Spacer()
             }
             .padding(.horizontal, 18)
             .padding(.top, 6)
             .padding(.bottom, 10)
+            .accessibilityElement(children: .combine)
         }
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 10) {
-                SidebarServerStatus()
-                UpdateSidebarButton(updates: updates, style: .server)
-                    .padding(.horizontal, 4)
-            }
-            .padding(12)
+            UpdateSidebarButton(updates: updates, style: .server)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
         }
     }
 
@@ -88,68 +86,47 @@ struct ServerWindowView: View {
                 Text("Demo").tag(ServerController.Source.demo)
             }
             .pickerStyle(.segmented)
-            .frame(width: 140)
-            .help("Live shows this server; Demo shows a simulated practice server")
+            .frame(width: 130)
+            .help("Live shows this server; Demo shows a simulated one")
         }
         ToolbarSpacer(.fixed)
         ToolbarItem(placement: .primaryAction) {
             let running = controller.runState.isRunning
-            Button {
-                Task { running ? await controller.stop() : await controller.start() }
-            } label: {
-                Label(running ? "Stop serving" : "Start serving", systemImage: running ? "stop.fill" : "play.fill")
+            let disabled = controller.runState == .starting || controller.configIssue != nil
+            // Starting is the window's one primary action; stopping is not.
+            if running {
+                Button("Stop", systemImage: "stop.fill") { Task { await controller.stop() } }
                     .labelStyle(.titleAndIcon)
+                    .buttonStyle(.glass)
+                    .disabled(disabled)
+                    .help("Stop serving")
+            } else {
+                Button("Start serving", systemImage: "play.fill") { Task { await controller.start() } }
+                    .labelStyle(.titleAndIcon)
+                    .buttonStyle(.glassProminent)
+                    .tint(Crystal.serverAccent)
+                    .disabled(disabled)
             }
-            .buttonStyle(.glassProminent)
-            .tint(running ? .secondary : .fsBlue)
-            .disabled(controller.runState == .starting || controller.configIssue != nil)
         }
     }
 }
 
-/// "Serving · 0.0.0.0:48173", the toolbar's status chip.
+/// The toolbar's status: "Serving · Tailnet", "Starting…", "Not serving".
 private struct ServingChip: View {
     @Environment(ServerController.self) private var controller
 
     var body: some View {
         let state = controller.runState
         HStack(spacing: 8) {
-            StatusDot(color: state.isRunning ? .fsSuccess : state == .starting ? .fsGorse : .fsError, pulsing: state == .starting)
-            Text(state.isRunning ? "Serving · \(controller.configuration.bindAddr)" : state == .starting ? "Starting…" : "Not serving")
-                .font(.callout.weight(.medium))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 12)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// Limestone (light) or Night (dark) with a faint Copybook Blue / Margin Red field for the
-/// glass to refract. Static, so idle CPU stays at zero.
-struct PageBackground: View {
-    var body: some View {
-        AuroraBackground(accent: .fsBlue, secondary: .fsRed, base: .fsPage)
-            .opacity(0.9)
-    }
-}
-
-/// Serving state at the foot of the sidebar.
-private struct SidebarServerStatus: View {
-    @Environment(ServerController.self) private var controller
-
-    var body: some View {
-        let state = controller.runState
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                StatusDot(color: dotColor(state), pulsing: state == .starting)
-                Text(title(state)).font(.callout.weight(.semibold)).lineLimit(1)
-                Spacer(minLength: 0)
+            StatusDot(color: color(state), pulsing: state == .starting)
+            Text(title(state)).font(.callout.weight(.medium)).foregroundStyle(Crystal.ink)
+            if state.isRunning {
+                Text(controller.accessSummary).font(.callout).foregroundStyle(Crystal.ink2)
             }
-            Text(detail(state)).font(.fsData(.caption)).foregroundStyle(.secondary).lineLimit(2)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.05), in: .rect(cornerRadius: 14))
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .help(help(state))
         .accessibilityElement(children: .combine)
     }
 
@@ -162,22 +139,25 @@ private struct SidebarServerStatus: View {
         }
     }
 
-    private func detail(_ s: ServerController.RunState) -> String {
+    private func color(_ s: ServerController.RunState) -> Color {
         switch s {
-        case .running: controller.configuration.bindAddr
-        case .starting: "Binding \(controller.configuration.bindAddr)"
-        case .stopped: "Clients can't connect"
-        case .failed(let m): m
+        case .running: Crystal.ok
+        case .starting: Crystal.warn
+        case .stopped: Crystal.ink3
+        case .failed: Crystal.error
         }
     }
 
-    private func dotColor(_ s: ServerController.RunState) -> Color {
-        switch s {
-        case .running: .fsSuccess
-        case .starting: .fsGorse
-        case .stopped: .secondary
-        case .failed: .fsError
-        }
+    private func help(_ s: ServerController.RunState) -> String {
+        if case .failed(let m) = s { return m }
+        return controller.endpoints.map(\.url).joined(separator: "\n")
+    }
+}
+
+/// The still Crystal backdrop with the server's garnet wash.
+struct PageBackground: View {
+    var body: some View {
+        CrystalBackground(accent: Crystal.serverAccent)
     }
 }
 
@@ -186,61 +166,132 @@ private struct ConfigIssueView: View {
     @Environment(ServerController.self) private var controller
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("The host configuration can't be read", systemImage: "exclamationmark.triangle.fill")
-                .font(.title2.weight(.semibold)).foregroundStyle(Color.fsError)
-            Text(message).font(.fsData(.callout)).textSelection(.enabled)
-            Text("The server won't start with a configuration nobody chose. Fix the file, or reset it to the defaults (this makes a new token, so clients need the new one).")
-                .foregroundStyle(.secondary)
-            HStack {
-                Button("Show the file in Finder") { NSWorkspace.shared.activateFileViewerSelecting([controller.configURL]) }
-                    .buttonStyle(.glass)
-                Button("Reset to defaults") { Task { await controller.resetConfiguration() } }
-                    .buttonStyle(.glassProminent).tint(.fsBlue)
+        CrystalPage {
+            PageHeader(title: "Configuration can't be read")
+            SurfaceCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.fsData(.callout)).foregroundStyle(Crystal.error).textSelection(.enabled)
+                    Text("Fix the file, or reset it. Resetting makes a new token, so clients pair again.")
+                        .font(.callout).foregroundStyle(Crystal.ink2)
+                    HStack {
+                        Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([controller.configURL]) }
+                            .buttonStyle(.bordered)
+                        Button("Reset to defaults") { Task { await controller.resetConfiguration() } }
+                            .buttonStyle(.borderedProminent).tint(Crystal.serverAccent)
+                    }
+                    .buttonBorderShape(.capsule)
+                }
             }
+            .frame(maxWidth: 720, alignment: .leading)
         }
-        .padding(40)
-        .frame(maxWidth: 720, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
 // MARK: - Shared pieces
 
-/// An opaque content card (cards, lists and charts are not glass, per the brand rules).
-struct SurfaceCard<Content: View>: View {
-    var padding: CGFloat = 18
+/// A page: one `GlassEffectContainer` around every card, the standard margins and spacing.
+struct CrystalPage<Content: View>: View {
+    var scrolls = true
     @ViewBuilder var content: Content
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(Color.fsSurface.opacity(scheme == .dark ? 0.86 : 0.92), in: .rect(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.primary.opacity(scheme == .dark ? 0.10 : 0.07)))
+        if scrolls {
+            ScrollView { stack }
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            stack.frame(maxHeight: .infinity, alignment: .top)
+        }
     }
-}
 
-struct PageHeader<Trailing: View>: View {
-    var title: String
-    var subtitle: String
-    @ViewBuilder var trailing: Trailing
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 30, weight: .bold))
-                Text(subtitle).font(.title3).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            trailing
+    private var stack: some View {
+        GlassEffectContainer(spacing: 6) {
+            VStack(alignment: .leading, spacing: 16) { content }
+                .padding(.horizontal, 28)
+                .padding(.top, 18)
+                .padding(.bottom, 28)
+                .frame(maxWidth: .infinity, maxHeight: scrolls ? nil : .infinity, alignment: .topLeading)
         }
     }
 }
 
+/// A Liquid Glass card (radius 20). What sits inside is flat (`CrystalWell`), never glass.
+struct SurfaceCard<Content: View>: View {
+    var padding: CGFloat = 20
+    var fillHeight = false
+    @ViewBuilder var content: Content
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
+            .glassEffect(reduceTransparency ? .identity : .regular, in: .rect(cornerRadius: 20))
+            .background {
+                if reduceTransparency { RoundedRectangle(cornerRadius: 20).fill(Crystal.pageSheen) }
+            }
+    }
+}
+
+/// Flat fill for a row, field or node inside a glass card (radius 12 by default).
+struct CrystalWell: ViewModifier {
+    var cornerRadius: CGFloat = 12
+    var stroke: Color? = nil
+
+    func body(content: Content) -> some View {
+        content
+            .background(Crystal.well, in: .rect(cornerRadius: cornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(stroke ?? Crystal.hairline, lineWidth: stroke == nil ? 1 : 1.5))
+    }
+}
+
+extension View {
+    func crystalWell(cornerRadius: CGFloat = 12, stroke: Color? = nil) -> some View {
+        modifier(CrystalWell(cornerRadius: cornerRadius, stroke: stroke))
+    }
+}
+
+/// Page title with at most one line of subtitle.
+struct PageHeader<Trailing: View>: View {
+    var title: String
+    var subtitle: String? = nil
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 26, weight: .semibold)).tracking(-0.4).foregroundStyle(Crystal.ink)
+                if let subtitle {
+                    Text(subtitle).font(.body).foregroundStyle(Crystal.ink2).lineLimit(1)
+                }
+            }
+            Spacer()
+            trailing
+        }
+        .padding(.bottom, 4)
+    }
+}
+
 extension PageHeader where Trailing == EmptyView {
-    init(title: String, subtitle: String) {
+    init(title: String, subtitle: String? = nil) {
         self.init(title: title, subtitle: subtitle) { EmptyView() }
+    }
+}
+
+/// A small heading above a card.
+struct SectionTitle: View {
+    var text: String
+    var body: some View {
+        Text(text).font(.headline).foregroundStyle(Crystal.ink).padding(.top, 6)
+    }
+}
+
+/// An error line: always with the triangle, so it never reads as the garnet accent.
+struct ErrorLabel: View {
+    var text: String
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout).foregroundStyle(Crystal.error)
     }
 }
 
@@ -251,14 +302,43 @@ struct NoticeBanner: View {
     var body: some View {
         if let notice = controller.notice {
             HStack(spacing: 10) {
-                Image(systemName: "info.circle.fill").foregroundStyle(Color.fsBlue)
-                Text(notice).font(.callout)
+                Image(systemName: "info.circle").foregroundStyle(Crystal.ink2)
+                Text(notice).font(.callout).foregroundStyle(Crystal.ink)
                 Spacer()
                 Button("Dismiss") { controller.dismissNotice() }.buttonStyle(.borderless)
             }
             .padding(12)
-            .background(Color.fsBlue.opacity(0.10), in: .rect(cornerRadius: 12))
+            .crystalWell()
         }
+    }
+}
+
+/// Copy with a moment of "copied" feedback; icon-only when `label` is nil.
+struct CopyButton: View {
+    var value: String
+    var label: String? = nil
+    @Environment(ServerController.self) private var controller
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            controller.copy(value)
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
+        } label: {
+            if let label {
+                Label(copied ? "Copied" : label, systemImage: copied ? "checkmark" : "doc.on.doc")
+            } else {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc").frame(width: 16)
+            }
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .help("Copy")
+        .accessibilityLabel(copied ? "Copied" : (label ?? "Copy"))
     }
 }
 
@@ -291,6 +371,6 @@ enum ServerFormat {
 }
 
 extension UpdateStyle {
-    /// Copybook Blue for actions, Gorse for warnings (Margin Red is the signal only).
-    static let server = UpdateStyle(accent: .fsBlue, warning: .fsGorse)
+    /// The server's garnet hint for actions; warnings in the Crystal warning amber.
+    static let server = UpdateStyle(accent: Crystal.serverAccent, warning: Crystal.warn)
 }

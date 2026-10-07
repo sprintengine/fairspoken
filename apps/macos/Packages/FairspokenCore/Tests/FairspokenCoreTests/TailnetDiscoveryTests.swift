@@ -132,10 +132,10 @@ func helloJSON(_ name: String, auth: String = "password", service: String = "fai
 
 func discovery(_ transport: FakeTransport, status: String = tailscaleStatusFixture, stderr: String = "", exit: Int32 = 0,
                installed: Set<String> = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale"], path: String? = "/usr/bin:/bin",
-               timeout: Duration = .milliseconds(300)) -> TailnetDiscovery {
+               timeout: Duration = .milliseconds(300), localPorts: [Int] = [RemoteProtocol.defaultPort]) -> TailnetDiscovery {
     TailnetDiscovery(runner: FakeRunner(output: CommandOutput(status: exit, stdout: Data(status.utf8), stderr: stderr)),
                      transport: transport, searchPath: path, isExecutable: { installed.contains($0) },
-                     probeTimeout: timeout)
+                     probeTimeout: timeout, localPorts: localPorts)
 }
 
 // MARK: - Tests
@@ -235,6 +235,38 @@ struct TailnetDiscoveryTests {
         // Offline and Android peers are never probed.
         let probed = Set(t.requests.compactMap { $0.url?.host() })
         #expect(!probed.contains("100.86.29.60") && !probed.contains("100.66.34.126"))
+    }
+
+    /// A server on this Mac turns up on loopback (on its own port too), ahead of the tailnet,
+    /// and replaces this Mac's tailnet-IP entry when it is the same host.
+    @Test func findsHostsOnThisMacOverLoopback() async throws {
+        let t = FakeTransport([
+            "http://127.0.0.1:48173/v1/hello": helloJSON("Conal’s Mac mini", auth: "password"),
+            "http://100.91.70.66:48173/v1/hello": helloJSON("Conal’s Mac mini", auth: "password"),
+            "http://127.0.0.1:48174/v1/hello": helloJSON("Fairspoken Server", auth: "password"),
+            "http://100.101.102.103:48173/v1/hello": helloJSON("Studio", auth: "password"),
+        ])
+        let hosts = try await discovery(t, localPorts: [48174, 48173]).discover()
+        #expect(hosts.map(\.url.absoluteString) == ["http://127.0.0.1:48174", "http://127.0.0.1:48173", "http://100.101.102.103:48173"])
+        #expect(hosts.map(\.isThisMac) == [true, true, false])
+        #expect(hosts[0].machine == "conals-mac-mini")
+    }
+
+    @Test func listsThisMacsHostWhenTailscaleIsDown() async throws {
+        let t = FakeTransport(["http://127.0.0.1:48173/v1/hello": helloJSON("Here", auth: "none")])
+        let hosts = try await discovery(t, installed: []).discover()
+        #expect(hosts == [DiscoveredHost(name: "Here", machine: "this-mac", url: URL(string: "http://127.0.0.1:48173")!,
+                                         auth: .open, serverVersion: "0.4.0", isThisMac: true)])
+    }
+
+    @Test func readsFairspokenServersPort() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(TailnetDiscovery.localHostPorts(home: home) == [48173])
+        let dir = home.appendingPathComponent("Library/Application Support/ie.fairspoken.server", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(#"{"bindAddress":"127.0.0.1","port":48174}"#.utf8).write(to: dir.appendingPathComponent("host-config.json"))
+        #expect(TailnetDiscovery.localHostPorts(home: home) == [48174, 48173])
     }
 
     @Test func ignoresNon200AndUndecodableHellos() async throws {

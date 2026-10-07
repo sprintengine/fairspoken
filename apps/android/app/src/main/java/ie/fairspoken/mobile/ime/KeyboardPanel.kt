@@ -4,6 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,11 +46,15 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.shapes.Capsule
 import ie.fairspoken.mobile.FairspokenApp
 import ie.fairspoken.mobile.core.DictationState
-import ie.fairspoken.mobile.ui.Aurora
-import ie.fairspoken.mobile.ui.Ink
+import ie.fairspoken.mobile.ui.Crystal
+import ie.fairspoken.mobile.ui.CrystalBackdrop
+import ie.fairspoken.mobile.ui.CrystalTheme
+import ie.fairspoken.mobile.ui.Dot
+import ie.fairspoken.mobile.ui.Elapsed
+import ie.fairspoken.mobile.ui.Hairline
 import ie.fairspoken.mobile.ui.MicOrb
 import ie.fairspoken.mobile.ui.Type
-import ie.fairspoken.mobile.ui.liquidGlass
+import ie.fairspoken.mobile.ui.glass
 
 class KeyboardPanelState {
     /** The last transcript committed, while it can still be undone. */
@@ -66,40 +73,46 @@ fun KeyboardPanel(
     onSpace: () -> Unit,
     onEnter: () -> Unit,
     onUndo: () -> Unit,
-) {
+) = CrystalTheme {
+    val c = Crystal.colors
     val state by app.dictation.state.collectAsState()
     val level by app.dictation.level.collectAsState()
     val hosts by app.store.hosts.collectAsState()
-    val activeUrl by app.store.activeUrl.collectAsState()
-    val hostName = (hosts.firstOrNull { it.url == activeUrl } ?: hosts.firstOrNull())?.name
     val backdrop = rememberLayerBackdrop()
     val haptics = LocalHapticFeedback.current
 
     Box(Modifier.fillMaxWidth()) {
-        Aurora(Modifier.matchParentSize().layerBackdrop(backdrop), shade = 0.04f)
+        CrystalBackdrop(Modifier.matchParentSize().layerBackdrop(backdrop))
+        Hairline(Modifier.align(Alignment.TopCenter))
         Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            BasicText(
+            Box(Modifier.fillMaxWidth().height(22.dp), contentAlignment = Alignment.Center) {
                 when (val s = state) {
-                    is DictationState.Listening -> "Listening · tap to insert"
-                    DictationState.Transcribing -> "Transcribing on ${hostName ?: "your host"}"
-                    is DictationState.Done -> s.text
-                    is DictationState.Failed -> s.message
-                    DictationState.Idle ->
-                        if (hostName == null) "Open Fairspoken to pair a host" else "Tap to speak · $hostName"
-                },
-                style = Type.caption.copy(
-                    textAlign = TextAlign.Center,
-                    color = if (state is DictationState.Failed) Ink.warn else Ink.secondary,
-                ),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().height(36.dp),
-            )
-            MicOrb(state, level, backdrop, 96.dp) {
+                    is DictationState.Listening -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Dot(c.live)
+                        Spacer(Modifier.width(8.dp))
+                        BasicText("Listening", style = Type.body.copy(color = c.ink))
+                        Spacer(Modifier.width(10.dp))
+                        Elapsed(s.startedAt)
+                    }
+                    DictationState.Transcribing -> BasicText("Transcribing", style = Type.body)
+                    is DictationState.Failed -> BasicText(
+                        s.message,
+                        style = Type.body.copy(color = c.error, textAlign = TextAlign.Center),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    is DictationState.Done -> Unit
+                    DictationState.Idle -> BasicText(
+                        if (hosts.isEmpty()) "Open Fairspoken to connect a host" else "Tap to speak",
+                        style = Type.body,
+                    )
+                }
+            }
+            MicOrb(state, level, backdrop, 92.dp) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 onMic()
             }
@@ -130,13 +143,23 @@ private fun Key(
     onClick: () -> Unit,
     glyph: DrawScope.(Color) -> Unit,
 ) {
+    val c = Crystal.colors
     val haptics = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     Box(
         modifier
-            .height(48.dp)
-            .liquidGlass(backdrop, Capsule(), tint = Color.White.copy(alpha = 0.50f), blurRadius = 6.dp, refraction = 8.dp)
+            .height(46.dp)
+            .glass(
+                backdrop,
+                Capsule(),
+                fill = if (pressed) c.surfaceStrong else c.surface,
+                blurRadius = 8.dp,
+                refraction = 6.dp,
+                elevated = false,
+            )
             .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interaction,
                 indication = null,
                 role = Role.Button,
                 onLongClick = onLongClick,
@@ -148,7 +171,8 @@ private fun Key(
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(22.dp)) { glyph(Ink.primary) }
+        val ink = c.ink
+        Canvas(Modifier.size(22.dp)) { glyph(ink) }
     }
 }
 

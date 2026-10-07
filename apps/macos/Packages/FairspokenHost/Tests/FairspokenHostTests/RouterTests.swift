@@ -367,6 +367,51 @@ struct ListenerTests {
         await host.stop()
     }
 
+    @Test func onlyOneSpecificNonLoopbackAddressNeedsALoopbackCompanion() {
+        #expect(HostConfiguration.needsLoopbackCompanion("100.101.102.103"))
+        #expect(HostConfiguration.needsLoopbackCompanion("192.168.1.20"))
+        #expect(HostConfiguration.needsLoopbackCompanion("fd7a:115c:a1e0::1"))
+        for covered in ["127.0.0.1", "127.0.0.2", "::1", "localhost", "0.0.0.0", "::", "*"] {
+            #expect(!HostConfiguration.needsLoopbackCompanion(covered))
+        }
+    }
+
+    /// Bound to this Mac's LAN or tailnet address, the host still answers apps on 127.0.0.1.
+    @Test func aHostOnANonLoopbackAddressAlsoAnswersOnLoopback() async throws {
+        guard let address = Self.firstNonLoopbackIPv4() else { return } // no network interface
+        var config = HostConfiguration()
+        config.token = "secret"
+        config.bindAddress = address
+        config.port = 0
+        config.workerCount = 1
+        config.workerModels = [HostConfiguration.defaultModel]
+        let host = try await TranscriptionHost.start(configuration: config, configURL: nil, backend: StubSpeechBackend(),
+                                                     dashboardHTML: [], serverVersion: "test")
+        #expect(host.answersOnLoopback)
+        for base in ["http://\(address):\(host.boundPort)", "http://127.0.0.1:\(host.boundPort)"] {
+            var request = URLRequest(url: URL(string: "\(base)/v1/health")!)
+            request.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+            let (_, response) = try await URLSession.shared.data(for: request)
+            #expect((response as? HTTPURLResponse)?.statusCode == 200, "\(base)")
+        }
+        await host.stop()
+    }
+
+    static func firstNonLoopbackIPv4() -> String? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return nil }
+        defer { freeifaddrs(head) }
+        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let entry = pointer.pointee
+            guard let addr = entry.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET),
+                  entry.ifa_flags & UInt32(IFF_UP) != 0, entry.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            return String(cString: host)
+        }
+        return nil
+    }
+
     @Test func portInUseIsAClearError() async throws {
         let (host, _) = try await start()
         var config = HostConfiguration()

@@ -3,7 +3,9 @@
 //! tailnet's machines; each online computer is probed for `GET /v1/hello`
 //! on its MagicDNS name (HTTPS, then HTTP, for a host published with
 //! `tailscale serve`) and on its IPv4 address and the default port (for one
-//! bound to its tailnet address).
+//! bound to its tailnet address). Hosts on this computer are also probed on
+//! `127.0.0.1`, so they turn up whatever address they listen on and whether
+//! or not Tailscale is running.
 
 use reqwest::blocking::Client;
 use reqwest::{StatusCode, Url};
@@ -42,11 +44,96 @@ pub struct DiscoveredHost {
     pub is_self: bool,
 }
 
-/// Lists every Fairspoken host on the tailnet, this computer's included.
+/// Lists every Fairspoken host on this computer and the tailnet. When
+/// Tailscale can't be used, hosts on this computer are still listed; with
+/// none, the Tailscale problem is the error.
 pub fn discover_hosts() -> Result<Vec<DiscoveredHost>, String> {
-    let status = load_tailscale_status()?;
+    let status = load_tailscale_status();
     let client = probe_client(SCAN_PROBE_TIMEOUT)?;
-    Ok(probe_candidates(&client, &scan_candidates(&status)))
+    let machine = status
+        .as_ref()
+        .ok()
+        .and_then(|status| status.self_node.as_ref())
+        .map(TailscaleNode::machine)
+        .unwrap_or_else(|| "this computer".to_string());
+    let mut candidates = loopback_candidates(&local_host_ports(), &machine);
+    if let Ok(status) = &status {
+        candidates.extend(scan_candidates(status));
+    }
+    let hosts = prefer_loopback(probe_candidates(&client, &candidates));
+    match status {
+        Err(error) if hosts.is_empty() => Err(error),
+        _ => Ok(hosts),
+    }
+}
+
+/// Ports to probe on `127.0.0.1`: Fairspoken Server's configured port
+/// (release and debug builds, macOS), then the default port.
+fn local_host_ports() -> Vec<u16> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut ports = home
+        .map(|home| server_config_ports(&home))
+        .unwrap_or_default();
+    ports.push(DEFAULT_HOST_PORT);
+    let mut seen = HashSet::new();
+    ports.retain(|port| seen.insert(*port));
+    ports
+}
+
+fn server_config_ports(home: &Path) -> Vec<u16> {
+    ["ie.fairspoken.server", "ie.fairspoken.server.dev"]
+        .iter()
+        .filter_map(|bundle| {
+            let path = home
+                .join("Library/Application Support")
+                .join(bundle)
+                .join("host-config.json");
+            let text = std::fs::read_to_string(path).ok()?;
+            let config: serde_json::Value = serde_json::from_str(&text).ok()?;
+            config
+                .get("port")?
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port != 0)
+        })
+        .collect()
+}
+
+/// One candidate per port on `127.0.0.1`, for hosts on this computer.
+fn loopback_candidates(ports: &[u16], machine: &str) -> Vec<Candidate> {
+    ports
+        .iter()
+        .map(|port| Candidate {
+            machine: machine.to_string(),
+            urls: vec![format!("http://127.0.0.1:{port}")],
+            is_self: true,
+        })
+        .collect()
+}
+
+/// Drops this computer's tailnet-IP entry when the same host (same name and
+/// port) answered on loopback: an app on this computer should save
+/// `127.0.0.1`, which keeps working with Tailscale down.
+fn prefer_loopback(hosts: Vec<DiscoveredHost>) -> Vec<DiscoveredHost> {
+    let port = |url: &str| {
+        Url::parse(url)
+            .ok()
+            .and_then(|url| url.port_or_known_default())
+    };
+    let is_loopback = |url: &str| url.starts_with("http://127.0.0.1:");
+    let loopback: Vec<(String, Option<u16>)> = hosts
+        .iter()
+        .filter(|host| is_loopback(&host.url))
+        .map(|host| (host.name.clone(), port(&host.url)))
+        .collect();
+    hosts
+        .into_iter()
+        .filter(|host| {
+            !host.is_self
+                || is_loopback(&host.url)
+                || !loopback.contains(&(host.name.clone(), port(&host.url)))
+        })
+        .collect()
 }
 
 /// Probes a typed machine name, `name:port` or URL the same way a scan
@@ -788,6 +875,42 @@ mod tests {
         assert_eq!(hosts[1].url, "http://studio.tail1b4c5c.ts.net");
         assert_eq!(hosts[1].machine, "Studio");
         assert_eq!(hosts[1].auth, "token");
+    }
+
+    #[test]
+    fn hosts_on_this_computer_are_found_on_loopback_first() {
+        let mut candidates = loopback_candidates(&[48174, 48173], "Conal’s Mac mini");
+        candidates.extend(scan_candidates(&status()));
+        // Loopback 48174 and 48173 answer; so does this Mac's tailnet IP
+        // (the same host as loopback 48173) and Studio.
+        let mut answers = HashMap::from([
+            ((0, 0), hello("password")),
+            ((1, 0), hello("password")),
+            ((2, 2), hello("password")),
+            ((3, 2), hello("password")),
+        ]);
+        let hosts = prefer_loopback(pick_answers(&candidates, &mut answers));
+        let urls: Vec<&str> = hosts.iter().map(|host| host.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec![
+                "http://127.0.0.1:48174",
+                "http://127.0.0.1:48173",
+                "http://100.106.119.1:48173"
+            ]
+        );
+        assert!(hosts[0].is_self && hosts[1].is_self && !hosts[2].is_self);
+    }
+
+    #[test]
+    fn reads_fairspoken_servers_port() {
+        let home = std::env::temp_dir().join(format!("fs-ports-{}", std::process::id()));
+        let dir = home.join("Library/Application Support/ie.fairspoken.server");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(server_config_ports(&home).is_empty());
+        std::fs::write(dir.join("host-config.json"), r#"{"port":48174}"#).unwrap();
+        assert_eq!(server_config_ports(&home), vec![48174]);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

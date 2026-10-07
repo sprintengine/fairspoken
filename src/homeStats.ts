@@ -117,10 +117,8 @@ function renderStats(summary: UsageStatsSummary): void {
 
   statTimeSaved.textContent = formatDuration(summary.timeSavedSeconds);
   const typingWpm = Math.round(summary.typingWpm) || TYPING_WPM;
-  const typingSeconds = (summary.totalWords / typingWpm) * 60;
   statTimeSavedSub.textContent =
-    `Typing your ${summary.totalWords.toLocaleString()} words at ${typingWpm} wpm would take about ` +
-    `${formatDuration(typingSeconds)}; dictating them took ${formatDuration(summary.totalRecordingSeconds)}.`;
+    `vs typing at ${typingWpm} wpm`;
 
   statTotalWords.textContent = summary.totalWords.toLocaleString();
   statSpokenTime.textContent = formatDuration(summary.totalRecordingSeconds);
@@ -131,7 +129,7 @@ function renderStats(summary: UsageStatsSummary): void {
   statWpm.textContent = String(summary.speakingWpm);
   statMoneySaved.textContent = formatMoney(summary.moneySavedUsd);
   statMoneySavedMeta.textContent =
-    `vs cloud transcription ($${summary.cloudRateUsdPerMinute.toFixed(3)}/min)`;
+    `vs cloud at $${summary.cloudRateUsdPerMinute.toFixed(3)}/min`;
 
   renderZeroEdit(summary);
   renderChart(summary.week);
@@ -205,25 +203,25 @@ async function refreshPerformance(): Promise<void> {
   const last = timed[0];
   const typical = (pick: (t: DictationTimings) => number, all = timed) =>
     `typically ${formatMs(median(all.map((item) => pick(item.timings))))}`;
-  setText("perfSummary", `Your last dictation · ${last.durationSeconds.toFixed(1)} s of speech · medians over the last ${timed.length}`);
+  setText("perfSummary", `${last.durationSeconds.toFixed(1)} s of speech`);
   setText("perfTotal", formatMs(last.timings.totalMs));
-  setText("perfTotalMeta", `Until the text is ready to insert · ${typical((t) => t.totalMs)}`);
+  setText("perfTotalMeta", typical((t) => t.totalMs));
   setText("perfTranscribe", formatMs(last.timings.transcribeMs));
-  setText("perfTranscribeMeta", `The last audio after you let go · ${typical((t) => t.transcribeMs)}`);
+  setText("perfTranscribeMeta", typical((t) => t.transcribeMs));
 
   const local = timed.filter((item) => item.timings.speechModelMs > 0);
   if (last.timings.speechModelMs > 0) {
     const speed = (last.durationSeconds * 1000) / last.timings.speechModelMs;
     setText("perfModel", formatMs(last.timings.speechModelMs));
-    setText("perfModelMeta", `While you were talking · ${speed.toFixed(0)}× faster than real time · ${typical((t) => t.speechModelMs, local)}`);
+    setText("perfModelMeta", `${speed.toFixed(0)}× real time · ${typical((t) => t.speechModelMs, local)}`);
   } else {
     setText("perfModel", "–");
-    setText("perfModelMeta", "Transcribed remotely");
+    setText("perfModelMeta", "On your host");
   }
 
   const polished = timed.filter((item) => item.timings.polishMs > 0);
   setText("perfPolish", last.timings.polishMs > 0 ? formatMs(last.timings.polishMs) : "off");
-  setText("perfPolishMeta", polished.length > 0 ? `The pass at release · ${typical((t) => t.polishMs, polished)}` : "No polish pass ran");
+  setText("perfPolishMeta", polished.length > 0 ? typical((t) => t.polishMs, polished) : "");
 }
 
 async function refresh(): Promise<void> {

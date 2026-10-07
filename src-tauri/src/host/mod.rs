@@ -171,6 +171,35 @@ pub fn run_transcription_host() -> Result<(), String> {
     );
     updater.spawn_periodic_checks();
 
+    // Bound to one non-loopback address (a tailnet IP), the host also answers
+    // on 127.0.0.1 so apps on this computer reach it whichever address they
+    // saved. Best effort: a taken loopback port leaves the main address up.
+    if let Some(loopback_addr) = loopback_companion_addr(&addr) {
+        match Server::http(&loopback_addr) {
+            Ok(loopback) => {
+                println!("Also listening on http://{loopback_addr} for apps on this computer");
+                let runtime = Arc::clone(&runtime);
+                let metrics = Arc::clone(&metrics);
+                let updater = Arc::clone(&updater);
+                let bind_addr = addr.clone();
+                thread::spawn(move || {
+                    for request in loopback.incoming_requests() {
+                        if let Err(err) = handle_request(
+                            request,
+                            Arc::clone(&runtime),
+                            Arc::clone(&metrics),
+                            &updater,
+                            &bind_addr,
+                        ) {
+                            eprintln!("Failed to handle transcription host request: {err}");
+                        }
+                    }
+                });
+            }
+            Err(err) => eprintln!("Not also listening on {loopback_addr}: {err}"),
+        }
+    }
+
     for request in server.incoming_requests() {
         let response = handle_request(
             request,
@@ -185,6 +214,15 @@ pub fn run_transcription_host() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// `127.0.0.1:<port>` when `addr` is one specific non-loopback address;
+/// `None` for loopback and the wildcard addresses, which already cover this
+/// computer, and for anything that isn't an IP socket address.
+fn loopback_companion_addr(addr: &str) -> Option<String> {
+    let socket: std::net::SocketAddr = addr.parse().ok()?;
+    let ip = socket.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| format!("127.0.0.1:{}", socket.port()))
 }
 
 /// A host re-executed after an update may start before the old process has
@@ -2352,6 +2390,27 @@ struct StatsSnapshot<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_one_specific_address_gets_a_loopback_companion() {
+        assert_eq!(
+            super::loopback_companion_addr("100.91.70.66:48173").as_deref(),
+            Some("127.0.0.1:48173")
+        );
+        assert_eq!(
+            super::loopback_companion_addr("[fd7a:115c:a1e0::1]:48200").as_deref(),
+            Some("127.0.0.1:48200")
+        );
+        for covered in [
+            "127.0.0.1:48173",
+            "[::1]:48173",
+            "0.0.0.0:48173",
+            "[::]:48173",
+            "localhost:48173",
+        ] {
+            assert_eq!(super::loopback_companion_addr(covered), None, "{covered}");
+        }
+    }
+
     use super::{
         constant_time_eq, forward_stream_frames, max_batch_body_bytes, parse_worker_models,
         read_limited_body, request_path, HostLiveConfig, HostMetrics, HostRuntime,

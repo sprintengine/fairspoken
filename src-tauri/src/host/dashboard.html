@@ -2,9 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Fairspoken host</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fairspoken Server</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#EDEFF2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0D0F12" media="(prefers-color-scheme: dark)">
 <script>
   // Resolve the theme before first paint so a dark-preferring operator never
   // sees a light flash. "system" follows prefers-color-scheme live.
@@ -16,399 +18,465 @@
   })();
 </script>
 <style>
-  /* Fairspoken host — the operator console for a standalone transcription
-     server, styled as a companion to the native Liquid Glass app: layered
-     translucent surfaces over a soft field, one calm teal for activity, green
-     for completion, indigo for model loading, amber for a missing model and
-     red reserved strictly for errors. */
+  /* Crystal (design/crystal/README.md): frosted silver glass on a cool,
+     near-neutral backdrop. This is the server, so the one accent is a quiet
+     garnet, kept to live dots, in-flight requests, primary buttons and the
+     update badge; active states are graphite. Status colours are functional
+     only, and errors always carry a triangle icon so they never read as the
+     accent. */
   :root {
     color-scheme: light;
-    --field-a: #e4eef0;
-    --field-b: #f4f6f2;
-    --blob-a: rgba(92, 195, 195, 0.28);
-    --blob-b: rgba(120, 150, 230, 0.16);
-    --text: #10262b;
-    --text-2: #4a5f64;
-    --text-3: #7a8d91;
-    --accent: #0b6874;
-    --accent-strong: #08525c;
-    --accent-soft: rgba(11, 104, 116, 0.09);
-    --accent-ring: rgba(11, 104, 116, 0.22);
-    --flow: #148c9b;
-    --done: #1d7a4b;
-    --done-soft: rgba(29, 122, 75, 0.12);
-    --load: #5755d0;
-    --load-soft: rgba(87, 85, 208, 0.12);
-    --warn: #9a5a06;
-    --warn-soft: rgba(176, 110, 10, 0.12);
-    --err: #c2334c;
-    --err-soft: rgba(194, 51, 76, 0.10);
-    --idle: #91a3a6;
-    --glass: rgba(255, 255, 255, 0.62);
-    --glass-strong: rgba(255, 255, 255, 0.82);
-    --glass-chrome: rgba(248, 251, 251, 0.62);
-    --glass-edge: rgba(255, 255, 255, 0.9);
-    --hairline: rgba(16, 38, 43, 0.08);
-    --hairline-strong: rgba(16, 38, 43, 0.14);
-    --link: rgba(16, 38, 43, 0.10);
-    --shadow: 0 1px 1px rgba(16, 38, 43, 0.04), 0 10px 32px -14px rgba(16, 38, 43, 0.20);
-    --shadow-lift: 0 1px 2px rgba(16, 38, 43, 0.06), 0 18px 44px -18px rgba(16, 38, 43, 0.30);
-    --r-card: 18px;
-    --r-control: 10px;
+    --page: #EDEFF2;
+    --page-sheen: #FFFFFF;
+    --surface: rgba(255, 255, 255, 0.62);
+    --surface-strong: rgba(255, 255, 255, 0.82);
+    --edge: rgba(255, 255, 255, 0.85);
+    --hairline: rgba(16, 24, 32, 0.09);
+    --hairline-strong: rgba(16, 24, 32, 0.15);
+    --ink: #15191D;
+    --ink-2: #5B6670;
+    --ink-3: #8A949C;
+    --accent: #B2453E;
+    --accent-tint: rgba(178, 69, 62, 0.07);
+    --accent-ring: rgba(178, 69, 62, 0.28);
+    --on-accent: #FFFFFF;
+    --wash: rgba(178, 69, 62, 0.07);
+    --ok: #2E8B5E;
+    --warn: #9A6B12;
+    --warn-tint: rgba(154, 107, 18, 0.09);
+    --error: #B4283C;
+    --error-tint: rgba(180, 40, 60, 0.07);
+    --idle: #A3ACB4;
+    --active-fill: rgba(16, 24, 32, 0.07);
+    --active-ring: rgba(16, 24, 32, 0.05);
+    --link: rgba(16, 24, 32, 0.10);
+    --chrome: rgba(237, 239, 242, 0.72);
+    --shadow: inset 0 1px 0 var(--edge), 0 8px 24px rgba(16, 24, 32, 0.06);
+    --shadow-pop: inset 0 1px 0 var(--edge), 0 18px 44px rgba(16, 24, 32, 0.16);
+    --r-card: 20px;
+    --r-field: 12px;
     --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
-    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
-    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+    --rounded: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, "Roboto Mono", monospace;
+    --tri: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill-rule='evenodd' d='M7.13 1.98a1 1 0 0 1 1.74 0l6.2 11.02a1 1 0 0 1-.87 1.5H1.8a1 1 0 0 1-.87-1.5zM7.3 5.8h1.4v4.4H7.3zm0 5.5h1.4v1.4H7.3z'/%3E%3C/svg%3E");
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --field-a: #071013;
-    --field-b: #0c181b;
-    --blob-a: rgba(92, 195, 195, 0.17);
-    --blob-b: rgba(110, 120, 240, 0.14);
-    --text: #e6eff0;
-    --text-2: #a3b5b8;
-    --text-3: #6c8185;
-    --accent: #5cc3c3;
-    --accent-strong: #84dad8;
-    --accent-soft: rgba(92, 195, 195, 0.11);
-    --accent-ring: rgba(92, 195, 195, 0.30);
-    --flow: #72dede;
-    --done: #63d39a;
-    --done-soft: rgba(99, 211, 154, 0.13);
-    --load: #a4a5ff;
-    --load-soft: rgba(164, 165, 255, 0.14);
-    --warn: #e8b35c;
-    --warn-soft: rgba(232, 179, 92, 0.13);
-    --err: #ff6f83;
-    --err-soft: rgba(255, 111, 131, 0.13);
-    --idle: #4f6468;
-    --glass: rgba(18, 31, 35, 0.58);
-    --glass-strong: rgba(20, 35, 39, 0.82);
-    --glass-chrome: rgba(10, 20, 23, 0.55);
-    --glass-edge: rgba(255, 255, 255, 0.07);
-    --hairline: rgba(230, 240, 240, 0.07);
-    --hairline-strong: rgba(230, 240, 240, 0.12);
-    --link: rgba(230, 240, 240, 0.09);
-    --shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 34px -16px rgba(0, 0, 0, 0.75);
-    --shadow-lift: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 20px 48px -18px rgba(0, 0, 0, 0.85);
+    --page: #0D0F12;
+    --page-sheen: #1B1F24;
+    --surface: rgba(255, 255, 255, 0.055);
+    --surface-strong: rgba(255, 255, 255, 0.09);
+    --edge: rgba(255, 255, 255, 0.10);
+    --hairline: rgba(255, 255, 255, 0.08);
+    --hairline-strong: rgba(255, 255, 255, 0.15);
+    --ink: #E8ECEF;
+    --ink-2: #9AA4AD;
+    --ink-3: #6B747C;
+    --accent: #F07F76;
+    --accent-tint: rgba(240, 127, 118, 0.10);
+    --accent-ring: rgba(240, 127, 118, 0.34);
+    --on-accent: #2B0F0D;
+    --wash: rgba(240, 127, 118, 0.10);
+    --ok: #5CCB94;
+    --warn: #E7B95A;
+    --warn-tint: rgba(231, 185, 90, 0.10);
+    --error: #FF7D8E;
+    --error-tint: rgba(255, 125, 142, 0.09);
+    --idle: #5A636B;
+    --active-fill: rgba(255, 255, 255, 0.11);
+    --active-ring: rgba(255, 255, 255, 0.05);
+    --link: rgba(255, 255, 255, 0.08);
+    --chrome: rgba(13, 15, 18, 0.66);
+    --shadow: inset 0 1px 0 var(--edge), 0 8px 24px rgba(0, 0, 0, 0.32);
+    --shadow-pop: inset 0 1px 0 var(--edge), 0 18px 44px rgba(0, 0, 0, 0.55);
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { background: var(--field-b); }
+  html { background: var(--page); -webkit-text-size-adjust: 100%; }
   body {
     min-height: 100vh;
-    color: var(--text);
-    font: 13px/1.45 var(--font);
+    color: var(--ink);
+    font: 14px/1.45 var(--font);
     -webkit-font-smoothing: antialiased;
     font-variant-numeric: tabular-nums;
-    background:
-      radial-gradient(1100px 620px at 12% -8%, var(--blob-a), transparent 62%),
-      radial-gradient(900px 600px at 92% 8%, var(--blob-b), transparent 60%),
-      radial-gradient(800px 700px at 60% 110%, var(--blob-a), transparent 65%),
-      linear-gradient(160deg, var(--field-a), var(--field-b));
-    background-attachment: fixed;
-    transition: background-color 300ms var(--ease);
   }
+  /* The backdrop: a still silver sheen plus one soft garnet wash, top-leading. */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(70vmax 55vmax at 0% 0%, var(--wash), transparent 70%),
+      linear-gradient(180deg, var(--page-sheen) 0%, var(--page) 60vh);
+  }
+  [hidden] { display: none !important; }
   button, input, select { font: inherit; color: inherit; }
-  .mono { font-family: var(--mono); font-size: 0.94em; }
-  .muted { color: var(--text-3); }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .mono { font-family: var(--mono); font-size: 0.92em; }
+  .muted { color: var(--ink-3); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   .glass {
-    background: var(--glass);
-    -webkit-backdrop-filter: blur(28px) saturate(170%);
-    backdrop-filter: blur(28px) saturate(170%);
-    border: 1px solid var(--glass-edge);
+    background: var(--surface);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid var(--hairline);
     box-shadow: var(--shadow);
+  }
+
+  /* Error marker: a triangle in front of every error text. */
+  .err-ico::before, .form-error::before, .mrow-error::before, .upd-error::before, .kv .v.err::before,
+  .life[data-alert="true"] .life-value::before {
+    content: ""; display: inline-block; flex: none;
+    width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px;
+    background: currentColor;
+    -webkit-mask: var(--tri) center / contain no-repeat; mask: var(--tri) center / contain no-repeat;
   }
 
   /* ── Top bar ── */
   .topbar {
     position: sticky; top: 0; z-index: 20;
-    display: flex; align-items: center; gap: 14px;
-    height: 58px; padding: 0 28px;
-    background: var(--glass-chrome);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    backdrop-filter: blur(24px) saturate(180%);
+    display: flex; align-items: center; gap: 12px;
+    height: 56px; padding: 0 max(24px, env(safe-area-inset-right)) 0 max(24px, env(safe-area-inset-left));
+    background: var(--chrome);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
     border-bottom: 1px solid var(--hairline);
   }
   .brand { display: flex; align-items: center; gap: 10px; flex: none; white-space: nowrap; }
   .logo {
-    width: 28px; height: 28px; border-radius: 8px; flex: none;
-    display: grid; place-items: center;
-    background: linear-gradient(150deg, var(--accent), var(--accent-strong));
-    box-shadow: 0 4px 12px -4px var(--accent-ring);
+    width: 30px; height: 30px; border-radius: 9px; flex: none;
+    display: grid; place-items: center; color: var(--accent);
+    background: var(--surface-strong); border: 1px solid var(--hairline);
+    box-shadow: var(--shadow);
   }
-  :root[data-theme="dark"] .logo { background: linear-gradient(150deg, #2a8f93, #145c62); }
-  .brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.015em; }
-  .brand-sub { font-size: 13px; color: var(--text-3); font-weight: 500; }
-  .host-chip {
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    display: inline-block; align-items: center; gap: 6px;
-    padding: 4px 10px; border-radius: 999px;
-    font-family: var(--mono); font-size: 11.5px; color: var(--text-2);
-    background: var(--accent-soft);
-  }
-  .top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; white-space: nowrap; }
+  .brand-name { font-size: 15px; font-weight: 600; letter-spacing: -0.015em; }
+  .brand-sub { font-size: 15px; font-weight: 500; color: var(--ink-3); letter-spacing: -0.01em; }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; white-space: nowrap; }
   .pill {
     display: inline-flex; align-items: center; gap: 7px;
     height: 30px; padding: 0 12px; border-radius: 999px;
-    font-size: 12px; font-weight: 550; color: var(--text-2);
-    background: var(--glass-strong); border: 1px solid var(--hairline);
+    font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+    background: var(--surface-strong); border: 1px solid var(--hairline);
   }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); flex: none; }
-  .conn[data-state="live"] .dot { background: var(--done); box-shadow: 0 0 0 3px var(--done-soft); }
-  .conn[data-state="polling"] .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .conn[data-state="offline"] .dot { background: var(--warn); }
-  .conn[data-state="unauthorized"] .dot { background: var(--err); }
-  .conn[data-state="demo"] .dot { background: var(--load); box-shadow: 0 0 0 3px var(--load-soft); }
-  .icon-btn {
-    width: 30px; height: 30px; border-radius: 999px; cursor: pointer;
-    display: grid; place-items: center;
-    background: var(--glass-strong); border: 1px solid var(--hairline);
-    color: var(--text-2); transition: background 140ms var(--ease);
+  .conn[data-state="live"] .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+  .conn[data-state="polling"] .dot, .conn[data-state="demo"] .dot { background: var(--ink-2); }
+  .conn[data-state="offline"] .dot, .conn[data-state="unauthorized"] .dot {
+    width: 12px; height: 12px; border-radius: 0; box-shadow: none;
+    -webkit-mask: var(--tri) center / contain no-repeat; mask: var(--tri) center / contain no-repeat;
   }
-  .icon-btn:hover { background: var(--accent-soft); color: var(--text); }
+  .conn[data-state="offline"] .dot { background: var(--warn); }
+  .conn[data-state="unauthorized"] .dot { background: var(--error); }
+  .conn[data-state="unauthorized"] { color: var(--error); }
+  .icon-btn {
+    position: relative;
+    width: 32px; height: 32px; border-radius: 999px; cursor: pointer;
+    display: grid; place-items: center;
+    background: var(--surface-strong); border: 1px solid var(--hairline);
+    color: var(--ink-2); transition: background 140ms var(--ease), color 140ms var(--ease);
+  }
+  .icon-btn:hover { color: var(--ink); background: var(--surface); }
   .icon-btn svg { width: 15px; height: 15px; }
 
   /* ── Page ── */
-  .page { max-width: 1280px; margin: 0 auto; padding: 26px 28px 72px; display: grid; gap: 18px; }
-  body:not([data-conn="live"]):not([data-conn="polling"]):not([data-conn="demo"]) .live { opacity: 0.55; }
+  .page {
+    max-width: 1240px; margin: 0 auto; display: grid; gap: 16px;
+    padding: 24px max(24px, env(safe-area-inset-right)) 56px max(24px, env(safe-area-inset-left));
+  }
+  body:not([data-conn="live"]):not([data-conn="polling"]):not([data-conn="demo"]) .live { opacity: 0.5; }
 
   .notice {
-    display: none; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 12px 16px; border-radius: 14px; font-size: 13px;
-    background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+    display: none; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+    padding: 12px 14px 12px 16px; border-radius: 16px; font-size: 13.5px;
+    background: var(--warn-tint); border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%);
   }
   .notice[data-visible="true"] { display: flex; }
-  .notice[data-tone="error"] { background: var(--err-soft); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
-  .notice code { font-family: var(--mono); font-size: 12px; }
+  .notice[data-tone="error"] { background: var(--error-tint); border-color: color-mix(in srgb, var(--error) 26%, transparent); }
+  .notice-text { display: inline-flex; align-items: center; flex: 1 1 220px; min-width: 0; }
+  .notice-text::before { color: var(--warn); }
+  .notice[data-tone="error"] .notice-text::before { color: var(--error); }
+  .notice code { font-family: var(--mono); font-size: 12.5px; }
+  .notice form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 260px; justify-content: flex-end; }
+  .notice input[type="password"] { flex: 1 1 160px; max-width: 240px; }
+  .notice .form-error { flex-basis: 100%; text-align: right; }
 
   /* ── KPI tiles ── */
-  .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
-  .kpi { border-radius: var(--r-card); padding: 16px 18px 15px; position: relative; overflow: hidden; }
-  .kpi-label { font-size: 12px; font-weight: 550; color: var(--text-2); display: flex; align-items: center; gap: 7px; }
-  .kpi-label .dot { width: 6px; height: 6px; }
-  .kpi-value { font-size: 30px; font-weight: 650; letter-spacing: -0.03em; margin-top: 6px; line-height: 1.05; white-space: nowrap; }
-  .kpi-value .unit { font-size: 15px; font-weight: 550; color: var(--text-3); letter-spacing: -0.01em; margin-left: 2px; }
-  .kpi-meta { font-size: 12px; color: var(--text-3); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  .kpi { border-radius: var(--r-card); padding: 14px 16px 13px; min-width: 0; }
+  .kpi-label { font-size: 12.5px; font-weight: 500; color: var(--ink-2); display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .kpi-value {
+    font-family: var(--rounded); font-size: 28px; font-weight: 600; letter-spacing: -0.02em;
+    margin-top: 4px; line-height: 1.1; white-space: nowrap;
+  }
+  .kpi-value .unit { font-size: 14px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 2px; }
+  .kpi-meta { font-size: 12px; color: var(--ink-3); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .kpi.bump .kpi-value { animation: bump 600ms var(--ease); }
-  @keyframes bump { 0% { transform: translateY(0); } 30% { transform: translateY(-2px); color: var(--accent); } 100% { transform: none; } }
+  @keyframes bump { 30% { transform: translateY(-2px); } 100% { transform: none; } }
 
   /* ── Cards ── */
-  .card { border-radius: var(--r-card); padding: 18px 20px 20px; min-width: 0; }
-  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; min-height: 28px; }
-  .card-head h2 { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
-  .card-head .count { font-size: 12px; color: var(--text-3); font-weight: 500; }
+  .card { border-radius: var(--r-card); padding: 16px 18px 18px; min-width: 0; }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; min-height: 32px; }
+  .card-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.015em; white-space: nowrap; }
+  .card-head .count { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .card-head .grow { flex: 1; }
+  .card[hidden] { display: none; }
 
   /* ── Constellation ── */
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-2); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
   .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-  .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .stage { position: relative; width: 100%; height: 520px; }
+  .legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .legend .err-ico { color: var(--error); }
+  .legend .err-ico::before { margin-right: 0; width: 11px; height: 11px; }
+  .legend .err-ico span { color: var(--ink-2); }
+  .btn.viz-toggle { display: none; }
+  .stage-scroll { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -18px; padding: 0 18px; scrollbar-width: none; }
+  .stage-scroll::-webkit-scrollbar { display: none; }
+  .stage { position: relative; width: 100%; height: 480px; }
   .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .stage canvas.front { pointer-events: none; z-index: 3; }
   .nodes { position: absolute; inset: 0; z-index: 2; }
   .col-label {
     position: absolute; top: 0; transform: translateX(-50%);
-    font-size: 10.5px; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-3);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3);
   }
   .node { position: absolute; transition: transform 500ms var(--ease), opacity 300ms var(--ease); will-change: transform; }
 
   .cnode {
     width: 196px; height: 46px; padding: 0 12px 0 7px;
     display: flex; align-items: center; gap: 9px;
-    border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--glass-edge);
+    border-radius: 14px; background: var(--surface-strong); border: 1px solid var(--hairline);
     box-shadow: var(--shadow);
   }
   .avatar {
     width: 32px; height: 32px; border-radius: 10px; flex: none;
     display: grid; place-items: center;
-    font-size: 11.5px; font-weight: 650; color: var(--accent-strong);
-    background: var(--accent-soft);
-    transition: box-shadow 300ms var(--ease);
+    font-size: 11px; font-weight: 600; color: var(--ink-2);
+    background: var(--hairline);
+    transition: box-shadow 300ms var(--ease), background 300ms var(--ease);
   }
-  .cnode[data-live="true"] .avatar { color: #fff; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-ring); }
-  :root[data-theme="dark"] .cnode[data-live="true"] .avatar { color: #062226; }
-  .cnode[data-recent="false"] { opacity: 0.62; }
+  .avatar { position: relative; }
+  .cnode[data-live="true"] { border-color: var(--hairline-strong); }
+  .cnode[data-live="true"] .avatar { color: var(--ink); background: var(--active-fill); box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+  .cnode[data-live="true"] .avatar::after {
+    content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 0 2px var(--surface-strong);
+    animation: live-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes live-pulse { 50% { box-shadow: 0 0 0 2px var(--surface-strong), 0 0 0 5px var(--accent-tint); } }
+  .cnode[data-recent="false"] { opacity: 0.6; }
   .ctext { min-width: 0; flex: 1; }
   .cname { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .csub { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cnode[data-live="true"] .csub { color: var(--accent); }
+  .csub { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cnode[data-live="true"] .csub { color: var(--ink-2); }
 
   .qnode {
     width: 84px; border-radius: 22px;
-    background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: var(--shadow);
-    -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+    background: var(--surface-strong); border: 1px solid var(--hairline); box-shadow: var(--shadow);
     display: flex; flex-direction: column; align-items: center; padding-top: 10px;
   }
-  .qcount { font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
-  .qcap { font-size: 10.5px; color: var(--text-3); }
+  .qcount { font-family: var(--rounded); font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+  .qcap { font-size: 11px; color: var(--ink-3); }
 
-  .wnode { width: 120px; display: flex; flex-direction: column; align-items: center; gap: 15px; }
+  .wnode { width: 120px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
   .wcore {
     width: 62px; height: 62px; border-radius: 50%;
     display: grid; place-items: center;
-    background: var(--glass-strong); border: 1.5px solid var(--hairline-strong);
+    background: var(--surface-strong); border: 1.5px solid var(--hairline-strong);
     box-shadow: var(--shadow);
-    font-size: 14px; font-weight: 650; letter-spacing: -0.01em; color: var(--text-2);
+    font-family: var(--rounded); font-size: 14px; font-weight: 600; color: var(--ink-2);
     transition: border-color 300ms var(--ease), box-shadow 300ms var(--ease), color 300ms var(--ease);
   }
-  .wnode[data-state="transcribing"] .wcore { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft), 0 0 28px -4px var(--accent-ring); }
-  .wnode[data-state="loading"] .wcore { border-color: var(--load); color: var(--load); box-shadow: 0 0 0 5px var(--load-soft); animation: breathe 1.6s ease-in-out infinite; }
+  .wnode[data-state="transcribing"] .wcore { border-color: var(--ink-2); color: var(--ink); box-shadow: inset 0 1px 0 var(--edge), 0 0 0 5px var(--active-ring), var(--shadow); }
+  .wnode[data-state="loading"] .wcore { border-style: dashed; border-color: var(--ink-2); color: var(--ink); animation: breathe 1.6s ease-in-out infinite; }
   .wnode[data-state="model-unavailable"] .wcore { border-style: dashed; border-color: var(--warn); color: var(--warn); }
-  @keyframes breathe { 50% { box-shadow: 0 0 0 9px var(--load-soft); } }
+  @keyframes breathe { 50% { box-shadow: inset 0 1px 0 var(--edge), 0 0 0 7px var(--hairline); } }
   .wlabel { text-align: center; line-height: 1.25; }
-  .wstate { font-size: 11.5px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
-  .wnode[data-state="transcribing"] .wstate { color: var(--accent); }
-  .wnode[data-state="loading"] .wstate { color: var(--load); }
+  .wstate { font-size: 11.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+  .wnode[data-state="transcribing"] .wstate { color: var(--ink); }
   .wnode[data-state="model-unavailable"] .wstate { color: var(--warn); }
-  .wsub { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+  .wsub { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 
   .mnode {
-    width: 274px; height: 44px; padding: 0 12px;
+    width: 274px; height: 44px; padding: 0 12px; overflow: hidden;
     display: flex; align-items: center; gap: 10px;
-    border-radius: 13px; background: var(--glass-strong); border: 1px solid var(--glass-edge); box-shadow: var(--shadow);
+    border-radius: 12px; background: var(--surface-strong); border: 1px solid var(--hairline); box-shadow: var(--shadow);
   }
-  .mnode .mdot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--idle); }
-  .mnode[data-serving="true"] { border-color: var(--accent-ring); }
-  .mnode[data-serving="true"] .mdot { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-  .mnode[data-installed="true"][data-serving="false"] .mdot { background: var(--done); }
-  .mnode[data-installed="false"] {
-    height: 30px; background: transparent; box-shadow: none;
-    border: 1px dashed var(--hairline-strong);
-  }
-  .mnode[data-installed="false"] .mdot { background: transparent; border: 1.5px solid var(--idle); width: 8px; height: 8px; }
-  .mnode[data-missing="true"] { border: 1px dashed var(--warn); background: var(--warn-soft); height: 44px; }
+  .mnode .mdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-3); }
+  .mnode[data-serving="true"] { border-color: var(--hairline-strong); }
+  .mnode[data-serving="true"] .mdot { background: var(--ink-2); box-shadow: 0 0 0 3px var(--active-fill); }
+  .mnode[data-installed="false"] { height: 30px; background: transparent; box-shadow: none; border: 1px dashed var(--hairline-strong); }
+  .mnode[data-installed="false"] .mdot { background: transparent; border: 1.5px solid var(--idle); width: 7px; height: 7px; }
+  .mnode[data-missing="true"] { border: 1px dashed var(--warn); background: var(--warn-tint); height: 44px; }
   .mnode[data-missing="true"] .mdot { border-color: var(--warn); }
   .mtext { min-width: 0; flex: 1; }
   .mname { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mnode[data-installed="false"] .mname { font-size: 11.5px; font-weight: 500; color: var(--text-3); letter-spacing: -0.005em; }
-  .msub { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mnode { overflow: hidden; }
-  .msize { font-size: 10.5px; color: var(--text-3); white-space: nowrap; margin-left: auto; padding-left: 6px; }
-  .mnode[data-downloading="true"] { border: 1px solid var(--accent-ring); background: var(--glass-strong); height: 44px; }
+  .mnode[data-installed="false"] .mname { font-size: 11.5px; font-weight: 500; color: var(--ink-3); }
+  .msub { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msize { font-size: 11px; color: var(--ink-3); white-space: nowrap; margin-left: auto; padding-left: 6px; }
+  .mnode[data-downloading="true"] { border: 1px solid var(--hairline-strong); background: var(--surface-strong); height: 44px; }
   .mnode[data-downloading="true"] .mdot {
-    width: 14px; height: 14px; border: none; margin: 0 -2px;
-    background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--hairline-strong) 0);
+    width: 14px; height: 14px; border: none; margin: 0 -3px;
+    background: conic-gradient(var(--ink-2) calc(var(--pct) * 1%), var(--hairline-strong) 0);
     -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px); mask: radial-gradient(circle, transparent 3.5px, #000 4px);
   }
 
   /* ── Panels ── */
-  .grid-2 { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 18px; align-items: start; }
-  .kv-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid var(--hairline); }
+  .grid-2 { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+  .col { display: grid; gap: 16px; min-width: 0; align-content: start; }
+  .kv-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; padding: 6px 0; border-top: 1px solid var(--hairline); }
   .kv-row:first-child { border-top: none; }
-  .kv .k { color: var(--text-2); white-space: nowrap; }
-  .kv .v { text-align: right; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .kv .v small { font-weight: 450; color: var(--text-3); font-size: 11.5px; margin-left: 6px; }
+  .kv .k { color: var(--ink-2); white-space: nowrap; }
+  .kv .v { text-align: right; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .kv .v small { font-weight: 400; color: var(--ink-3); font-size: 12.5px; margin-left: 6px; }
+  .kv .v.err { color: var(--error); white-space: normal; }
+  .kv .v .tag { margin-left: 8px; }
+  .row-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
   .btn {
     appearance: none; cursor: pointer; white-space: nowrap;
-    height: 28px; padding: 0 12px; border-radius: var(--r-control);
-    font-size: 12.5px; font-weight: 550;
-    background: var(--glass-strong); border: 1px solid var(--hairline-strong); color: var(--text);
-    transition: background 140ms var(--ease), border-color 140ms var(--ease);
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 14px; border-radius: 999px;
+    font-size: 13px; font-weight: 500;
+    background: var(--surface-strong); border: 1px solid var(--hairline-strong); color: var(--ink);
+    box-shadow: inset 0 1px 0 var(--edge);
+    transition: background 140ms var(--ease), border-color 140ms var(--ease), filter 140ms var(--ease);
   }
-  .btn:hover { background: var(--accent-soft); border-color: var(--accent-ring); }
-  .btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
-  .btn[disabled] { opacity: 0.5; cursor: default; }
-  .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
-  :root[data-theme="dark"] .btn.primary { color: #062226; }
-  .btn.primary:hover { background: var(--accent-strong); }
+  .btn:hover { border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
+  .btn:focus-visible, .icon-btn:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+  .btn[disabled] { opacity: 0.45; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 4px 12px -4px var(--accent-ring); }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.quiet { background: transparent; border-color: transparent; box-shadow: none; color: var(--ink-2); padding: 0 10px; }
+  .btn.quiet:hover { color: var(--ink); background: var(--hairline); }
+  .btn svg { width: 14px; height: 14px; }
 
-  .form { display: none; gap: 14px; margin-top: 4px; }
-  .form[data-open="true"] { display: grid; }
-  .form-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
-  .form-row label { color: var(--text-2); }
-  .form input[type="number"], .form input[type="password"], .form select {
-    height: 30px; padding: 0 10px; border-radius: 9px;
-    background: var(--glass-strong); border: 1px solid var(--hairline-strong);
+  input[type="number"], input[type="password"], input[type="text"], select {
+    height: 34px; padding: 0 12px; border-radius: var(--r-field);
+    background: var(--surface-strong); border: 1px solid var(--hairline-strong); color: var(--ink);
+    box-shadow: inset 0 1px 2px rgba(16, 24, 32, 0.04);
   }
-  .form input[type="password"] { width: 200px; }
-  .form-row label small { display: block; color: var(--text-3); font-size: 11.5px; }
-  .pairing-hint { color: var(--text-3); font-size: 12px; margin-top: 8px; }
-  .notice form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
-  .notice input[type="password"] { height: 28px; width: 180px; padding: 0 10px; border-radius: 9px; background: var(--glass-strong); border: 1px solid var(--hairline-strong); }
-  .notice .form-error { flex-basis: 100%; text-align: right; }
+  input::placeholder { color: var(--ink-3); }
+  input:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+  .form { display: none; gap: 12px; margin-top: 2px; }
+  .form[data-open="true"] { display: grid; }
+  .form-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 36px; }
+  .form-row > label, .form-row > span { color: var(--ink-2); }
   .form input[type="number"] { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
-  .form select { max-width: 250px; }
-  .form input:focus-visible, .form select:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
-  .switch { appearance: none; width: 38px; height: 22px; border-radius: 999px; background: var(--hairline-strong); position: relative; cursor: pointer; transition: background 160ms var(--ease); }
-  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform 160ms var(--ease); }
+  .form input[type="password"] { width: 220px; }
+  .form select { max-width: 250px; min-width: 0; }
+  .form .select-row { grid-template-columns: auto minmax(0, 1fr); }
+  .form .select-row select { justify-self: end; }
+  .switch { appearance: none; width: 42px; height: 26px; border-radius: 999px; background: var(--hairline-strong); position: relative; cursor: pointer; transition: background 160ms var(--ease); flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 160ms var(--ease); }
   .switch:checked { background: var(--accent); }
   .switch:checked::after { transform: translateX(16px); }
+  .switch:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
   .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
-  .form-error { color: var(--err); font-size: 12px; }
+  .form-error { color: var(--error); font-size: 12.5px; }
   .form-error:empty { display: none; }
 
+  /* Connect a device */
+  .addr {
+    flex: 1; min-width: 0; height: 36px; padding: 0 12px; border-radius: var(--r-field);
+    display: flex; align-items: center;
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+    background: var(--surface-strong); border: 1px solid var(--hairline);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    user-select: all; -webkit-user-select: all;
+  }
+  .addr-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+
+  /* Disclosure for rarely changed settings */
+  details.more { border-top: 1px solid var(--hairline); margin-top: 6px; }
+  details.more > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px;
+    min-height: 40px; color: var(--ink-2); font-size: 13px; border-radius: 8px;
+  }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::after {
+    content: ""; width: 7px; height: 7px; margin-left: auto; margin-right: 4px;
+    border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg) translate(-2px, -2px); transition: transform 160ms var(--ease);
+  }
+  details.more[open] > summary::after { transform: rotate(225deg) translate(-2px, -2px); }
+  details.more > summary:hover { color: var(--ink); }
+  .more-body { display: grid; gap: 10px; padding: 2px 0 4px; }
+
+  /* Models */
   .mlist { display: flex; flex-direction: column; }
-  .mrow { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 44px; padding: 7px 0; border-top: 1px solid var(--hairline); }
-  .mrow .btn { height: 26px; padding: 0 11px; font-size: 12px; }
+  .mrow { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto auto; align-items: center; column-gap: 12px; min-height: 46px; padding: 6px 0; border-top: 1px solid var(--hairline); }
   .mrow:first-child { border-top: none; }
+  .mrow .btn { height: 28px; padding: 0 12px; font-size: 12.5px; }
   .mrow .mdot { width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 1.5px solid var(--idle); }
-  .mrow[data-installed="true"] .mdot { background: var(--done); border-color: var(--done); }
-  .mrow[data-serving="true"] .mdot { background: var(--accent); border-color: var(--accent); }
-  .mrow-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mrow-name small { font-weight: 450; color: var(--text-3); margin-left: 6px; font-size: 11.5px; }
-  .mrow-size { color: var(--text-3); font-size: 12px; white-space: nowrap; text-align: right; min-width: 58px; }
-  .mrow-status { font-size: 12px; color: var(--text-2); white-space: nowrap; min-width: 112px; text-align: right; }
-  .mrow[data-serving="true"] .mrow-status { color: var(--accent); font-weight: 550; }
-  .mrow-progress { grid-column: 2 / -1; height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; margin-top: -2px; }
-  .mrow-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 400ms var(--ease); }
-  .mrow-error { grid-column: 2 / -1; color: var(--err); font-size: 12px; }
+  .mrow[data-installed="true"] .mdot { background: var(--ink-3); border-color: var(--ink-3); }
+  .mrow[data-serving="true"] .mdot { background: var(--ink-2); border-color: var(--ink-2); box-shadow: 0 0 0 3px var(--active-fill); }
+  .mrow-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mrow[data-installed="false"] .mrow-name { color: var(--ink-2); }
+  .mrow-name small { font-weight: 400; color: var(--ink-3); margin-left: 6px; font-size: 12px; }
+  .mrow-size { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; text-align: right; }
+  .mrow-status { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; min-width: 96px; text-align: right; }
+  .mrow[data-serving="true"] .mrow-status { color: var(--ink); font-weight: 500; }
+  .mrow-progress { grid-column: 2 / -1; height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; margin: 2px 0 2px; }
+  .mrow-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--ink-2); transition: width 400ms var(--ease); }
+  .mrow-error { grid-column: 2 / -1; color: var(--error); font-size: 12.5px; }
 
+  /* Since start */
   .lifetime { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .life { padding: 2px 18px; border-left: 1px solid var(--hairline); min-width: 0; }
+  .life { padding: 2px 16px; border-left: 1px solid var(--hairline); min-width: 0; }
   .life:first-child { border-left: none; padding-left: 0; }
-  .life-label { font-size: 12px; color: var(--text-2); white-space: nowrap; }
-  .life-value { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; margin-top: 3px; white-space: nowrap; }
-  .life-meta { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
-  .life[data-alert="true"] .life-value { color: var(--err); }
+  .life-label { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .life-value { font-family: var(--rounded); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; white-space: nowrap; }
+  .life[data-alert="true"] .life-value { color: var(--error); }
+  .life[data-alert="true"] .life-value::before { width: 15px; height: 15px; vertical-align: -1px; }
 
-  .table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text-3); padding: 0 10px 8px; white-space: nowrap; letter-spacing: 0.01em; }
-  td { padding: 9px 10px; border-top: 1px solid var(--hairline); white-space: nowrap; vertical-align: middle; }
+  /* Tables */
+  .table-wrap { overflow-x: auto; margin: 0 -18px; padding: 0 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 12px; font-weight: 500; color: var(--ink-3); padding: 0 10px 8px; white-space: nowrap; }
+  td { padding: 8px 10px; height: 44px; border-top: 1px solid var(--hairline); white-space: nowrap; vertical-align: middle; }
   th:first-child, td:first-child { padding-left: 0; }
   th:last-child, td:last-child { padding-right: 0; }
   th.n, td.n { text-align: right; }
-  td.n { font-variant-numeric: tabular-nums; color: var(--text-2); }
-  td.n[data-alert="true"] { color: var(--err); font-weight: 600; }
+  td.n { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  td.n[data-alert="true"] { color: var(--error); font-weight: 600; }
   td .who { display: flex; align-items: center; gap: 9px; }
-  td .who .avatar { width: 24px; height: 24px; border-radius: 7px; font-size: 10px; }
-  td .who b { font-weight: 600; }
-  td .who small { color: var(--text-3); font-size: 11px; margin-left: 4px; }
-  .tag { display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border-radius: 6px; font-size: 10.5px; font-weight: 600; color: var(--text-2); background: var(--hairline); margin-left: 7px; }
-  .tag.live { color: var(--accent); background: var(--accent-soft); }
-  .tag.whisper { color: var(--load); background: var(--load-soft); }
-  .tag.parakeet { color: var(--done); background: var(--done-soft); }
+  td .who .avatar { width: 26px; height: 26px; border-radius: 8px; font-size: 10px; }
+  td .who b { font-weight: 500; }
+  td .who small { color: var(--ink-3); font-size: 12px; margin-left: -4px; }
+  .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 500; color: var(--ink-2); background: var(--hairline); margin-left: 7px; }
+  .tag.live { color: var(--ink); gap: 5px; }
+  .tag.live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   tr.fresh td { animation: fresh 1.6s var(--ease) 1; }
-  @keyframes fresh { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
-  .placeholder { color: var(--text-3); padding: 10px 0 2px; }
+  @keyframes fresh { 0% { background: var(--active-fill); } 100% { background: transparent; } }
+  .placeholder { color: var(--ink-3); padding: 8px 0 2px; }
+  .who .live-dot { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .table-more { display: flex; justify-content: center; padding-top: 10px; border-top: 1px solid var(--hairline); }
+  .table-more[hidden] { display: none; }
+  tr.extra { display: none; }
+  .table-wrap[data-all="true"] tr.extra { display: table-row; }
 
-  .foot { display: flex; justify-content: center; gap: 8px; color: var(--text-3); font-size: 11.5px; padding-top: 4px; }
+  .foot { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; color: var(--ink-3); font-size: 12px; padding-top: 4px; }
 
   /* ── Update button: sync / spinning / download + "1" / progress ring /
      restart + dot / warning dot (one control, state in data-state) ── */
-  .upd-btn { position: relative; }
   .upd-btn[hidden] { display: none; }
   .upd-btn[disabled] { cursor: default; }
   .upd-ico { display: grid; place-items: center; width: 15px; height: 15px; }
   .upd-ico svg { width: 15px; height: 15px; }
   .upd-btn[data-state="checking"] .upd-ico, .upd-btn[data-state="restarting"] .upd-ico { animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .upd-btn[data-state="available"] { color: var(--accent); border-color: var(--accent-ring); background: var(--accent-soft); }
-  .upd-btn[data-state="ready"] { color: var(--done); border-color: color-mix(in srgb, var(--done) 35%, transparent); }
+  .upd-btn[data-state="available"] { color: var(--accent); border-color: var(--accent-ring); }
+  .upd-btn[data-state="ready"] { color: var(--ok); }
   .upd-btn[data-state="downloading"] { color: var(--accent); border-color: transparent; }
   .upd-badge, .upd-dot, .upd-ring { display: none; }
   .upd-badge {
-    position: absolute; top: -5px; right: -6px; min-width: 15px; height: 15px; padding: 0 4px;
-    border-radius: 999px; font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center;
-    color: #fff; background: var(--accent); box-shadow: 0 0 0 2px var(--field-b);
+    position: absolute; top: -5px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+    color: var(--on-accent); background: var(--accent); box-shadow: 0 0 0 2px var(--page);
   }
-  :root[data-theme="dark"] .upd-badge { color: #062226; }
-  .upd-dot { position: absolute; top: -1px; right: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--done); box-shadow: 0 0 0 2px var(--field-b); }
+  .upd-dot { position: absolute; top: -1px; right: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 2px var(--page); }
   .upd-btn[data-state="error"] .upd-dot { background: var(--warn); }
   .upd-btn[data-state="available"] .upd-badge { display: block; }
   .upd-btn[data-state="ready"] .upd-dot, .upd-btn[data-state="error"] .upd-dot { display: block; }
@@ -418,76 +486,106 @@
   .upd-ring .track { stroke: var(--hairline-strong); }
   .upd-ring .bar { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 300ms var(--ease); }
 
-  /* ── Updates panel ── */
-  .col { display: grid; gap: 18px; min-width: 0; align-content: start; }
-  .card[hidden] { display: none; }
-  .nav-badge { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; color: #fff; background: var(--accent); }
-  :root[data-theme="dark"] .nav-badge { color: #062226; }
+  /* ── Updates card ── */
+  .nav-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; color: var(--on-accent); background: var(--accent); }
   .nav-badge[hidden] { display: none; }
-  .kv .v .tag { margin-left: 8px; }
-  .tag.nightly { color: var(--load); background: var(--load-soft); }
-  .tag.stable { color: var(--done); background: var(--done-soft); }
-  .kv .v.err { color: var(--err); white-space: normal; text-align: right; }
-  .upd-settings { display: grid; gap: 10px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--hairline); }
-  .upd-settings .form-row > span, .upd-settings .form-row > label { color: var(--text-2); }
-  .upd-settings label small { display: block; color: var(--text-3); font-size: 11.5px; }
-  .seg { display: inline-grid; grid-auto-flow: column; gap: 2px; padding: 2px; border-radius: 10px; background: var(--hairline); }
+  .seg { display: inline-grid; grid-auto-flow: column; gap: 2px; padding: 2px; border-radius: 999px; background: var(--hairline); }
   .seg button {
     appearance: none; border: 0; background: transparent; cursor: pointer;
-    height: 26px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 550; color: var(--text-2);
+    height: 28px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--ink-2);
     transition: background 140ms var(--ease), color 140ms var(--ease);
   }
-  .seg button[aria-checked="true"] { background: var(--glass-strong); color: var(--text); box-shadow: 0 1px 2px rgba(16, 38, 43, 0.12); }
+  .seg button[aria-checked="true"] { background: var(--surface-strong); color: var(--ink); box-shadow: inset 0 1px 0 var(--edge), 0 1px 3px rgba(16, 24, 32, 0.14); }
   .seg button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
   .seg[aria-disabled="true"] button { cursor: default; opacity: 0.6; }
-  .upd-hint { color: var(--text-3); font-size: 12px; margin-top: -4px; }
-  .upd-note { font-size: 12px; padding: 8px 11px; border-radius: 10px; background: var(--load-soft); color: var(--text-2); }
+  .upd-hint { color: var(--ink-3); font-size: 12.5px; }
+  .upd-hint:empty { display: none; }
+  .upd-note { font-size: 12.5px; padding: 8px 12px; border-radius: var(--r-field); background: var(--hairline); color: var(--ink-2); }
   .upd-note[hidden] { display: none; }
-  .upd-note b { color: var(--text); font-weight: 600; }
-  .upd-cta { display: grid; gap: 8px; margin-top: 14px; }
+  .upd-note b { color: var(--ink); font-weight: 600; }
+  .upd-cta { display: grid; gap: 8px; margin-top: 10px; }
   .upd-cta:empty { display: none; }
-  .upd-cta .row { display: flex; align-items: center; gap: 10px; }
-  .upd-cta .row .grow { flex: 1; min-width: 0; color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upd-cta .row { display: flex; align-items: center; gap: 12px; }
+  .upd-cta .row .grow { flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .upd-progress { height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; }
-  .upd-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 300ms var(--ease); }
-  .upd-error { color: var(--err); font-size: 12px; }
+  .upd-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--ink-2); transition: width 300ms var(--ease); }
+  .upd-error { color: var(--error); font-size: 12.5px; }
 
   /* ── Toasts ── */
-  .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 40; display: grid; gap: 10px; width: min(360px, calc(100vw - 40px)); }
+  .toasts { position: fixed; right: 20px; bottom: max(20px, env(safe-area-inset-bottom)); z-index: 40; display: grid; gap: 10px; width: min(360px, calc(100vw - 32px)); }
   .toast {
     display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 12px; align-items: start;
-    padding: 12px 12px 12px 14px; border-radius: 14px;
-    background: var(--glass-strong); border: 1px solid var(--glass-edge); box-shadow: var(--shadow-lift);
-    -webkit-backdrop-filter: blur(24px) saturate(170%); backdrop-filter: blur(24px) saturate(170%);
+    padding: 12px 12px 12px 14px; border-radius: 18px;
+    background: var(--surface-strong); border: 1px solid var(--hairline); box-shadow: var(--shadow-pop);
+    -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%);
     animation: toast-in 260ms var(--ease);
   }
   @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
-  .toast-ico { grid-row: span 3; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .toast-ico { grid-row: span 3; width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center; background: var(--hairline); color: var(--ink-2); }
   .toast-ico svg { width: 15px; height: 15px; }
-  .toast[data-tone="done"] .toast-ico { background: var(--done-soft); color: var(--done); }
-  .toast-title { font-weight: 650; padding-top: 1px; }
-  .toast-body { grid-column: 2; color: var(--text-2); font-size: 12px; }
+  .toast[data-tone="accent"] .toast-ico { background: var(--accent-tint); color: var(--accent); }
+  .toast[data-tone="done"] .toast-ico { color: var(--ok); }
+  .toast[data-tone="error"] .toast-ico { background: var(--error-tint); color: var(--error); }
+  .toast-title { font-weight: 600; padding-top: 4px; }
+  .toast-body { grid-column: 2; color: var(--ink-2); font-size: 12.5px; }
   .toast-actions { grid-column: 2; display: flex; gap: 8px; margin-top: 8px; }
-  .toast-x { grid-column: 3; grid-row: 1; appearance: none; border: 0; background: transparent; color: var(--text-3); cursor: pointer; width: 22px; height: 22px; border-radius: 6px; font-size: 15px; line-height: 1; }
-  .toast-x:hover { background: var(--hairline); color: var(--text); }
+  .toast-x { grid-column: 3; grid-row: 1; appearance: none; border: 0; background: transparent; color: var(--ink-3); cursor: pointer; width: 26px; height: 26px; border-radius: 999px; font-size: 16px; line-height: 1; }
+  .toast-x:hover { background: var(--hairline); color: var(--ink); }
 
-  @media (max-width: 1000px) {
-    .brand-sub { display: none; }
-  }
   @media (max-width: 1100px) {
     .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .grid-2 { grid-template-columns: minmax(0, 1fr); }
     .lifetime { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 14px; }
     .life:nth-child(3n+1) { border-left: none; padding-left: 0; }
   }
+  @media (max-width: 760px) {
+    .stage { min-width: 700px; }
+  }
   @media (max-width: 640px) {
-    .page { padding: 18px 14px 48px; }
-    .topbar { padding: 0 14px; }
-    .host-chip, .brand-sub { display: none; }
-    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    body { font-size: 15px; }
+    .topbar { height: 52px; padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); }
+    .brand-sub { display: none; }
+    .page { padding: 14px max(14px, env(safe-area-inset-right)) 40px max(14px, env(safe-area-inset-left)); gap: 12px; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .kpis .kpi:first-child { grid-column: span 2; }
+    .kpi { padding: 12px 14px; }
+    .kpi-value { font-size: 26px; }
+    .card { padding: 14px 16px 16px; }
+    .stage-scroll { margin: 0 -16px; padding: 0 16px; }
+    .table-wrap { margin: 0 -16px; padding: 0 16px; }
+    .legend { display: none; }
+    .btn.viz-toggle { display: inline-flex; }
+    .viz-card[data-collapsed="true"] .stage-scroll { display: none; }
+    .viz-card[data-collapsed="true"] .card-head { margin-bottom: 0; }
+    .stage-scroll { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+    table { font-size: 14px; }
+    th, td { padding-left: 8px; padding-right: 8px; }
+    td .who .avatar, td .who .tag.live { display: none; }
+    td .who .live-dot { display: inline-block; margin-left: -2px; }
+    .addr { font-size: 12.5px; height: auto; min-height: 36px; padding: 8px 12px; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+    .form .select-row select { max-width: none; width: 100%; }
+    .grid-2, .col { gap: 12px; }
+    .mrow { grid-template-columns: 8px minmax(0, 1fr) auto; }
+    .mrow-size { display: none; }
+    .mrow-name small { display: none; }
+    .mrow-status { min-width: 0; }
+    .form input[type="password"] { width: 100%; }
+    .pairing-form .form-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .form select { max-width: 190px; }
+    .opt { display: none; }
+    td { height: 48px; }
+    .toasts { right: 16px; left: 16px; width: auto; }
+    .life { padding: 2px 12px; }
+    .life-value { font-size: 18px; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    :root { --surface: #F7F8FA; --surface-strong: #FFFFFF; --chrome: #EDEFF2; }
+    :root[data-theme="dark"] { --surface: #16191D; --surface-strong: #1D2126; --chrome: #0D0F12; }
+    .glass, .topbar, .toast, .notice { -webkit-backdrop-filter: none; backdrop-filter: none; }
+    body::before { background: var(--page); }
   }
 </style>
 </head>
@@ -495,12 +593,11 @@
   <header class="topbar">
     <div class="brand">
       <span class="logo" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="#fff"><rect x="1.5" y="5" width="2" height="6" rx="1"/><rect x="5" y="2.5" width="2" height="11" rx="1"/><rect x="8.5" y="4" width="2" height="8" rx="1"/><rect x="12" y="6" width="2" height="4" rx="1"/></svg>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1.5" y="5" width="2" height="6" rx="1"/><rect x="5" y="2.5" width="2" height="11" rx="1"/><rect x="8.5" y="4" width="2" height="8" rx="1"/><rect x="12" y="6" width="2" height="4" rx="1"/></svg>
       </span>
       <span class="brand-name">Fairspoken</span>
-      <span class="brand-sub">Transcription host</span>
+      <span class="brand-sub">Server</span>
     </div>
-    <span class="host-chip" id="hostChip" title="Bind address and version">—</span>
     <div class="top-right">
       <span class="pill conn" id="conn" data-state="connecting"><span class="dot"></span><span id="connLabel" role="status" aria-live="polite">Connecting…</span></span>
       <button class="icon-btn upd-btn" id="updBtn" type="button" data-state="idle" aria-label="Check for updates" hidden>
@@ -517,131 +614,149 @@
     <div class="notice" id="notice" role="status" aria-live="polite"></div>
 
     <section class="kpis live" aria-label="Live counters">
-      <div class="kpi glass" id="kpiFlight"><div class="kpi-label"><span class="dot" style="background:var(--accent)"></span>In flight</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
-      <div class="kpi glass" id="kpiQueue"><div class="kpi-label">Queue depth</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
-      <div class="kpi glass" id="kpiLatency"><div class="kpi-label">Median latency</div><div class="kpi-value">—</div><div class="kpi-meta">release to text</div></div>
+      <div class="kpi glass" id="kpiFlight"><div class="kpi-label">In flight</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
+      <div class="kpi glass" id="kpiQueue"><div class="kpi-label">Queue</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
+      <div class="kpi glass" id="kpiLatency"><div class="kpi-label">Median latency</div><div class="kpi-value">—</div><div class="kpi-meta">—</div></div>
       <div class="kpi glass" id="kpiThroughput"><div class="kpi-label">Throughput</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
       <div class="kpi glass" id="kpiWorkers"><div class="kpi-label">Workers busy</div><div class="kpi-value">0</div><div class="kpi-meta">—</div></div>
     </section>
 
-    <section class="card glass live" aria-labelledby="constellationTitle">
+    <section class="card glass live viz-card" id="vizCard" aria-labelledby="constellationTitle">
       <div class="card-head">
-        <h2 id="constellationTitle">Live constellation</h2>
+        <h2 id="constellationTitle">Activity</h2>
         <span class="grow"></span>
+        <button class="btn quiet viz-toggle" id="vizToggle" type="button" aria-controls="stage">Show</button>
         <div class="legend" aria-hidden="true">
-          <span><i style="background:var(--flow)"></i>Request</span>
-          <span><i style="background:var(--done)"></i>Completed</span>
-          <span><i style="background:var(--load)"></i>Loading</span>
-          <span><i style="border:1.5px dashed var(--warn)"></i>Model missing</span>
-          <span><i style="background:var(--err)"></i>Error</span>
+          <span><i style="background:var(--accent)"></i>Request</span>
+          <span><i style="background:var(--ok)"></i>Done</span>
+          <span class="err-ico"><span>Error</span></span>
         </div>
       </div>
-      <div class="stage" id="stage">
-        <canvas class="back" id="backCanvas" aria-hidden="true"></canvas>
-        <div class="nodes" id="nodes"></div>
-        <canvas class="front" id="frontCanvas" aria-hidden="true"></canvas>
+      <div class="stage-scroll">
+        <div class="stage" id="stage">
+          <canvas class="back" id="backCanvas" aria-hidden="true"></canvas>
+          <div class="nodes" id="nodes"></div>
+          <canvas class="front" id="frontCanvas" aria-hidden="true"></canvas>
+        </div>
       </div>
       <p class="sr-only" id="stageSummary" aria-live="polite"></p>
     </section>
 
     <section class="grid-2">
       <div class="col">
-      <div class="card glass live" aria-labelledby="configTitle">
-        <div class="card-head">
-          <h2 id="configTitle">Configuration</h2>
-          <span class="grow"></span>
-          <button class="btn" id="editConfig" type="button" aria-expanded="false" aria-controls="configForm" disabled>Edit</button>
-        </div>
-        <div class="kv" id="configView"></div>
-        <form class="form" id="configForm" data-open="false" novalidate>
-          <div class="form-row"><label for="inStreams">Max active streams</label><input id="inStreams" type="number" min="1" max="32" step="1"></div>
-          <div class="form-row"><label for="inRecording">Max recording (seconds)</label><input id="inRecording" type="number" min="10" max="600" step="10"></div>
-          <div class="form-row"><label for="inGpu">Use GPU</label><input id="inGpu" class="switch" type="checkbox"></div>
-          <div id="modelInputs" style="display: contents"></div>
-          <p class="form-error" id="configError" role="alert"></p>
-          <div class="form-actions">
-            <button class="btn" id="cancelConfig" type="button">Cancel</button>
-            <button class="btn primary" id="applyConfig" type="submit">Apply</button>
+        <div class="card glass" id="pairingCard" aria-labelledby="pairingTitle">
+          <div class="card-head">
+            <h2 id="pairingTitle">Connect a device</h2>
+            <span class="grow"></span>
+            <span class="count" id="hostName"></span>
           </div>
-        </form>
-      </div>
-      <div class="card glass" id="pairingCard" aria-labelledby="pairingTitle">
-        <div class="card-head">
-          <h2 id="pairingTitle">Pairing</h2>
-          <span class="grow"></span>
-          <button class="btn" id="clearPairing" type="button" hidden>Turn off</button>
-          <button class="btn" id="editPairing" type="button" aria-expanded="false" aria-controls="pairingForm" disabled>Set password</button>
-        </div>
-        <div class="kv" id="pairingView"></div>
-        <p class="pairing-hint" id="pairingHint"></p>
-        <form class="form" id="pairingForm" data-open="false" novalidate>
-          <div class="form-row"><label for="inPairing">Pairing password<small>6 to 128 characters, a six-digit number works</small></label><input id="inPairing" type="password" autocomplete="new-password" maxlength="128"></div>
-          <p class="form-error" id="pairingError" role="alert"></p>
-          <div class="form-actions">
-            <button class="btn" id="cancelPairing" type="button">Cancel</button>
-            <button class="btn primary" id="applyPairing" type="submit">Save password</button>
+          <div class="addr-row">
+            <span class="addr" id="hostAddr" title="Server address">—</span>
+            <button class="btn" id="copyAddr" type="button">Copy</button>
           </div>
-        </form>
-      </div>
-      <div class="card glass" id="updatesCard" aria-labelledby="updatesTitle" hidden>
-        <div class="card-head">
-          <h2 id="updatesTitle">Updates</h2>
-          <span class="nav-badge" id="updatesBadge" title="An update is pending" hidden>1</span>
-          <span class="grow"></span>
-          <button class="btn" id="updCheck" type="button">Check for updates</button>
-        </div>
-        <div class="kv" id="updView"></div>
-        <div class="upd-settings">
-          <div class="form-row">
-            <span id="updChannelLabel">Channel</span>
-            <div class="seg" id="updSeg" role="radiogroup" aria-labelledby="updChannelLabel">
-              <button type="button" role="radio" data-channel="stable" aria-checked="false">Stable</button>
-              <button type="button" role="radio" data-channel="nightly" aria-checked="false">Nightly</button>
+          <div class="kv" id="pairingView">
+            <div class="kv-row">
+              <span class="k">Password</span>
+              <div class="row-actions">
+                <span class="v" id="pairingState">—</span>
+                <button class="btn quiet" id="clearPairing" type="button" hidden>Turn off</button>
+                <button class="btn" id="editPairing" type="button" aria-expanded="false" aria-controls="pairingForm" disabled>Set</button>
+              </div>
             </div>
           </div>
-          <p class="upd-hint" id="updHint"></p>
-          <p class="upd-note" id="updNote" hidden></p>
-          <div class="form-row">
-            <label for="updAuto">Install updates automatically<small>Only after a scheduled check; restarts when no one is dictating</small></label>
-            <input id="updAuto" class="switch" type="checkbox">
-          </div>
+          <form class="form pairing-form" id="pairingForm" data-open="false" novalidate>
+            <div class="form-row"><label for="inPairing" class="sr-only">New password</label><input id="inPairing" type="password" autocomplete="new-password" maxlength="128" placeholder="New password (6+ characters)"></div>
+            <p class="form-error" id="pairingError" role="alert"></p>
+            <div class="form-actions">
+              <button class="btn" id="cancelPairing" type="button">Cancel</button>
+              <button class="btn primary" id="applyPairing" type="submit">Save</button>
+            </div>
+          </form>
         </div>
-        <div class="upd-cta" id="updCta"></div>
-      </div>
+        <div class="card glass live" aria-labelledby="configTitle">
+          <div class="card-head">
+            <h2 id="configTitle">Settings</h2>
+            <span class="grow"></span>
+            <button class="btn" id="editConfig" type="button" aria-expanded="false" aria-controls="configForm" disabled>Edit</button>
+          </div>
+          <div class="kv" id="configView"></div>
+          <form class="form" id="configForm" data-open="false" novalidate>
+            <div id="modelInputs" style="display: contents"></div>
+            <div class="form-row"><label for="inGpu">GPU</label><input id="inGpu" class="switch" type="checkbox"></div>
+            <div class="form-row"><label for="inStreams">Max live streams</label><input id="inStreams" type="number" min="1" max="32" step="1" inputmode="numeric"></div>
+            <div class="form-row"><label for="inRecording">Max recording (s)</label><input id="inRecording" type="number" min="10" max="600" step="10" inputmode="numeric"></div>
+            <p class="form-error" id="configError" role="alert"></p>
+            <div class="form-actions">
+              <button class="btn" id="cancelConfig" type="button">Cancel</button>
+              <button class="btn primary" id="applyConfig" type="submit">Apply</button>
+            </div>
+          </form>
+        </div>
+        <div class="card glass" id="updatesCard" aria-labelledby="updatesTitle" hidden>
+          <div class="card-head">
+            <h2 id="updatesTitle">Updates</h2>
+            <span class="nav-badge" id="updatesBadge" title="An update is pending" hidden>1</span>
+            <span class="grow"></span>
+            <button class="btn" id="updCheck" type="button">Check</button>
+          </div>
+          <div class="kv" id="updView"></div>
+          <div class="upd-cta" id="updCta"></div>
+          <details class="more" id="updMore">
+            <summary>Options</summary>
+            <div class="more-body">
+              <div class="form-row">
+                <span id="updChannelLabel">Channel</span>
+                <div class="seg" id="updSeg" role="radiogroup" aria-labelledby="updChannelLabel">
+                  <button type="button" role="radio" data-channel="stable" aria-checked="false" title="Tested releases">Stable</button>
+                  <button type="button" role="radio" data-channel="nightly" aria-checked="false" title="Built nightly from the latest code">Nightly</button>
+                </div>
+              </div>
+              <p class="upd-hint" id="updHint"></p>
+              <p class="upd-note" id="updNote" hidden></p>
+              <div class="form-row">
+                <label for="updAuto" title="After a scheduled check; restarts when no one is dictating">Install automatically</label>
+                <input id="updAuto" class="switch" type="checkbox">
+              </div>
+            </div>
+          </details>
+        </div>
       </div>
       <div class="card glass live" aria-labelledby="modelsTitle">
         <div class="card-head">
           <h2 id="modelsTitle">Models</h2>
+          <span class="grow"></span>
           <span class="count" id="modelsCount"></span>
         </div>
-        <div class="mlist" id="modelList"><p class="placeholder">Waiting for host…</p></div>
+        <div class="mlist" id="modelList"><p class="placeholder">Waiting for the server…</p></div>
       </div>
     </section>
 
-    <section class="card glass live" aria-label="Since start">
+    <section class="card glass live" aria-labelledby="lifeTitle">
+      <div class="card-head"><h2 id="lifeTitle">Since start</h2><span class="grow"></span><span class="count">up <span id="footUptime">—</span></span></div>
       <div class="lifetime">
-        <div class="life"><div class="life-label">Transcriptions</div><div class="life-value" id="lifeTotal">0</div><div class="life-meta">since start</div></div>
-        <div class="life"><div class="life-label">Audio processed</div><div class="life-value" id="lifeAudio">0s</div><div class="life-meta">since start</div></div>
-        <div class="life"><div class="life-label">Avg queue wait</div><div class="life-value" id="lifeQueue">0 ms</div><div class="life-meta">per started job</div></div>
-        <div class="life"><div class="life-label">Avg processing</div><div class="life-value" id="lifeProc">0 ms</div><div class="life-meta">per transcription</div></div>
-        <div class="life" id="lifeRejectedBox"><div class="life-label">Rejected</div><div class="life-value" id="lifeRejected">0</div><div class="life-meta">over limits</div></div>
-        <div class="life" id="lifeFailedBox"><div class="life-label">Failed</div><div class="life-value" id="lifeFailed">0</div><div class="life-meta">worker errors</div></div>
+        <div class="life"><div class="life-label">Transcriptions</div><div class="life-value" id="lifeTotal">0</div></div>
+        <div class="life"><div class="life-label">Audio</div><div class="life-value" id="lifeAudio">0s</div></div>
+        <div class="life"><div class="life-label">Avg wait</div><div class="life-value" id="lifeQueue">0 ms</div></div>
+        <div class="life"><div class="life-label">Avg processing</div><div class="life-value" id="lifeProc">0 ms</div></div>
+        <div class="life" id="lifeRejectedBox" title="Over the queue or stream limits"><div class="life-label">Rejected</div><div class="life-value" id="lifeRejected">0</div></div>
+        <div class="life" id="lifeFailedBox" title="Worker errors"><div class="life-label">Failed</div><div class="life-value" id="lifeFailed">0</div></div>
       </div>
     </section>
 
     <section class="card glass live" aria-labelledby="clientsTitle">
-      <div class="card-head"><h2 id="clientsTitle">Clients</h2><span class="count" id="clientCount"></span></div>
+      <div class="card-head"><h2 id="clientsTitle">Clients</h2><span class="grow"></span><span class="count" id="clientCount"></span></div>
       <div class="table-wrap" id="clientTable"><p class="placeholder">No clients yet.</p></div>
     </section>
 
     <section class="card glass" aria-labelledby="recentTitle">
-      <div class="card-head"><h2 id="recentTitle">Recent transcriptions</h2><span class="count" id="recentCount"></span></div>
-      <div class="table-wrap" id="recentTable"><p class="placeholder">Connecting to host…</p></div>
+      <div class="card-head"><h2 id="recentTitle">Recent</h2><span class="grow"></span><span class="count" id="recentCount"></span></div>
+      <div class="table-wrap" id="recentTable"><p class="placeholder">Connecting…</p></div>
+      <div class="table-more" id="recentMore" hidden><button class="btn quiet" id="recentMoreBtn" type="button">Show all</button></div>
     </section>
 
     <div class="toasts" id="toasts" aria-live="polite"></div>
 
-    <footer class="foot"><span id="footVersion">—</span><span>·</span><span>up <span id="footUptime">—</span></span><span>·</span><span id="footMode">—</span></footer>
+    <footer class="foot"><span id="footVersion">—</span><span aria-hidden="true">·</span><span id="footMode">—</span></footer>
   </main>
 
 <script>
@@ -784,7 +899,7 @@
     $("conn").dataset.state = state;
     document.body.dataset.conn = state;
     $("connLabel").textContent = label;
-    $("footMode").textContent = state === "live" ? "live events" : state === "polling" ? "polling every 2s" : state === "demo" ? "demo data" : label.toLowerCase();
+    $("footMode").textContent = state === "live" ? "Live events" : state === "polling" ? "Polling every 2s" : state === "demo" ? "Demo data" : label;
     renderNotice();
   };
 
@@ -832,9 +947,12 @@
     const OTHERS = "client:\u0000others";
 
     const readColors = () => {
+      // Canvas colour roles -> Crystal tokens. Requests travel in the accent,
+      // completions return in "ok"; loading stays neutral silver.
       const cs = getComputedStyle(document.documentElement);
-      for (const name of ["accent", "flow", "done", "load", "warn", "err", "idle", "link", "text-3", "hairline-strong"]) {
-        colors[name] = cs.getPropertyValue(`--${name}`).trim();
+      const roles = { accent: "accent", flow: "accent", done: "ok", load: "ink-2", warn: "warn", err: "error", idle: "idle", link: "link", "text-3": "ink-3", "hairline-strong": "hairline-strong" };
+      for (const [role, token] of Object.entries(roles)) {
+        colors[role] = cs.getPropertyValue(`--${token}`).trim();
       }
       colors.dark = document.documentElement.dataset.theme === "dark";
     };
@@ -1258,15 +1376,6 @@
       ctx.clearRect(0, 0, W, H);
       const stats = S.stats;
       if (!stats) return;
-      // A faint, fixed star field gives the stage depth without motion.
-      ctx.fillStyle = colors["text-3"];
-      for (let i = 0; i < 90; i++) {
-        const x = ((i * 9301 + 49297) % 233280) / 233280 * W;
-        const y = ((i * 7919 + 1237) % 104729) / 104729 * H;
-        ctx.globalAlpha = 0.10 + ((i * 37) % 10) / 60;
-        ctx.beginPath(); ctx.arc(x, y, (i % 3) * 0.35 + 0.6, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.globalAlpha = 1;
       const q = nodes.get("queue");
       ctx.lineWidth = 1.2;
       ctx.strokeStyle = colors.link;
@@ -1287,10 +1396,11 @@
         const mk = `model:${w.assignedModel}`;
         if (!nodes.has(mk)) continue;
         const state = w.state || "idle";
-        const color = state === "model-unavailable" ? colors.warn : state === "loading" ? colors.load : state === "transcribing" ? colors.accent : colors.idle;
+        // Neutral ink links; only a missing model is coloured (warn).
+        const color = state === "model-unavailable" ? colors.warn : state === "loading" || state === "transcribing" ? colors.load : colors.idle;
         ctx.save();
-        ctx.lineWidth = state === "transcribing" ? 2 : 1.4;
-        ctx.strokeStyle = alpha(color, state === "idle" ? 0.55 : 0.85);
+        ctx.lineWidth = state === "transcribing" ? 1.8 : 1.3;
+        ctx.strokeStyle = alpha(color, state === "transcribing" ? 0.5 : state === "idle" ? 0.45 : 0.6);
         if (state === "model-unavailable" || state === "loading") {
           ctx.setLineDash([4, 5]);
           if (state === "loading" && motion()) ctx.lineDashOffset = -now / 40;
@@ -1311,7 +1421,7 @@
         if (!from || !to) continue;
         ctx.save();
         ctx.lineWidth = 1.6;
-        ctx.strokeStyle = alpha(colors.accent, 0.55);
+        ctx.strokeStyle = alpha(colors.accent, 0.32);
         ctx.setLineDash([2, 7]);
         ctx.lineCap = "round";
         if (motion()) ctx.lineDashOffset = -now / 28;
@@ -1403,6 +1513,15 @@
     return { layout, request, readColors, reconcile, onQueued, onStarted, onCompleted, onFailed, syncQueueOrder };
   })();
 
+  const narrowQuery = matchMedia("(max-width: 640px)");
+  const setVizCollapsed = (collapsed) => {
+    $("vizCard").dataset.collapsed = String(collapsed);
+    $("vizToggle").textContent = collapsed ? "Show" : "Hide";
+    $("vizToggle").setAttribute("aria-expanded", String(!collapsed));
+  };
+  setVizCollapsed(narrowQuery.matches);
+  $("vizToggle").addEventListener("click", () => setVizCollapsed($("vizCard").dataset.collapsed !== "true"));
+
   /* ══════════════════ Panels ══════════════════ */
   const setKpi = (id, value, unit, meta) => {
     const tile = $(id);
@@ -1429,13 +1548,13 @@
     const streams = (stats.streams || []).length;
     setKpi("kpiFlight", String(running + queued), "", `${streams} dictating · ${running} transcribing`);
     const waits = (stats.recent || []).map((r) => r.queueWaitMs || 0);
-    setKpi("kpiQueue", String(queued), ` / ${stats.queueCapacity || 0}`, waits.length ? `median wait ${fmtMs(median(waits))}` : "no waits yet");
+    setKpi("kpiQueue", String(queued), ` / ${stats.queueCapacity || 0}`, waits.length ? `${fmtMs(median(waits))} median wait` : "—");
     const proc = (stats.recent || []).map((r) => r.processingMs || 0);
     const med = median(proc);
-    if (med == null) setKpi("kpiLatency", "—", "", "release to text");
+    if (med == null) setKpi("kpiLatency", "—", "", "—");
     else {
       const [v, u] = med < 1000 ? [String(Math.round(med)), " ms"] : [(med / 1000).toFixed(2), " s"];
-      setKpi("kpiLatency", v, u, `p95 ${fmtMs(percentile(proc, 0.95))} · last ${proc.length}`);
+      setKpi("kpiLatency", v, u, `p95 ${fmtMs(percentile(proc, 0.95))}`);
     }
     // Completions per minute over the last ten minutes (or the span the
     // recent buffer covers, when it is full).
@@ -1445,11 +1564,11 @@
     const minutes = Math.max(1, (now - windowStart) / 60000);
     const audio = inWindow.reduce((a, r) => a + (r.durationSeconds || 0), 0);
     setKpi("kpiThroughput", (inWindow.length / minutes).toFixed(inWindow.length / minutes >= 10 ? 0 : 1), " /min",
-      `${fmtAudio(audio / minutes)} audio per min`);
+      `${fmtAudio(audio / minutes)} audio/min`);
     const loading = workers.filter((w) => w.state === "loading").length;
     const missing = workers.filter((w) => w.state === "model-unavailable").length;
     setKpi("kpiWorkers", String(running), ` / ${workers.length}`,
-      missing ? `${missing} missing a model` : loading ? `${loading} loading` : stats.useGpu ? "GPU enabled" : "CPU only");
+      missing ? `${missing} missing a model` : loading ? `${loading} loading` : stats.useGpu ? "GPU" : "CPU only");
   };
 
   const kvRow = (container, key, value, note) => {
@@ -1462,15 +1581,15 @@
   const renderConfig = (stats) => {
     const view = $("configView");
     view.replaceChildren();
-    kvRow(view, "Workers", String(stats.workerCount ?? "—"), "restart to change");
-    kvRow(view, "Queue capacity", String(stats.queueCapacity ?? "—"), "restart to change");
-    kvRow(view, "Max active streams", String(stats.maxActiveStreams ?? "—"));
-    kvRow(view, "Max recording", fmtAudio(stats.maxRecordingSeconds || 0).replace(/^(\d+)m 00s$/, "$1 min"));
-    kvRow(view, "GPU", stats.useGpu ? "On" : "Off");
     const workers = stats.workers || [];
     const uniform = workers.length && workers.every((w) => w.assignedModel === workers[0].assignedModel);
-    if (uniform || !workers.length) kvRow(view, workers.length > 1 ? "Model (all workers)" : "Model", modelName(workers.length ? workers[0].assignedModel : stats.model));
-    else workers.forEach((w) => kvRow(view, `Worker ${w.index} model`, modelName(w.assignedModel)));
+    if (uniform || !workers.length) kvRow(view, "Model", modelName(workers.length ? workers[0].assignedModel : stats.model));
+    else workers.forEach((w) => kvRow(view, `Model · W${w.index}`, modelName(w.assignedModel)));
+    kvRow(view, "GPU", stats.useGpu ? "On" : "Off");
+    kvRow(view, "Max live streams", String(stats.maxActiveStreams ?? "—"));
+    kvRow(view, "Max recording", fmtAudio(stats.maxRecordingSeconds || 0).replace(/^(\d+)m 00s$/, "$1 min"));
+    kvRow(view, "Workers", String(stats.workerCount ?? "—"), `queue ${stats.queueCapacity ?? "—"}`);
+    view.lastChild.title = "Set when the server starts";
     view.style.display = S.editing ? "none" : "";
   };
 
@@ -1485,13 +1604,13 @@
     const box = $("modelInputs");
     box.replaceChildren();
     modelSelects = (stats.workers || []).map((w, i, all) => {
-      const row = h("div", "form-row");
-      const label = h("label", "", all.length > 1 ? `Worker ${w.index} model` : "Model");
+      const row = h("div", "form-row select-row");
+      const label = h("label", "", all.length > 1 ? `Model · W${w.index}` : "Model");
       label.htmlFor = `inModel${i}`;
       const select = h("select");
       select.id = `inModel${i}`;
       for (const m of stats.models || []) {
-        const opt = h("option", "", `${m.name}${m.installed ? "" : " — not installed"}`);
+        const opt = h("option", "", `${m.name}${m.installed ? "" : " (not installed)"}`);
         opt.value = m.id;
         select.appendChild(opt);
       }
@@ -1505,7 +1624,7 @@
     $("configView").style.display = "none";
     $("editConfig").setAttribute("aria-expanded", "true");
     $("editConfig").textContent = "Close";
-    $("inStreams").focus();
+    (modelSelects[0] || $("inStreams")).focus();
   };
   const closeConfig = () => {
     S.editing = false;
@@ -1524,11 +1643,11 @@
     const maxActiveStreams = Number($("inStreams").value);
     const maxRecordingSeconds = Number($("inRecording").value);
     if (!Number.isInteger(maxActiveStreams) || maxActiveStreams < 1 || maxActiveStreams > 32) {
-      $("configError").textContent = "Max active streams must be a whole number from 1 to 32.";
+      $("configError").textContent = "Max live streams: a whole number from 1 to 32.";
       return;
     }
     if (!Number.isInteger(maxRecordingSeconds) || maxRecordingSeconds < 10 || maxRecordingSeconds > 600) {
-      $("configError").textContent = "Max recording must be a whole number from 10 to 600 seconds.";
+      $("configError").textContent = "Max recording: a whole number from 10 to 600 seconds.";
       return;
     }
     const update = { maxActiveStreams, maxRecordingSeconds, useGpu: $("inGpu").checked, workerModels: modelSelects.map((s) => s.value) };
@@ -1537,9 +1656,9 @@
     try {
       const data = DEMO ? demo.applyConfig(update) : await (async () => {
         const res = await fetch("/v1/config", { method: "POST", headers: authHeaders(true), body: JSON.stringify(update) });
-        if (res.status === 401) { setConn("unauthorized", "Unauthorized"); throw new Error("Unauthorized — the change was not applied."); }
+        if (res.status === 401) { setConn("unauthorized", "Locked"); throw new Error("Unauthorized. Nothing was changed."); }
         const body = await res.json().catch(() => null);
-        if (!res.ok) throw new Error((body && body.error) || `Host rejected the change (${res.status}).`);
+        if (!res.ok) throw new Error((body && body.error) || `Server rejected the change (${res.status}).`);
         return body;
       })();
       Object.assign(S.stats, { maxActiveStreams: data.maxActiveStreams, maxRecordingSeconds: data.maxRecordingSeconds, useGpu: data.useGpu, model: data.model });
@@ -1548,7 +1667,7 @@
       renderAll();
       resyncSoon(50);
     } catch (err) {
-      $("configError").textContent = err instanceof TypeError ? "Host unreachable — the change was not applied." : err.message;
+      $("configError").textContent = err instanceof TypeError ? "Server unreachable. Nothing was changed." : err.message;
     } finally {
       $("applyConfig").disabled = false;
     }
@@ -1572,20 +1691,62 @@
     if (S.conn === "unauthorized") renderNotice();
   };
   const pairingEnabled = () => (S.stats && typeof S.stats.pairingEnabled === "boolean" ? S.stats.pairingEnabled : Boolean(P.hello && P.hello.auth === "password"));
+  // The address clients use: the one this page was opened on, unless that
+  // is loopback and the server is bound to a specific reachable address.
+  const serverAddress = () => {
+    const bind = S.stats && S.stats.bindAddr;
+    const loopback = /^(localhost|127\.|\[::1\])/.test(location.hostname) || location.hostname === "::1";
+    if (loopback && bind && !/^(0\.0\.0\.0|\[::\]|127\.|localhost|\[::1\])/.test(bind)) return `${location.protocol}//${bind}`;
+    return location.origin;
+  };
   const renderPairing = () => {
-    const view = $("pairingView");
-    view.replaceChildren();
     const on = pairingEnabled();
-    if (P.hello) kvRow(view, "Host name", P.hello.name, "shown to clients");
-    kvRow(view, "Pairing", on ? "On" : "Off");
-    $("pairingHint").textContent = on
-      ? "Fairspoken on your other computers can find this host on your tailnet and connect with the password."
-      : "Set a password so Fairspoken on your other computers can connect without copying the token.";
-    $("editPairing").disabled = P.busy || (!S.stats && !DEMO);
-    $("editPairing").textContent = P.editing ? "Close" : on ? "Change password" : "Set password";
-    $("clearPairing").hidden = !on || P.editing;
+    $("hostName").textContent = P.hello ? P.hello.name : "";
+    $("hostName").title = P.hello ? "Name shown to clients" : "";
+    const addr = serverAddress();
+    // Show the host:port (it fits on a phone); copy the full URL.
+    const shown = addr.replace(/^http:\/\//, "");
+    if ($("hostAddr").dataset.url !== addr) {
+      // Allow line breaks only after dots and the port colon.
+      $("hostAddr").replaceChildren(...shown.split(/(?<=[.:])/).flatMap((part, i) => (i ? [h("wbr"), part] : [part])));
+      $("hostAddr").title = addr;
+      $("hostAddr").dataset.url = addr;
+    }
+    $("pairingState").textContent = on ? "On" : "Off";
+    // Password controls need an authorised session; a locked page only shows the address.
+    const authed = Boolean(S.stats) || DEMO;
+    $("editPairing").hidden = !authed;
+    $("editPairing").disabled = P.busy;
+    $("editPairing").textContent = P.editing ? "Close" : on ? "Change" : "Set";
+    $("editPairing").classList.toggle("primary", !on && !P.editing);
+    $("clearPairing").hidden = !authed || !on || P.editing;
     $("clearPairing").disabled = P.busy;
   };
+  const copyText = async (text) => {
+    // The Clipboard API needs a secure context; plain-http LAN pages fall
+    // back to a selected textarea.
+    try {
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+    } catch { /* fall through */ }
+    const area = h("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch { ok = false; }
+    area.remove();
+    return ok;
+  };
+  $("copyAddr").addEventListener("click", async () => {
+    const btn = $("copyAddr");
+    const ok = await copyText($("hostAddr").dataset.url || $("hostAddr").textContent);
+    btn.textContent = ok ? "Copied" : "Select";
+    if (!ok) getSelection().selectAllChildren($("hostAddr"));
+    clearTimeout(btn._t);
+    btn._t = setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+  });
   const openPairing = () => {
     P.editing = true;
     $("inPairing").value = "";
@@ -1608,7 +1769,7 @@
     const body = await res.json().catch(() => null);
     if (res.status === 429) throw new Error(`Too many attempts. Try again in ${Math.ceil(((body && body.retryAfterSeconds) || 60) / 60)} min.`);
     if (res.status === 401) throw new Error("Wrong password.");
-    if (!res.ok) throw new Error((body && body.error) || `Host answered ${res.status}.`);
+    if (!res.ok) throw new Error((body && body.error) || `Server answered ${res.status}.`);
     return body.token;
   };
   const openWithToken = (next) => {
@@ -1628,9 +1789,9 @@
     try {
       const data = DEMO ? demo.applyPairing(password) : await (async () => {
         const res = await fetch("/v1/config", { method: "POST", headers: authHeaders(true), body: JSON.stringify({ pairingPassword: password }) });
-        if (res.status === 401) { setConn("unauthorized", "Unauthorized"); throw new Error("Unauthorized — the change was not applied."); }
+        if (res.status === 401) { setConn("unauthorized", "Locked"); throw new Error("Unauthorized. Nothing was changed."); }
         const body = await res.json().catch(() => null);
-        if (!res.ok) throw new Error((body && body.error) || `Host rejected the change (${res.status}).`);
+        if (!res.ok) throw new Error((body && body.error) || `Server rejected the change (${res.status}).`);
         return body;
       })();
       if (S.stats) S.stats.pairingEnabled = data.pairingEnabled;
@@ -1639,11 +1800,11 @@
         return;
       }
       closePairing();
-      toast({ title: data.pairingEnabled ? "Pairing password saved" : "Pairing turned off", body: data.pairingEnabled ? "Clients connecting now are asked for it." : "Clients need the token to connect.", icon: "check", tone: "done", timeout: 4000 });
+      toast({ title: data.pairingEnabled ? "Password saved" : "Password turned off", body: data.pairingEnabled ? "" : "Devices now need the token to connect.", icon: "check", tone: "done", timeout: 4000 });
       fetchHello();
     } catch (err) {
-      $("pairingError").textContent = err instanceof TypeError ? "Host unreachable — the change was not applied." : err.message;
-      if (!P.editing) toast({ title: "Pairing was not changed", body: $("pairingError").textContent, icon: "lock", timeout: 6000 });
+      $("pairingError").textContent = err instanceof TypeError ? "Server unreachable. Nothing was changed." : err.message;
+      if (!P.editing) toast({ title: "Password not changed", body: $("pairingError").textContent, icon: "warn", tone: "error", timeout: 6000 });
     } finally {
       P.busy = false;
       $("applyPairing").disabled = false;
@@ -1655,8 +1816,9 @@
     const input = h("input");
     input.type = "password";
     input.autocomplete = "current-password";
-    input.setAttribute("aria-label", "Pairing password");
-    const go = h("button", "btn primary", "Open dashboard");
+    input.setAttribute("aria-label", "Password");
+    input.placeholder = "Password";
+    const go = h("button", "btn primary", "Open");
     go.type = "submit";
     const error = h("span", "form-error");
     error.setAttribute("role", "alert");
@@ -1670,7 +1832,7 @@
         if (next) openWithToken(next);
         else location.reload();
       } catch (err) {
-        error.textContent = err instanceof TypeError ? "Host unreachable." : err.message;
+        error.textContent = err instanceof TypeError ? "Server unreachable." : err.message;
         go.disabled = false;
       }
     });
@@ -1687,13 +1849,13 @@
     if (DEMO) { demo.download(model); return; }
     try {
       const res = await fetch("/v1/models/download", { method: "POST", headers: authHeaders(true), body: JSON.stringify({ model }) });
-      if (res.status === 401) { setConn("unauthorized", "Unauthorized"); S.downloadError = "Unauthorized — download was not started."; }
+      if (res.status === 401) { setConn("unauthorized", "Locked"); S.downloadError = "Unauthorized. Download not started."; }
       else if (!res.ok) {
         const body = await res.json().catch(() => null);
-        S.downloadError = (body && body.error) || `Host rejected the download (${res.status}).`;
+        S.downloadError = (body && body.error) || `Server rejected the download (${res.status}).`;
       }
     } catch {
-      S.downloadError = "Host unreachable — download was not started.";
+      S.downloadError = "Server unreachable. Download not started.";
     }
     resyncSoon(50);
   };
@@ -1718,11 +1880,11 @@
       if (mine && active) {
         status.textContent = `${download.stage === "validating" ? "Validating" : "Downloading"} ${download.percentage}%`;
       } else if (serving) {
-        status.textContent = `Serving · ${m.assignedWorkers.map((w) => "W" + w).join(", ")}`;
+        status.textContent = `Serving ${m.assignedWorkers.map((w) => "W" + w).join(" ")}`;
       } else if (m.installed) {
         status.textContent = "Installed";
       } else {
-        const btn = h("button", "btn", m.assignedWorkers.length ? "Download now" : "Download");
+        const btn = h("button", "btn", "Download");
         btn.type = "button";
         btn.disabled = Boolean(active);
         if (m.assignedWorkers.length) btn.classList.add("primary");
@@ -1739,6 +1901,7 @@
       }
       const failure = mine && download.stage === "error" ? download.error : "";
       if (failure) row.appendChild(h("div", "mrow-error", `Download failed: ${failure}`));
+      row.title = `${m.name} · ${m.publisher} · ${fmtBytes(m.sizeBytes)}`;
       list.appendChild(row);
     }
     if (S.downloadError) list.appendChild(h("p", "form-error", S.downloadError));
@@ -1751,11 +1914,13 @@
     if (S.conn === "unauthorized") {
       notice.dataset.visible = "true";
       notice.dataset.tone = "error";
+      const text = h("span", "notice-text err-ico");
       if (P.hello && P.hello.auth === "password") {
-        notice.appendChild(h("span", "", "This host requires a token. Enter its pairing password to open the dashboard."));
-        notice.appendChild(unlockForm());
+        text.append("Enter the server password to continue.");
+        notice.append(text, unlockForm());
       } else {
-        notice.innerHTML = "This host requires a token. Open the dashboard as <code>/?token=…</code> with the host's <code>FAIRSPOKEN_HOST_TOKEN</code>.";
+        text.innerHTML = "Token required. Open <code>/?token=…</code> with the server's <code>FAIRSPOKEN_HOST_TOKEN</code>.";
+        notice.appendChild(text);
       }
       return;
     }
@@ -1767,8 +1932,8 @@
     if (!missing.length || active) return;
     notice.dataset.visible = "true";
     notice.dataset.tone = "warn";
-    const label = h("span");
-    label.append(`${missing.map(modelName).join(", ")} ${missing.length === 1 ? "is" : "are"} assigned to a worker but not installed on this host.`);
+    const label = h("span", "notice-text err-ico");
+    label.append(`${missing.map(modelName).join(", ")} ${missing.length === 1 ? "is" : "are"} assigned but not installed.`);
     notice.appendChild(label);
     for (const id of missing) {
       const btn = h("button", "btn primary", missing.length === 1 ? "Download" : `Download ${modelName(id)}`);
@@ -1794,8 +1959,8 @@
     const av = h("span", "avatar", initials(addr));
     const name = h("b", "", clientName(addr));
     who.append(av, name);
-    if (addr && clientName(addr) !== addr) who.appendChild(h("small", "", addr.slice(addr.indexOf("@"))));
-    if (live) who.appendChild(h("span", "tag live", "Live"));
+    if (addr && clientName(addr) !== addr) who.appendChild(h("small", "opt", addr.slice(addr.indexOf("@"))));
+    if (live) { who.appendChild(h("span", "tag live", "Live")); who.prepend(h("span", "live-dot")); who.title = "Live"; }
     td.title = addr || "Unknown client";
     td.appendChild(who);
     return td;
@@ -1804,6 +1969,7 @@
     const t = h("table");
     const tr = h("tr");
     for (const [label, cls] of headers) tr.appendChild(h("th", cls || "", label));
+    t.optional = headers.map(([, cls]) => /\bopt\b/.test(cls || ""));
     const thead = h("thead");
     thead.appendChild(tr);
     t.append(thead, h("tbody"));
@@ -1812,8 +1978,11 @@
   const numCell = (value, alert) => {
     const td = h("td", "n", String(value));
     if (alert) td.dataset.alert = "true";
+    if (alert) td.classList.add("err-ico");
     return td;
   };
+  // Marks cells under optional headers so phones can drop those columns.
+  const markOptional = (t, tr) => [...tr.cells].forEach((td, i) => { if (t.optional[i]) td.classList.add("opt"); });
 
   const renderClients = (stats) => {
     const clients = stats.clients || [];
@@ -1821,7 +1990,7 @@
     const wrap = $("clientTable");
     if (!clients.length) { wrap.replaceChildren(h("p", "placeholder", "No clients yet.")); return; }
     const live = new Set([...(stats.streams || []).map((s) => s.client || ""), ...(stats.workers || []).filter((w) => w.job).map((w) => w.job.client || "")]);
-    const t = table([["Client"], ["Last model"], ["Requests", "n"], ["Done", "n"], ["Rejected", "n"], ["Failed", "n"], ["Audio", "n"], ["Last seen", "n"]]);
+    const t = table([["Client"], ["Last model", "opt"], ["Requests", "n opt"], ["Done", "n"], ["Rejected", "n opt"], ["Failed", "n"], ["Audio", "n opt"], ["Last seen", "n"]]);
     const body = t.tBodies[0];
     const now = Date.now();
     for (const c of clients) {
@@ -1834,6 +2003,7 @@
         numCell(fmtAudio(c.totalAudioSeconds || 0)),
         numCell(fmtAgo(now - (c.lastSeenMs || now))),
       );
+      markOptional(t, tr);
       body.appendChild(tr);
     }
     wrap.replaceChildren(t);
@@ -1841,40 +2011,53 @@
 
   const renderRecent = (stats) => {
     const records = stats.recent || [];
-    $("recentCount").textContent = records.length ? `last ${records.length}` : "";
+    $("recentCount").textContent = records.length > 10 ? "" : records.length ? String(records.length) : "";
     const wrap = $("recentTable");
-    if (!records.length) { wrap.replaceChildren(h("p", "placeholder", "No transcriptions yet.")); S.seenRecent = new Set(); return; }
-    const t = table([["Time"], ["Client"], ["Source"], ["Model"], ["Audio", "n"], ["Queue", "n"], ["Processing", "n"]]);
+    if (!records.length) { wrap.replaceChildren(h("p", "placeholder", "No transcriptions yet.")); $("recentMore").hidden = true; S.seenRecent = new Set(); return; }
+    const t = table([["Time"], ["Client"], ["Source", "opt"], ["Model", "opt"], ["Audio", "n"], ["Wait", "n opt"], ["Processing", "n"]]);
     const body = t.tBodies[0];
     const next = new Set();
-    for (const r of records) {
+    const SHOWN = 10;
+    $("recentMore").hidden = records.length <= SHOWN;
+    $("recentMoreBtn").textContent = wrap.dataset.all === "true" ? "Show fewer" : `Show all ${records.length}`;
+    records.forEach((r, index) => {
       const key = `${r.id}:${r.completedAtMs}`;
       next.add(key);
       const tr = h("tr");
       if (S.loadedOnce && !S.seenRecent.has(key)) tr.className = "fresh";
-      const model = h("td", "", modelName(r.model));
-      const engine = engineOf(r);
-      model.appendChild(h("span", `tag ${engine}`, engine === "whisper" ? "Whisper" : "Parakeet"));
+      const name = modelName(r.model);
+      const model = h("td", "", name);
+      const engine = engineOf(r) === "whisper" ? "Whisper" : "Parakeet";
+      // Only tag the engine when the model name does not already say it.
+      if (!name.toLowerCase().includes(engine.toLowerCase())) model.appendChild(h("span", "tag", engine));
       tr.append(
         h("td", "muted", fmtClock(r.completedAtMs)),
         whoCell(r.client, false),
-        h("td", "", r.source === "stream" ? "Live stream" : "Upload"),
+        h("td", "", r.source === "stream" ? "Live" : "Upload"),
         model,
         numCell(fmtAudio(r.durationSeconds)),
         numCell(fmtMs(r.queueWaitMs)),
         numCell(fmtMs(r.processingMs)),
       );
+      markOptional(t, tr);
+      tr.title = `${modelName(r.model)} · ${r.source === "stream" ? "live" : "upload"}`;
+      if (index >= SHOWN) tr.classList.add("extra");
       body.appendChild(tr);
-    }
+    });
     wrap.replaceChildren(t);
     S.seenRecent = next;
     S.loadedOnce = true;
   };
 
+  $("recentMoreBtn").addEventListener("click", () => {
+    const wrap = $("recentTable");
+    wrap.dataset.all = String(wrap.dataset.all !== "true");
+    if (S.stats) renderRecent(S.stats);
+  });
+
   const renderChrome = (stats) => {
     const uptime = (Date.now() - stats.startedAt) / 1000;
-    $("hostChip").textContent = `${stats.bindAddr || "—"} · v${stats.serverVersion || "?"}`;
-    $("footVersion").textContent = `Fairspoken host v${stats.serverVersion || "?"}`;
+    $("footVersion").textContent = `Fairspoken Server ${stats.serverVersion || "?"} · ${stats.bindAddr || "—"}`;
     $("footUptime").textContent = fmtUptime(uptime);
     $("editConfig").disabled = false;
   };
@@ -2000,8 +2183,8 @@
         break;
       case "pairing": {
         const who = d.clientName || clientName(d.client);
-        if (d.ok) toast({ title: `${who} paired`, body: d.clientName ? clientName(d.client) : "Connected with the pairing password.", icon: "check", tone: "done", timeout: 5000 });
-        else toast({ title: "Pairing attempt refused", body: `${who} sent a wrong password or tried too often.`, icon: "lock", timeout: 6000 });
+        if (d.ok) toast({ title: `${who} paired`, body: d.clientName ? clientName(d.client) : "", icon: "check", tone: "done", timeout: 5000 });
+        else toast({ title: "Pairing refused", body: `${who}: wrong password or too many tries.`, icon: "warn", tone: "error", timeout: 6000 });
         return;
       }
       default:
@@ -2054,8 +2237,8 @@
     const seqAtStart = eventSeq;
     try {
       const res = await fetch("/v1/stats", { headers: authHeaders(false), cache: "no-store" });
-      if (res.status === 401) { setConn("unauthorized", "Unauthorized"); return false; }
-      if (!res.ok) { setConn("offline", `Host error ${res.status}`); return false; }
+      if (res.status === 401) { setConn("unauthorized", "Locked"); return false; }
+      if (!res.ok) { setConn("offline", `Server error ${res.status}`); return false; }
       const data = await res.json();
       if (S.conn === "live" && eventSeq !== seqAtStart && staleRetries < 3) {
         staleRetries += 1;
@@ -2303,7 +2486,7 @@
       emit("model_download", { ...host.download });
     };
     const start = () => {
-      setConn("demo", "Demo · simulated practice");
+      setConn("demo", "Demo");
       applySnapshot(snapshot());
       // Open on a busy moment: three clinicians already dictating.
       dictate(people[0][0], 34); dictate(people[1][0], 22); dictate(people[3][0], 15);
@@ -2327,28 +2510,25 @@
     restart: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 8.4A5.2 5.2 0 1 1 11.6 4.3"/><path d="M12.4 1.6v3h-3"/></svg>',
     check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.4l2.9 2.9 6.1-6.6"/></svg>',
     lock: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.6"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
-  };
-  const CHANNEL_HINT = {
-    stable: "Stable: tested releases. Recommended for a host people rely on.",
-    nightly: "Nightly: built every night from the latest code. Newest fixes, less tested.",
+    warn: '<svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M7.13 1.98a1 1 0 0 1 1.74 0l6.2 11.02a1 1 0 0 1-.87 1.5H1.8a1 1 0 0 1-.87-1.5zM7.3 5.8h1.4v4.4H7.3zm0 5.5h1.4v1.4H7.3z"/></svg>',
   };
   const U = { status: null, unsupported: false, manual: false, timer: 0, restarting: null, busy: false, toasted: localStorage.getItem("fs-host-update-toasted") || "" };
   const channelLabel = (c) => (c === "nightly" ? "Nightly" : "Stable");
-  const offerTitle = (a) => (a.switchToStable ? `Switch to stable ${a.version}` : `Fairspoken host ${a.version} (${channelLabel(a.channel)})`);
+  const offerTitle = (a) => (a.switchToStable ? `Switch to stable ${a.version}` : `${a.version} (${channelLabel(a.channel)})`);
 
   const updateApi = async (method, path, body) => {
     if (DEMO) return demoUpdate.call(method, path, body);
     const init = { method, headers: authHeaders(method === "POST"), cache: "no-store" };
     if (method === "POST") init.body = JSON.stringify(body || {});
     const res = await fetch(path, init);
-    if (res.status === 401) { setConn("unauthorized", "Unauthorized"); throw Object.assign(new Error("Unauthorized"), { status: 401 }); }
+    if (res.status === 401) { setConn("unauthorized", "Locked"); throw Object.assign(new Error("Unauthorized"), { status: 401 }); }
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw Object.assign(new Error((data && data.error) || `Host answered ${res.status}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error((data && data.error) || `Server answered ${res.status}`), { status: res.status });
     return data;
   };
 
   /* Toasts: one per available version, dismissible; "up to date" only after a manual check. */
-  const toast = ({ title, body, icon = "download", tone, actions = [], timeout = 0 }) => {
+  const toast = ({ title, body, icon = "download", tone = "accent", actions = [], timeout = 0 }) => {
     const el = h("div", "toast glass");
     el.setAttribute("role", "status");
     if (tone) el.dataset.tone = tone;
@@ -2383,20 +2563,20 @@
     const settled = next.state !== "checking";
     if (U.manual && settled) {
       U.manual = false;
-      if (next.state === "idle") toast({ title: "Fairspoken host is up to date", body: `Version ${next.currentVersion} is the latest on the ${channelLabel(next.channel)} channel.`, icon: "check", tone: "done", timeout: 4000 });
+      if (next.state === "idle") toast({ title: "Up to date", body: `${next.currentVersion} · ${channelLabel(next.channel)}`, icon: "check", tone: "done", timeout: 4000 });
     }
     const a = next.available;
     if (next.state === "available" && a && U.toasted !== a.version) {
       U.toasted = a.version;
       localStorage.setItem("fs-host-update-toasted", a.version);
       toast({
-        title: a.switchToStable ? `Stable ${a.version} is available` : `Fairspoken host ${a.version} is available`,
-        body: a.switchToStable ? "This host runs a nightly; switching installs the latest stable release." : `${channelLabel(a.channel)} channel · you have ${next.currentVersion}`,
+        title: a.switchToStable ? `Stable ${a.version} available` : `Update ${a.version} available`,
+        body: a.switchToStable ? `You run nightly ${next.currentVersion}` : `${channelLabel(a.channel)} · you have ${next.currentVersion}`,
         actions: [["Update", true, () => updateAction()], ["Later", false, null]],
       });
     }
     if (prev && prev.state === "downloading" && next.state === "ready") {
-      toast({ title: `Fairspoken host ${next.installedVersion} is installed`, body: "Restart the host to finish. In-flight dictations finish first.", icon: "restart", tone: "done", actions: [["Restart now", true, () => restartHost()], ["Later", false, null]] });
+      toast({ title: `${next.installedVersion} installed`, body: "Restart to finish. Dictations in progress complete first.", icon: "restart", tone: "done", actions: [["Restart", true, () => restartHost()], ["Later", false, null]] });
     }
     renderUpdate();
   };
@@ -2424,7 +2604,7 @@
     try {
       applyUpdateStatus(await updateApi("POST", path, body));
     } catch (err) {
-      if (U.status) applyUpdateStatus({ ...U.status, state: "error", error: err instanceof TypeError ? "Host unreachable." : err.message });
+      if (U.status) applyUpdateStatus({ ...U.status, state: "error", error: err instanceof TypeError ? "Server unreachable." : err.message });
     } finally {
       U.busy = false;
       scheduleUpdatePoll();
@@ -2460,7 +2640,7 @@
       } catch { r.wentDown = true; }
       if (Date.now() - r.since > 180000) {
         U.restarting = null;
-        applyUpdateStatus({ ...s, state: "error", error: "The host did not come back after restarting. Check its logs." });
+        applyUpdateStatus({ ...s, state: "error", error: "The server did not come back after restarting. Check its logs." });
         return;
       }
       setTimeout(poll, 1000);
@@ -2503,15 +2683,15 @@
     const state = U.restarting ? "restarting" : s.state;
     const a = s.available;
     const pct = s.progress && s.progress.percentage != null ? s.progress.percentage : null;
-    const current = `Fairspoken host ${s.currentVersion} (${channelLabel(s.channel)})`;
+    const current = `Fairspoken Server ${s.currentVersion} (${channelLabel(s.channel)})`;
     const label = {
-      idle: s.lastCheckedMs ? `${current} is up to date — click to check for updates` : `${current} — click to check for updates`,
+      idle: s.lastCheckedMs ? `${current} is up to date. Check for updates` : `${current}. Check for updates`,
       checking: "Checking for updates…",
-      available: a ? `Update available: ${offerTitle(a)} — click to install` : "Update available — click to install",
-      downloading: `Downloading ${a ? offerTitle(a) : "the update"}${pct != null ? ` — ${pct}%` : "…"}`,
-      ready: `Fairspoken host ${s.installedVersion || ""} is installed — click to restart into it`,
-      restarting: "Restarting the host into the new version…",
-      error: `Update problem: ${s.error || "unknown error"} — click to retry`,
+      available: a ? `Install ${offerTitle(a)}` : "Install update",
+      downloading: `Downloading ${a ? offerTitle(a) : "the update"}${pct != null ? ` (${pct}%)` : "…"}`,
+      ready: `Restart into ${s.installedVersion || "the update"}`,
+      restarting: "Restarting into the new version…",
+      error: `Update problem: ${s.error || "unknown error"}. Retry`,
     }[state] || current;
     btn.dataset.state = state;
     btn.disabled = ["checking", "downloading", "restarting"].includes(state);
@@ -2529,27 +2709,29 @@
     view.replaceChildren();
     const versionRow = h("div", "kv-row");
     const v = h("span", "v");
-    v.append(s.currentVersion, h("span", `tag ${s.defaultChannel}`, `${channelLabel(s.defaultChannel)} build`));
+    v.append(s.currentVersion, h("span", "tag", channelLabel(s.defaultChannel)));
     versionRow.append(h("span", "k", "Version"), v);
     view.appendChild(versionRow);
     const statusText = {
-      idle: s.lastCheckedMs ? "Up to date" : "Not checked yet",
+      idle: s.lastCheckedMs ? "Up to date" : "Not checked",
       checking: "Checking…",
       available: a ? (a.switchToStable ? `Stable ${a.version} available` : `${a.version} available`) : "Update available",
-      downloading: `Downloading${pct != null ? ` · ${pct}%` : "…"}`,
-      ready: `${s.installedVersion || "Update"} installed · restart to finish`,
+      downloading: `Downloading${pct != null ? ` ${pct}%` : "…"}`,
+      ready: `${s.installedVersion || "Update"} ready`,
       restarting: "Restarting…",
       error: "Problem",
     }[state];
     const statusRow = h("div", "kv-row");
-    statusRow.append(h("span", "k", "Status"), h("span", state === "error" ? "v err" : "v", statusText));
+    // The error itself (with its icon) is shown below; no second marker here.
+    const status = h("span", "v", statusText);
+    if (state !== "error" && state !== "checking") {
+      const when = s.lastCheckedMs ? `checked ${fmtAgo(Date.now() - s.lastCheckedMs)}` : "";
+      const note = [when, s.checksEnabled ? "" : "auto-checks off"].filter(Boolean).join(" · ");
+      if (note) status.appendChild(h("small", null, note));
+      if (s.lastCheckedMs) status.title = `Last checked ${new Date(s.lastCheckedMs).toLocaleString()}`;
+    }
+    statusRow.append(h("span", "k", "Status"), status);
     view.appendChild(statusRow);
-    const checkedRow = h("div", "kv-row");
-    const checked = h("span", "v", s.lastCheckedMs ? fmtAgo(Date.now() - s.lastCheckedMs) : "Never");
-    if (s.lastCheckedMs) checked.title = new Date(s.lastCheckedMs).toLocaleString();
-    if (!s.checksEnabled) checked.appendChild(h("small", null, "auto-checks off"));
-    checkedRow.append(h("span", "k", "Last checked"), checked);
-    view.appendChild(checkedRow);
 
     const pinned = s.channelSource === "env";
     $("updSeg").setAttribute("aria-disabled", String(pinned));
@@ -2559,13 +2741,12 @@
       b.tabIndex = on ? 0 : -1;
       b.disabled = pinned;
     }
-    $("updHint").textContent = pinned ? `${CHANNEL_HINT[s.channel]} Pinned by FAIRSPOKEN_HOST_UPDATE_CHANNEL.` : CHANNEL_HINT[s.channel];
+    $("updHint").textContent = pinned ? "Pinned by FAIRSPOKEN_HOST_UPDATE_CHANNEL." : "";
     const note = $("updNote");
     const runsNightly = /-nightly\./.test(s.currentVersion);
     note.hidden = !(s.channel === "stable" && runsNightly);
     if (!note.hidden) {
-      note.replaceChildren("This host runs a nightly build. On Stable it is offered the latest stable release even though its version number is lower",
-        ...(a && a.switchToStable ? [": ", h("b", null, `Switch to stable ${a.version}`), "."] : ["."]));
+      note.replaceChildren("This server runs a nightly. Stable offers the latest stable release, even with a lower version number.");
     }
     $("updAuto").checked = !!s.autoUpdate;
     $("updCheck").disabled = btn.disabled || state === "ready";
@@ -2581,7 +2762,6 @@
       if (a.notes) {
         const link = h("a", null, "Release notes");
         link.href = a.notes; link.target = "_blank"; link.rel = "noopener";
-        link.style.color = "var(--accent)";
         grow.appendChild(link);
       }
       row.append(go, grow);
@@ -2592,17 +2772,18 @@
       fill.style.width = `${pct || 0}%`;
       bar.appendChild(fill);
       const row = h("div", "row");
-      row.append(h("span", "grow", `Downloading and verifying ${a ? a.version : "the update"}…`));
+      row.append(h("span", "grow", `Downloading ${a ? a.version : "the update"}…`));
       cta.append(bar, row);
     } else if (state === "ready") {
       const row = h("div", "row");
-      const go = h("button", "btn primary", "Restart now");
+      const go = h("button", "btn primary", "Restart");
       go.type = "button";
       go.addEventListener("click", restartHost);
-      row.append(go, h("span", "grow", s.restartMode === "service" ? "The service manager starts the new version." : "The host restarts itself with the same settings."));
+      go.title = s.restartMode === "service" ? "The service manager starts the new version." : "The server restarts itself with the same settings.";
+      row.append(go, h("span", "grow", "Dictations in progress finish first."));
       cta.appendChild(row);
     } else if (state === "restarting") {
-      cta.appendChild(h("div", "row")).appendChild(h("span", "grow", "Waiting for the host to come back…"));
+      cta.appendChild(h("div", "row")).appendChild(h("span", "grow", "Waiting for the server to come back…"));
     } else if (state === "error" && s.error) {
       cta.appendChild(h("p", "upd-error", s.error));
     }

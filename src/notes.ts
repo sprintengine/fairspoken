@@ -168,8 +168,8 @@ function renderDetail(): void {
     sub.className = "e-sub";
     sub.textContent =
       notes.length === 0
-        ? "Your dictations are saved here automatically. Press the record shortcut to capture one."
-        : "Choose a note from the list to read or edit it.";
+        ? "Your dictations land here."
+        : "";
     empty.append(title, sub);
     noteDetail.replaceChildren(empty);
     return;

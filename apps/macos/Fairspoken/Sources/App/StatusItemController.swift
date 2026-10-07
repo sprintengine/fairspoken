@@ -2,6 +2,7 @@ import FairspokenUI
 import FairspokenUpdates
 import AppKit
 import FairspokenCore
+import SwiftUI
 
 /// Menu-bar item: live status, start/stop, and doors into the dashboard.
 @MainActor
@@ -30,7 +31,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(entry("Models", #selector(openModels), ""))
         menu.addItem(entry("Settings…", #selector(openSettings), ","))
         menu.addItem(.separator())
-        menu.addItem(entry("Setup & Permissions…", #selector(openOnboarding), ""))
+        menu.addItem(entry("Setup Guide…", #selector(openOnboarding), ""))
         updateItem.target = self
         menu.addItem(updateItem)
         menu.addItem(.separator())
@@ -56,14 +57,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: AppInfo.displayName)
         image?.isTemplate = true
         item.button?.image = image
-        item.button?.contentTintColor = phase.isListening ? .systemRed : nil
+        item.button?.contentTintColor = phase.isListening ? NSColor(Crystal.live) : nil
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         let state = model.models.engineState
         let remote = model.settings.settings.transcriptionLocation == .remoteHost
-        let engine = remote ? "Your host" : "\(model.models.activeModel.shortName) · \(state.isReady ? "Ready" : state.label)"
-        statusLine.title = "\(AppInfo.displayName) — \(engine)"
+        statusLine.title = remote ? "My host · \(model.hostStatus.stateLabel)"
+            : "\(model.models.activeModel.shortName) · \(state.label)"
         toggleItem.title = model.dictation.phase.isListening ? "Stop Dictation" : "Start Dictation   \(HotkeyController.currentShortcutSymbols)"
         let update = model.updates.presentation
         updateItem.title = update.menuTitle

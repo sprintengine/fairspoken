@@ -223,6 +223,9 @@ public struct TailnetDiscovery: Sendable {
     public var probeTimeout: Duration
     public var maxConcurrentProbes: Int
     public var cliTimeout: Duration
+    /// Ports probed on `127.0.0.1`, so a host on this Mac turns up whatever address it listens
+    /// on and whether or not Tailscale is running.
+    public var localPorts: [Int]
 
     public init(runner: any CommandRunning = ProcessCommandRunner(),
                 transport: any HTTPTransport = URLSessionTransport(),
@@ -230,7 +233,8 @@ public struct TailnetDiscovery: Sendable {
                 isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
                 probeTimeout: Duration = .milliseconds(1500),
                 maxConcurrentProbes: Int = 32,
-                cliTimeout: Duration = .seconds(5)) {
+                cliTimeout: Duration = .seconds(5),
+                localPorts: [Int] = TailnetDiscovery.localHostPorts()) {
         self.runner = runner
         self.transport = transport
         self.searchPath = searchPath
@@ -238,6 +242,21 @@ public struct TailnetDiscovery: Sendable {
         self.probeTimeout = probeTimeout
         self.maxConcurrentProbes = max(1, maxConcurrentProbes)
         self.cliTimeout = cliTimeout
+        self.localPorts = localPorts
+    }
+
+    /// Fairspoken Server's configured port (release and debug builds), then the default port.
+    public static func localHostPorts(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [Int] {
+        let support = home.appendingPathComponent("Library/Application Support", isDirectory: true)
+        let configured = ["ie.fairspoken.server", "ie.fairspoken.server.dev"].compactMap { bundleID -> Int? in
+            let url = support.appendingPathComponent(bundleID, isDirectory: true).appendingPathComponent("host-config.json")
+            guard let data = try? Data(contentsOf: url),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let port = object["port"] as? Int, (1...65_535).contains(port) else { return nil }
+            return port
+        }
+        var seen = Set<Int>()
+        return (configured + [RemoteProtocol.defaultPort]).filter { seen.insert($0).inserted }
     }
 
     /// `tailscale` on `PATH`, else the first of `fallbackCLIPaths` that exists.
@@ -304,10 +323,34 @@ public struct TailnetDiscovery: Sendable {
         }
     }
 
-    /// Scans the tailnet. Hosts come back once each (HTTPS preferred), this Mac first, then by machine name.
+    /// One loopback candidate per port, for hosts on this Mac.
+    public static func loopbackCandidates(ports: [Int], machine: String) -> [Candidate] {
+        ports.compactMap { port in
+            URL(string: "http://127.0.0.1:\(port)").map { Candidate(machine: machine, urls: [$0], isThisMac: true) }
+        }
+    }
+
+    /// Scans this Mac (on loopback) and the tailnet. Hosts come back once each (HTTPS preferred),
+    /// this Mac first, then by machine name. When Tailscale can't be used, hosts on this Mac are
+    /// still listed; with none, the Tailscale problem is the error.
     public func discover() async throws(TailnetDiscoveryError) -> [DiscoveredHost] {
-        let status = try await status()
-        return await probe(Self.candidates(from: status))
+        let tailnet: Result<TailscaleStatus, TailnetDiscoveryError>
+        do { tailnet = .success(try await status()) } catch { tailnet = .failure(error) }
+        let status = try? tailnet.get()
+        let local = Self.loopbackCandidates(ports: localPorts, machine: status?.selfNode?.machineName ?? "this-mac")
+        let hosts = Self.preferLoopback(await probe(local + (status.map(Self.candidates(from:)) ?? [])))
+        if hosts.isEmpty, case .failure(let error) = tailnet { throw error }
+        return hosts
+    }
+
+    /// Drops this Mac's tailnet-IP entry when the same host (same name, same port) answered on
+    /// loopback: apps on this Mac should save `127.0.0.1`, which works with Tailscale down too.
+    static func preferLoopback(_ hosts: [DiscoveredHost]) -> [DiscoveredHost] {
+        let loopback = hosts.filter { $0.url.host() == "127.0.0.1" }
+        return hosts.filter { host in
+            guard host.isThisMac, host.url.host() != "127.0.0.1" else { return true }
+            return !loopback.contains { $0.name == host.name && $0.url.port == host.url.port }
+        }
     }
 
     /// Probes every candidate URL in parallel (at most `maxConcurrentProbes` at once) and keeps,

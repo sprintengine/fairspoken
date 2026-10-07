@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Colours the update UI borrows from the app: the client's teal, the server's Copybook Blue.
+/// Colours the update UI borrows from the app: its Crystal accent and warning colour.
 public struct UpdateStyle: Sendable {
     public var accent: Color
     public var warning: Color
@@ -104,7 +104,8 @@ private struct IndeterminateArc: View {
 
 // MARK: - Sidebar button
 
-/// The update button at the foot of a sidebar: the glyph in a glass circle and a two-line
+/// The update button at the foot of a sidebar: the glyph in a flat circle (the sidebar is
+/// already glass) and a two-line
 /// caption. Clicking checks, installs or restarts, by state.
 public struct UpdateSidebarButton: View {
     var updates: UpdateController
@@ -123,7 +124,8 @@ public struct UpdateSidebarButton: View {
             HStack(spacing: 10) {
                 UpdateGlyph(presentation: p, style: style, size: 30)
                     .padding(4)
-                    .glassEffect(.regular.interactive(p.isEnabled), in: .circle)
+                    .background(Color.primary.opacity(0.05), in: .circle)
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.08)))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(p.title)
                         .font(.callout.weight(p.isEnabled && p.badge != .none ? .semibold : .medium))
@@ -202,7 +204,7 @@ public struct UpdateToastView: View {
             }
             .padding(14)
             .frame(width: 340)
-            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            .glassEffect(.regular, in: .rect(cornerRadius: 20))
             .accessibilityElement(children: .contain)
             .id(toast.id)
         }
@@ -247,7 +249,7 @@ private struct UpdateToastModifier: ViewModifier {
 // MARK: - Settings
 
 /// Settings › Updates, as one Form section: version and channel, the Stable/Nightly picker with
-/// a line on each, the move-to-Stable note, status, last check, and Check for Updates.
+/// a line on the chosen one, the move-to-Stable note, status, last check, and Check for Updates.
 public struct UpdateSettingsSection: View {
     var updates: UpdateController
     var style: UpdateStyle
@@ -269,12 +271,10 @@ public struct UpdateSettingsSection: View {
                 ForEach(UpdateChannel.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
+            .tint(style.accent)
             .fixedSize()
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(UpdateChannel.allCases) { channel in
-                    Text("\(Text(channel.title).fontWeight(.semibold)): \(channel.explanation)")
-                        .foregroundStyle(channel == updates.channel ? .primary : .secondary)
-                }
+                Text(updates.channel.explanation).foregroundStyle(.secondary)
                 if updates.showsMoveToStableNote {
                     Label("You'll move to Stable with the next stable release", systemImage: "info.circle")
                         .foregroundStyle(style.accent)
@@ -321,7 +321,7 @@ public struct UpdateSettingsSection: View {
         } header: {
             Text("Updates")
         } footer: {
-            Text("\(updates.appName) checks shortly after it opens and every 6 hours, and asks before installing. Updates are signed; only ones signed by Fairspoken install.")
+            Text("Checks every 6 hours and asks before installing. Only updates signed by Fairspoken install.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

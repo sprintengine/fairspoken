@@ -1,28 +1,53 @@
-/* Mini pill window — bottom-center capsule.
-   Self-contained: the shelf window keeps styles.css; this window loads only
-   this sheet. Opaque fill on purpose (2026-06-09): translucency reads as
-   smudge at this size and hurts legibility over busy wallpapers. The fill is
-   graded rather than flat so the capsule reads as a raised object, but it is
-   never see-through. */
+/* Mini pill window — bottom-center capsule in the Crystal look: a brushed
+   silver capsule in light mode, graphite in dark (it follows the app's
+   appearance through appearance.ts).
+   Self-contained: this window loads only this sheet. The fill stays opaque on
+   purpose (2026-06-09): the pill window is transparent but nothing behind it
+   is blurred, so translucency reads as smudge at this size. The sheen is a
+   still neutral gradient, so the capsule reads as a raised glass object. */
 
 :root {
-  --bg:               #0e0e10;
-  --text-primary:     #ececee;
-  --text-secondary:   #9a9aa2;
-  --text-muted:       #5a5a63;
-  --accent:           #ff1a3d;
-  --transcribing:     #ffa600;
-  /* Shared with the cursor preview's activity rim, so the two surfaces read as
-     one system while work is in flight. */
-  --polish-violet:    #a371f7;
-  --polish-pink:      #f778ba;
-  --success:          #30d158;
-  --pill-edge:        rgba(255,255,255,0.12);
-  --hairline:         rgba(255,255,255,0.06);
+  --pill-fill-top:    #fbfcfd;
+  --pill-fill-bottom: #e6e9ec;
+  --pill-idle-top:    #f1f3f5;
+  --pill-idle-bottom: #dfe3e7;
+  --text-primary:     #15191d;
+  --text-secondary:   #5b6670;
+  --text-muted:       #8a949c;
+  --ready:            #2e8b5e;   /* client accent */
+  --live:             #d9483b;   /* microphone on */
+  --warn:             #9a6b12;
+  --error:            #b4283c;
+  --sweep:            rgba(46, 139, 94, 0.75);
+  --sweep-soft:       rgba(120, 132, 142, 0.55);
+  --pill-edge:        rgba(16, 24, 32, 0.12);
+  --pill-highlight:   rgba(255, 255, 255, 0.95);
+  --hairline:         rgba(16, 24, 32, 0.1);
+  --shadow:           0 1px 2px rgba(16, 24, 32, 0.16), 0 6px 14px rgba(16, 24, 32, 0.16);
 
   --capsule-h:        32px;
   --margin-x:         6px;
   --margin-bottom:    7px;
+}
+
+[data-mode="dark"] {
+  --pill-fill-top:    #2c3036;
+  --pill-fill-bottom: #1a1d21;
+  --pill-idle-top:    #34383e;
+  --pill-idle-bottom: #24272b;
+  --text-primary:     #e8ecef;
+  --text-secondary:   #9aa4ad;
+  --text-muted:       #6b747c;
+  --ready:            #5ccb94;
+  --live:             #ff6e62;
+  --warn:             #e7b95a;
+  --error:            #ff7d8e;
+  --sweep:            rgba(92, 203, 148, 0.8);
+  --sweep-soft:       rgba(195, 204, 212, 0.55);
+  --pill-edge:        rgba(255, 255, 255, 0.12);
+  --pill-highlight:   rgba(255, 255, 255, 0.14);
+  --hairline:         rgba(255, 255, 255, 0.08);
+  --shadow:           0 1px 2px rgba(0, 0, 0, 0.42), 0 6px 14px rgba(0, 0, 0, 0.4);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -34,7 +59,7 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: transparent;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   font-size: 12px;
   line-height: 1.3;
   color: var(--text-primary);
@@ -64,67 +89,48 @@ html, body {
   border-radius: calc(var(--capsule-h) / 2);
   padding: 0 12px;
   font: inherit;
+  font-weight: 500;
   color: var(--text-primary);
-  background: linear-gradient(180deg, #2c2d36 0%, #1d1e24 52%, #141519 100%);
+  background: linear-gradient(180deg, var(--pill-fill-top) 0%, var(--pill-fill-bottom) 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.16),
-    inset 0 -1px 0 rgba(0,0,0,0.55),
+    inset 0 1px 0 var(--pill-highlight),
     inset 0 0 0 1px var(--pill-edge),
-    0 1px 2px rgba(0,0,0,0.42),
-    0 6px 14px rgba(0,0,0,0.40),
-    0 16px 32px rgba(0,0,0,0.34);
+    var(--shadow);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
 }
 
 .pill:focus-visible {
-  outline: 2px solid var(--text-secondary);
+  outline: 2px solid var(--ready);
   outline-offset: 2px;
 }
 
-/* Idle stays subtle through a dimmer solid fill, not opacity — the capsule
+/* Idle stays subtle through a quieter solid fill, not opacity — the capsule
    must never read as see-through. */
 body[data-pill="idle"] .pill {
   height: 10px;
   border-radius: 5px;
-  background: linear-gradient(180deg, #33343b 0%, #24252a 100%);
+  background: linear-gradient(180deg, var(--pill-idle-top) 0%, var(--pill-idle-bottom) 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 1px 0 var(--pill-highlight),
     inset 0 0 0 1px var(--hairline),
-    0 1px 4px rgba(0,0,0,0.28),
-    0 4px 10px rgba(0,0,0,0.22);
+    0 1px 4px rgba(0, 0, 0, 0.18),
+    0 3px 8px rgba(0, 0, 0, 0.12);
 }
 
 body[data-pill="idle"] .pill > * { display: none; }
 
-/* State-tinted edge ring keeps the shipped pill's recording/transcribing
-   identity without extra chrome. */
+/* Recording keeps a faint live-red edge; nothing else glows. */
 body[data-pill="recording"] .pill {
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.16),
-    inset 0 -1px 0 rgba(0,0,0,0.55),
-    inset 0 0 0 1px rgba(255,80,100,0.30),
-    0 1px 2px rgba(0,0,0,0.42),
-    0 6px 14px rgba(0,0,0,0.40),
-    0 16px 32px rgba(0,0,0,0.34),
-    0 0 18px rgba(255,26,61,0.16);
+    inset 0 1px 0 var(--pill-highlight),
+    inset 0 0 0 1px color-mix(in srgb, var(--live) 38%, transparent),
+    var(--shadow);
 }
 
-body[data-pill="transcribing"] .pill {
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.16),
-    inset 0 -1px 0 rgba(0,0,0,0.55),
-    inset 0 0 0 1px rgba(163,113,247,0.34),
-    0 1px 2px rgba(0,0,0,0.42),
-    0 6px 14px rgba(0,0,0,0.40),
-    0 16px 32px rgba(0,0,0,0.34),
-    0 0 20px rgba(215,90,190,0.20);
-}
-
-/* Transcribing rim: the capsule's own edge sweeps violet-to-pink, replacing
-   the amber underline that slid left-to-right and clashed with the preview's
-   activity rim. Drawn inside the capsule so `overflow: hidden` cannot clip it. */
+/* Transcribing: a quiet silver-to-green sheen travels around the edge.
+   Drawn inside the capsule so `overflow: hidden` cannot clip it. */
 @property --pill-rim-angle {
   syntax: "<angle>";
   inherits: false;
@@ -139,8 +145,8 @@ body[data-pill="transcribing"] .pill {
   background: conic-gradient(
     from var(--pill-rim-angle),
     transparent 0deg,
-    var(--polish-violet) 45deg,
-    var(--polish-pink) 110deg,
+    var(--sweep-soft) 50deg,
+    var(--sweep) 110deg,
     transparent 165deg,
     transparent 360deg
   );
@@ -166,17 +172,17 @@ body[data-pill="transcribing"] .pill::after {
   height: 6px;
   border-radius: 50%;
   flex: none;
-  background: var(--success);
+  background: var(--ready);
 }
 
-body[data-pill="recording"] .status-dot,
-body[data-pill="error"] .status-dot { background: var(--accent); }
-body[data-pill="starting"] .status-dot { background: var(--transcribing); }
-body[data-pill="transcribing"] .status-dot { background: var(--polish-pink); }
+body[data-pill="recording"] .status-dot { background: var(--live); }
+body[data-pill="error"] .status-dot { background: var(--error); }
+body[data-pill="starting"] .status-dot { background: var(--text-muted); }
+body[data-pill="transcribing"] .status-dot { background: var(--text-secondary); }
 
 .brand {
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.005em;
 }
 
 .pill-label {
@@ -187,6 +193,7 @@ body[data-pill="transcribing"] .status-dot { background: var(--polish-pink); }
 
 .timer {
   color: var(--text-secondary);
+  font-family: ui-rounded, -apple-system, system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
@@ -194,8 +201,8 @@ body[data-pill="transcribing"] .status-dot { background: var(--polish-pink); }
   font: inherit;
   color: var(--text-muted);
   border: 1px solid var(--hairline);
-  border-radius: 4px;
-  padding: 0 4px;
+  border-radius: 999px;
+  padding: 0 6px;
 }
 
 /* Visibility matrix: every state shows the dot plus its own content. */
@@ -237,7 +244,7 @@ body[data-pill="error"] .pill-hint {
 .wave span {
   width: 2.5px;
   border-radius: 1.5px;
-  background: linear-gradient(180deg, var(--polish-pink) 0%, var(--polish-violet) 100%);
+  background: var(--text-secondary);
   transform: scaleY(0.12);
   transform-origin: center;
   will-change: transform;
@@ -282,7 +289,7 @@ body[data-pill="polished"] .pill { padding-right: 64px; justify-content: flex-st
 .undo-polish-btn:hover { border-color: var(--text-secondary); }
 
 .undo-polish-btn:focus-visible {
-  outline: 2px solid var(--text-secondary);
+  outline: 2px solid var(--ready);
   outline-offset: 1px;
 }
 
@@ -314,7 +321,7 @@ body[data-pill="error"] .pill { padding-right: 36px; }
 .settings-btn:hover { color: var(--text-primary); }
 
 .settings-btn:focus-visible {
-  outline: 2px solid var(--text-secondary);
+  outline: 2px solid var(--ready);
   outline-offset: 1px;
 }
 
@@ -325,8 +332,12 @@ body[data-pill="error"] .pill { padding-right: 36px; }
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--transcribing);
+  background: var(--warn);
 }
 
-.settings-event-badge[data-severity="error"] { background: var(--accent); }
+.settings-event-badge[data-severity="error"] { background: var(--error); }
 .settings-event-badge[data-severity="none"] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-pill="transcribing"] .pill::after { animation: none; }
+}

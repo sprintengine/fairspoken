@@ -6,7 +6,7 @@ struct LevelBars: View {
     var meter: LevelMeter
     var active: Bool
     var bars = 24
-    var color: Color = .mvCoral
+    var color: Color = Crystal.live
     var minHeight: CGFloat = 3
 
     var body: some View {

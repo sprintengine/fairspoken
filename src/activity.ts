@@ -65,7 +65,7 @@ function emptyState(): HTMLElement {
   const sub = document.createElement("div");
   sub.className = "e-sub";
   sub.textContent =
-    "Fairspoken is running cleanly. Warnings and errors will appear here if something needs your attention.";
+    "Warnings and errors show up here.";
   wrap.append(title, sub);
   return wrap;
 }

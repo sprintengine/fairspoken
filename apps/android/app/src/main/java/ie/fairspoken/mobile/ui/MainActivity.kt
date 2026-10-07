@@ -27,21 +27,33 @@ class MainActivity : ComponentActivity() {
     private var readiness by mutableStateOf(Readiness())
     private var refreshTick by mutableIntStateOf(0)
 
-    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
+    /** Set once Android stops showing the prompt; the mic button then opens App info. */
+    private var micBlocked = false
+
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        micBlocked = !granted && !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+        refresh()
+    }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         DockService.start(this)
         refresh()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Light crystal background: dark status and navigation bar icons.
+        // Bar icons follow the system light/dark setting, like the crystal theme.
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.auto(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
         val actions = HomeActions(
-            requestMic = { micPermission.launch(Manifest.permission.RECORD_AUDIO) },
+            requestMic = {
+                if (micBlocked) {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                } else {
+                    micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
             openKeyboardSettings = { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
             pickKeyboard = { getSystemService(InputMethodManager::class.java).showInputMethodPicker() },
             openOverlaySettings = {
@@ -49,11 +61,12 @@ class MainActivity : ComponentActivity() {
             },
             openAccessibilitySettings = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
             setDock = { on -> if (on) startDock() else DockService.stop(this) },
+            openTailscale = packageManager.getLaunchIntentForPackage(TAILSCALE)?.let { intent -> { startActivity(intent) } },
         )
         setContent {
             val dockRunning by DockService.running.collectAsState()
             val insertConnected by InsertService.connected.collectAsState()
-            HomeScreen(
+            AppRoot(
                 fairspoken,
                 readiness.copy(dockRunning = dockRunning, insertService = insertConnected || readiness.insertService),
                 refreshTick,
@@ -92,5 +105,9 @@ class MainActivity : ComponentActivity() {
             insertService = a11y.contains("$packageName/${InsertService::class.java.name}"),
         )
         refreshTick++
+    }
+
+    private companion object {
+        const val TAILSCALE = "com.tailscale.ipn"
     }
 }

@@ -1,3 +1,4 @@
+import "./appearance"; // the pill follows the app's light or dark choice
 import { replaceShortcuts, type BindingRole, type Bindings } from "./shortcutRegistration";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
