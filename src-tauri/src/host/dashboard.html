@@ -20,8 +20,10 @@
 <style>
   /* Crystal (design/crystal/README.md): frosted silver glass on a cool,
      near-neutral backdrop. This is the server, so the one accent is a quiet
-     garnet; status colours are functional only, and errors always carry a
-     triangle icon so they never read as the accent. */
+     garnet, kept to live dots, in-flight requests, primary buttons and the
+     update badge; active states are graphite. Status colours are functional
+     only, and errors always carry a triangle icon so they never read as the
+     accent. */
   :root {
     color-scheme: light;
     --page: #EDEFF2;
@@ -45,6 +47,8 @@
     --error: #B4283C;
     --error-tint: rgba(180, 40, 60, 0.07);
     --idle: #A3ACB4;
+    --active-fill: rgba(16, 24, 32, 0.07);
+    --active-ring: rgba(16, 24, 32, 0.05);
     --link: rgba(16, 24, 32, 0.10);
     --chrome: rgba(237, 239, 242, 0.72);
     --shadow: inset 0 1px 0 var(--edge), 0 8px 24px rgba(16, 24, 32, 0.06);
@@ -80,6 +84,8 @@
     --error: #FF7D8E;
     --error-tint: rgba(255, 125, 142, 0.09);
     --idle: #5A636B;
+    --active-fill: rgba(255, 255, 255, 0.11);
+    --active-ring: rgba(255, 255, 255, 0.05);
     --link: rgba(255, 255, 255, 0.08);
     --chrome: rgba(13, 15, 18, 0.66);
     --shadow: inset 0 1px 0 var(--edge), 0 8px 24px rgba(0, 0, 0, 0.32);
@@ -250,12 +256,20 @@
     background: var(--hairline);
     transition: box-shadow 300ms var(--ease), background 300ms var(--ease);
   }
-  .cnode[data-live="true"] .avatar { color: var(--on-accent); background: var(--accent); box-shadow: 0 0 0 4px var(--accent-tint); }
+  .avatar { position: relative; }
+  .cnode[data-live="true"] { border-color: var(--hairline-strong); }
+  .cnode[data-live="true"] .avatar { color: var(--ink); background: var(--active-fill); box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+  .cnode[data-live="true"] .avatar::after {
+    content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 0 2px var(--surface-strong);
+    animation: live-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes live-pulse { 50% { box-shadow: 0 0 0 2px var(--surface-strong), 0 0 0 5px var(--accent-tint); } }
   .cnode[data-recent="false"] { opacity: 0.6; }
   .ctext { min-width: 0; flex: 1; }
   .cname { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .csub { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cnode[data-live="true"] .csub { color: var(--accent); }
+  .cnode[data-live="true"] .csub { color: var(--ink-2); }
 
   .qnode {
     width: 84px; border-radius: 22px;
@@ -274,13 +288,13 @@
     font-family: var(--rounded); font-size: 14px; font-weight: 600; color: var(--ink-2);
     transition: border-color 300ms var(--ease), box-shadow 300ms var(--ease), color 300ms var(--ease);
   }
-  .wnode[data-state="transcribing"] .wcore { border-color: var(--accent); color: var(--accent); box-shadow: inset 0 1px 0 var(--edge), 0 0 0 5px var(--accent-tint), 0 0 26px -6px var(--accent-ring); }
+  .wnode[data-state="transcribing"] .wcore { border-color: var(--ink-2); color: var(--ink); box-shadow: inset 0 1px 0 var(--edge), 0 0 0 5px var(--active-ring), var(--shadow); }
   .wnode[data-state="loading"] .wcore { border-style: dashed; border-color: var(--ink-2); color: var(--ink); animation: breathe 1.6s ease-in-out infinite; }
   .wnode[data-state="model-unavailable"] .wcore { border-style: dashed; border-color: var(--warn); color: var(--warn); }
   @keyframes breathe { 50% { box-shadow: inset 0 1px 0 var(--edge), 0 0 0 7px var(--hairline); } }
   .wlabel { text-align: center; line-height: 1.25; }
   .wstate { font-size: 11.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
-  .wnode[data-state="transcribing"] .wstate { color: var(--accent); }
+  .wnode[data-state="transcribing"] .wstate { color: var(--ink); }
   .wnode[data-state="model-unavailable"] .wstate { color: var(--warn); }
   .wsub { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 
@@ -290,8 +304,8 @@
     border-radius: 12px; background: var(--surface-strong); border: 1px solid var(--hairline); box-shadow: var(--shadow);
   }
   .mnode .mdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-3); }
-  .mnode[data-serving="true"] { border-color: var(--accent-ring); }
-  .mnode[data-serving="true"] .mdot { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-tint); }
+  .mnode[data-serving="true"] { border-color: var(--hairline-strong); }
+  .mnode[data-serving="true"] .mdot { background: var(--ink-2); box-shadow: 0 0 0 3px var(--active-fill); }
   .mnode[data-installed="false"] { height: 30px; background: transparent; box-shadow: none; border: 1px dashed var(--hairline-strong); }
   .mnode[data-installed="false"] .mdot { background: transparent; border: 1.5px solid var(--idle); width: 7px; height: 7px; }
   .mnode[data-missing="true"] { border: 1px dashed var(--warn); background: var(--warn-tint); height: 44px; }
@@ -301,10 +315,10 @@
   .mnode[data-installed="false"] .mname { font-size: 11.5px; font-weight: 500; color: var(--ink-3); }
   .msub { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .msize { font-size: 11px; color: var(--ink-3); white-space: nowrap; margin-left: auto; padding-left: 6px; }
-  .mnode[data-downloading="true"] { border: 1px solid var(--accent-ring); background: var(--surface-strong); height: 44px; }
+  .mnode[data-downloading="true"] { border: 1px solid var(--hairline-strong); background: var(--surface-strong); height: 44px; }
   .mnode[data-downloading="true"] .mdot {
     width: 14px; height: 14px; border: none; margin: 0 -3px;
-    background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--hairline-strong) 0);
+    background: conic-gradient(var(--ink-2) calc(var(--pct) * 1%), var(--hairline-strong) 0);
     -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px); mask: radial-gradient(circle, transparent 3.5px, #000 4px);
   }
 
@@ -397,15 +411,15 @@
   .mrow .btn { height: 28px; padding: 0 12px; font-size: 12.5px; }
   .mrow .mdot { width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 1.5px solid var(--idle); }
   .mrow[data-installed="true"] .mdot { background: var(--ink-3); border-color: var(--ink-3); }
-  .mrow[data-serving="true"] .mdot { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+  .mrow[data-serving="true"] .mdot { background: var(--ink-2); border-color: var(--ink-2); box-shadow: 0 0 0 3px var(--active-fill); }
   .mrow-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mrow[data-installed="false"] .mrow-name { color: var(--ink-2); }
   .mrow-name small { font-weight: 400; color: var(--ink-3); margin-left: 6px; font-size: 12px; }
   .mrow-size { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; text-align: right; }
   .mrow-status { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; min-width: 96px; text-align: right; }
-  .mrow[data-serving="true"] .mrow-status { color: var(--accent); font-weight: 500; }
+  .mrow[data-serving="true"] .mrow-status { color: var(--ink); font-weight: 500; }
   .mrow-progress { grid-column: 2 / -1; height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; margin: 2px 0 2px; }
-  .mrow-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 400ms var(--ease); }
+  .mrow-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--ink-2); transition: width 400ms var(--ease); }
   .mrow-error { grid-column: 2 / -1; color: var(--error); font-size: 12.5px; }
 
   /* Since start */
@@ -432,9 +446,10 @@
   td .who b { font-weight: 500; }
   td .who small { color: var(--ink-3); font-size: 12px; margin-left: -4px; }
   .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 500; color: var(--ink-2); background: var(--hairline); margin-left: 7px; }
-  .tag.live { color: var(--accent); background: var(--accent-tint); }
+  .tag.live { color: var(--ink); gap: 5px; }
+  .tag.live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   tr.fresh td { animation: fresh 1.6s var(--ease) 1; }
-  @keyframes fresh { 0% { background: var(--accent-tint); } 100% { background: transparent; } }
+  @keyframes fresh { 0% { background: var(--active-fill); } 100% { background: transparent; } }
   .placeholder { color: var(--ink-3); padding: 8px 0 2px; }
   .who .live-dot { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
   .table-more { display: flex; justify-content: center; padding-top: 10px; border-top: 1px solid var(--hairline); }
@@ -493,7 +508,7 @@
   .upd-cta .row { display: flex; align-items: center; gap: 12px; }
   .upd-cta .row .grow { flex: 1; min-width: 0; color: var(--ink-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .upd-progress { height: 4px; border-radius: 4px; background: var(--hairline); overflow: hidden; }
-  .upd-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 300ms var(--ease); }
+  .upd-progress > i { display: block; height: 100%; border-radius: 4px; background: var(--ink-2); transition: width 300ms var(--ease); }
   .upd-error { color: var(--error); font-size: 12.5px; }
 
   /* ── Toasts ── */
@@ -1381,10 +1396,11 @@
         const mk = `model:${w.assignedModel}`;
         if (!nodes.has(mk)) continue;
         const state = w.state || "idle";
-        const color = state === "model-unavailable" ? colors.warn : state === "loading" ? colors.load : state === "transcribing" ? colors.accent : colors.idle;
+        // Neutral ink links; only a missing model is coloured (warn).
+        const color = state === "model-unavailable" ? colors.warn : state === "loading" || state === "transcribing" ? colors.load : colors.idle;
         ctx.save();
-        ctx.lineWidth = state === "transcribing" ? 2 : 1.4;
-        ctx.strokeStyle = alpha(color, state === "idle" ? 0.55 : 0.85);
+        ctx.lineWidth = state === "transcribing" ? 1.8 : 1.3;
+        ctx.strokeStyle = alpha(color, state === "transcribing" ? 0.5 : state === "idle" ? 0.45 : 0.6);
         if (state === "model-unavailable" || state === "loading") {
           ctx.setLineDash([4, 5]);
           if (state === "loading" && motion()) ctx.lineDashOffset = -now / 40;
@@ -1405,7 +1421,7 @@
         if (!from || !to) continue;
         ctx.save();
         ctx.lineWidth = 1.6;
-        ctx.strokeStyle = alpha(colors.accent, 0.55);
+        ctx.strokeStyle = alpha(colors.accent, 0.32);
         ctx.setLineDash([2, 7]);
         ctx.lineCap = "round";
         if (motion()) ctx.lineDashOffset = -now / 28;
