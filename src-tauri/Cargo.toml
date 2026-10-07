@@ -52,6 +52,8 @@ tauri-plugin-updater = "2"
 # swap the running executable (which needs special handling on Windows).
 minisign-verify = "0.2"
 base64 = "0.22"
+# Host tokens generated for pairing (already in the tree via uuid).
+getrandom = "0.4"
 semver = "1"
 self-replace = "1"
 

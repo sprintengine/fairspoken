@@ -1414,6 +1414,7 @@ dependencies = [
  "core-graphics",
  "cpal",
  "flate2",
+ "getrandom 0.4.2",
  "hound",
  "minisign",
  "minisign-verify",

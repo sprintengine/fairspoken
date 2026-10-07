@@ -3,7 +3,7 @@
 // (src-tauri/src/host/PROTOCOL.md). Runs against any host URL.
 //
 //   node shared/host-conformance/run.mjs --url http://127.0.0.1:48173 [--token T]
-//        [--only a,b] [--skip a,b] [--slow] [--json] [--no-transcript-check] [--list]
+//        [--pairing-password P] [--only a,b] [--skip a,b] [--slow] [--json] [--no-transcript-check] [--list]
 
 import { parseArgs } from 'node:util';
 import { CheckFailure, SkipError } from './lib/assert.mjs';
@@ -12,6 +12,7 @@ import basic from './checks/basic.mjs';
 import auth from './checks/auth.mjs';
 import httpChecks from './checks/http.mjs';
 import config from './checks/config.mjs';
+import pairing from './checks/pairing.mjs';
 import events from './checks/events.mjs';
 import clients from './checks/clients.mjs';
 import batch from './checks/batch.mjs';
@@ -41,6 +42,7 @@ const CHECKS = [
   ...auth,
   ...httpChecks,
   ...config,
+  ...pairing,
   eventsHeaders,
   eventsSnapshot,
   eventsFormat,
@@ -62,7 +64,7 @@ const CHECKS = [
 const CHECK_TIMEOUT_MS = 15 * 60 * 1000;
 
 function usage() {
-  return `usage: node run.mjs --url http://HOST:PORT [--token T] [--only name,group] [--skip name,group]
+  return `usage: node run.mjs --url http://HOST:PORT [--token T] [--pairing-password P] [--only name,group] [--skip name,group]
                    [--slow] [--json] [--no-transcript-check] [--list]`;
 }
 
@@ -84,6 +86,7 @@ async function main() {
       options: {
         url: { type: 'string' },
         token: { type: 'string' },
+        'pairing-password': { type: 'string' },
         only: { type: 'string' },
         skip: { type: 'string' },
         slow: { type: 'boolean', default: false },
@@ -120,7 +123,7 @@ async function main() {
   }
   const plan = CHECKS.filter((c) => (!only.length || selected(c.name, only)) && !selected(c.name, skipList));
 
-  const ctx = new Context({ url: args.url, token: args.token, slow: args.slow, transcriptCheck: !args['no-transcript-check'] });
+  const ctx = new Context({ url: args.url, token: args.token, pairingPassword: args['pairing-password'], slow: args.slow, transcriptCheck: !args['no-transcript-check'] });
   const out = (line) => {
     if (!args.json) console.log(line);
   };
@@ -142,7 +145,7 @@ async function main() {
     return 2;
   }
 
-  out(`host ${args.url}  token ${ctx.token ? 'yes' : 'no'}  speech ${process.platform === 'darwin' ? 'say' : 'synthetic'}  checks ${plan.length}`);
+  out(`host ${args.url}  token ${ctx.token ? 'yes' : 'no'}  pairing password ${ctx.pairingPassword ? 'yes' : 'no'}  speech ${process.platform === 'darwin' ? 'say' : 'synthetic'}  checks ${plan.length}`);
   const results = [];
   let interrupted = false;
   const onSignal = async () => {

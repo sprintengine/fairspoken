@@ -5,6 +5,7 @@ use super::config::{
     default_host_config_path, load_persisted_config, write_persisted_config, HostRuntimeConfig,
     PersistedHostConfig,
 };
+use super::pairing::{validate_pairing_password, HostAuth, PAIRING_PASSWORD_ENV};
 use super::update::{
     check_feed, describe_update, download_and_install, resolve_channel, ChannelSource,
     UpdateChannel, UpdatePrefs, UpdaterOptions, CHANNEL_ENV, UPDATE_AVAILABLE_EXIT_CODE,
@@ -28,6 +29,10 @@ Options:
                                   also saves C as the channel). Restart the
                                   host afterwards to run it
   --set-update-channel C          Save the update channel (stable or nightly)
+  --set-pairing-password          Read a pairing password (6-128 characters)
+                                  from standard input and save it; clients on
+                                  your tailnet pair with it instead of the token
+  --clear-pairing-password        Turn pairing off
   -h, --help                      Show this help";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -43,6 +48,8 @@ pub(super) enum HostCommand {
         yes: bool,
     },
     SetUpdateChannel(UpdateChannel),
+    SetPairingPassword,
+    ClearPairingPassword,
 }
 
 fn parse_channel(raw: Option<&str>, flag: &str) -> Result<UpdateChannel, String> {
@@ -83,6 +90,17 @@ pub(super) fn parse_args(args: &[String]) -> Result<HostCommand, String> {
                 let value = inline.or_else(|| iter.next());
                 channel = Some(parse_channel(value, flag)?);
             }
+            "--set-pairing-password" => {
+                // On the command line it would land in shell history and `ps`.
+                if inline.is_some() {
+                    return Err(
+                        "--set-pairing-password reads the password from standard input, not the command line"
+                            .to_string(),
+                    );
+                }
+                set_action(&mut action, "--set-pairing-password")?
+            }
+            "--clear-pairing-password" => set_action(&mut action, "--clear-pairing-password")?,
             "--yes" | "-y" => yes = true,
             other => return Err(format!("Unknown option: {other}")),
         }
@@ -99,6 +117,8 @@ pub(super) fn parse_args(args: &[String]) -> Result<HostCommand, String> {
         Some("--help") => HostCommand::Help,
         Some("--check-update") => HostCommand::CheckUpdate { channel },
         Some("--update") => HostCommand::Update { channel, yes },
+        Some("--set-pairing-password") => HostCommand::SetPairingPassword,
+        Some("--clear-pairing-password") => HostCommand::ClearPairingPassword,
         Some(_) => HostCommand::SetUpdateChannel(
             set_channel.expect("--set-update-channel always parses a channel"),
         ),
@@ -133,6 +153,83 @@ pub(super) fn run(command: HostCommand) -> Result<i32, String> {
         }
         HostCommand::CheckUpdate { channel } => check_update(channel),
         HostCommand::Update { channel, yes } => update(channel, yes),
+        HostCommand::SetPairingPassword => {
+            let password = read_password()?;
+            let path = default_host_config_path();
+            let generated = save_pairing_password(&path, Some(password))?;
+            println!("Pairing password saved in {}.", path.display());
+            if generated {
+                println!("Generated a host token for pairing and saved it there too.");
+            }
+            pairing_env_note();
+            println!("Restart a running host for it to take effect.");
+            Ok(0)
+        }
+        HostCommand::ClearPairingPassword => {
+            let path = default_host_config_path();
+            save_pairing_password(&path, None)?;
+            println!("Pairing turned off in {}.", path.display());
+            pairing_env_note();
+            println!("Restart a running host for it to take effect.");
+            Ok(0)
+        }
+    }
+}
+
+fn pairing_env_note() {
+    if crate::app_dirs::env_var(PAIRING_PASSWORD_ENV).is_some_and(|value| !value.is_empty()) {
+        println!("Note: {PAIRING_PASSWORD_ENV} is set and overrides the saved password.");
+    }
+}
+
+/// One line from standard input, so the password stays out of shell history
+/// and the process list (`echo … | transcription-host --set-pairing-password`
+/// works too). Only the line ending is stripped.
+fn read_password() -> Result<String, String> {
+    if io::stdin().is_terminal() {
+        print!("Pairing password (6-128 characters): ");
+        let _ = io::stdout().flush();
+    }
+    let mut line = String::new();
+    io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|err| format!("Failed to read the password: {err}"))?;
+    let password = line.trim_end_matches(['\r', '\n']).to_string();
+    validate_pairing_password(&password)?;
+    Ok(password)
+}
+
+/// Saves (or with `None` removes) the pairing password, generating a token
+/// into the file when the host would otherwise have none. Returns whether it
+/// generated one.
+fn save_pairing_password(path: &Path, password: Option<String>) -> Result<bool, String> {
+    let mut persisted = load_or_seed(path)?;
+    let env_token = crate::app_dirs::env_var("FAIRSPOKEN_HOST_TOKEN");
+    let mut auth = HostAuth {
+        token: env_token
+            .filter(|token| !token.trim().is_empty())
+            .or_else(|| {
+                persisted
+                    .token
+                    .clone()
+                    .filter(|token| !token.trim().is_empty())
+            }),
+        saved_token: persisted.token.clone(),
+        ..HostAuth::default()
+    };
+    let generated = auth.set_pairing_password(password)?;
+    persisted.token = auth.saved_token;
+    persisted.pairing_password = auth.saved_pairing_password;
+    write_persisted_config(path, &persisted)?;
+    Ok(generated)
+}
+
+fn load_or_seed(path: &Path) -> Result<PersistedHostConfig, String> {
+    match load_persisted_config(path)? {
+        Some(persisted) => Ok(persisted),
+        // First write: seed the rest from the environment, as the host would.
+        None => Ok(PersistedHostConfig::seeded(HostRuntimeConfig::from_env()?)),
     }
 }
 
@@ -143,26 +240,8 @@ fn load_prefs(path: &Path) -> Result<UpdatePrefs, String> {
 }
 
 fn save_channel(path: &Path, channel: UpdateChannel) -> Result<(), String> {
-    let persisted = match load_persisted_config(path)? {
-        Some(mut persisted) => {
-            persisted.update.update_channel = Some(channel);
-            persisted
-        }
-        // First write: seed the rest from the environment, as the host would.
-        None => {
-            let config = HostRuntimeConfig::from_env()?;
-            PersistedHostConfig {
-                max_active_streams: config.max_active_streams,
-                max_recording_seconds: config.max_recording_seconds,
-                use_gpu: config.use_gpu,
-                worker_models: config.worker_models,
-                update: UpdatePrefs {
-                    update_channel: Some(channel),
-                    auto_update: false,
-                },
-            }
-        }
-    };
+    let mut persisted = load_or_seed(path)?;
+    persisted.update.update_channel = Some(channel);
     write_persisted_config(path, &persisted)
 }
 
@@ -328,6 +407,54 @@ mod tests {
         assert!(parse(&["--channel", "stable"]).is_err());
         assert!(parse(&["--check-update", "--yes"]).is_err());
         assert!(parse(&["--update", "--channel"]).is_err());
+        assert!(parse(&["--set-pairing-password=hunter22"]).is_err());
+        assert!(parse(&["--set-pairing-password", "--clear-pairing-password"]).is_err());
+    }
+
+    #[test]
+    fn parses_pairing_commands() {
+        assert_eq!(
+            parse(&["--set-pairing-password"]),
+            Ok(HostCommand::SetPairingPassword)
+        );
+        assert_eq!(
+            parse(&["--clear-pairing-password"]),
+            Ok(HostCommand::ClearPairingPassword)
+        );
+    }
+
+    #[test]
+    fn saving_a_pairing_password_generates_a_token_once_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("host-config.json");
+        let model = crate::models::SttModel::Parakeet.model_id();
+        std::fs::write(
+            &path,
+            format!(r#"{{"maxActiveStreams":7,"maxRecordingSeconds":120,"useGpu":false,"workerModels":["{model}"],"name":"Studio"}}"#),
+        )
+        .unwrap();
+        // Assumes FAIRSPOKEN_HOST_TOKEN is unset in the test environment.
+        let generated = save_pairing_password(&path, Some("123456".to_string())).unwrap();
+        let saved = load_persisted_config(&path).unwrap().unwrap();
+        assert_eq!(
+            generated,
+            crate::app_dirs::env_var("FAIRSPOKEN_HOST_TOKEN").is_none()
+        );
+        assert_eq!(saved.pairing_password.as_deref(), Some("123456"));
+        assert_eq!(saved.max_active_streams, 7);
+        assert_eq!(saved.name.as_deref(), Some("Studio"));
+        let token = saved.token.clone();
+
+        assert!(!save_pairing_password(&path, None).unwrap());
+        let cleared = load_persisted_config(&path).unwrap().unwrap();
+        assert_eq!(cleared.pairing_password, None);
+        assert_eq!(cleared.token, token, "turning pairing off keeps the token");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
     }
 
     #[test]

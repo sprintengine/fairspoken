@@ -435,6 +435,37 @@
                 </div><div class="row"><div class="row-text"><div class="row-label">Model library</div><div class="row-help">Download and manage speech models.</div></div><div class="row-control"><button class="btn" type="button" data-route="models">Manage models</button></div></div><div id="remoteHostPanel" aria-live="polite" hidden>
                   <div class="row">
                     <div class="row-text">
+                      <div class="row-label">Find a host</div>
+                      <div class="row-help" id="tailnetStatus">Look for Fairspoken hosts on your Tailscale network.</div>
+                    </div>
+                    <div class="row-control">
+                      <button class="btn" id="tailnetScan" type="button">Find hosts on my tailnet</button>
+                    </div>
+                  </div>
+                  <div class="tailnet-hosts" id="tailnetHosts" role="list" aria-label="Hosts found" hidden></div>
+                  <div class="row">
+                    <div class="row-text">
+                      <label class="row-label" for="tailnetAddress">Add by name</label>
+                      <div class="row-help">A machine name, or name:port for a host on another port.</div>
+                    </div>
+                    <div class="row-control">
+                      <input id="tailnetAddress" class="setting-input mono w-md" type="text" placeholder="studio-mac" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                      <button class="btn" id="tailnetProbe" type="button">Check</button>
+                    </div>
+                  </div>
+                  <div class="row" id="tailnetPairRow" hidden>
+                    <div class="row-text">
+                      <label class="row-label" for="tailnetPassword">Pairing password</label>
+                      <div class="row-help" id="tailnetPairHelp">Ask the host's operator for its pairing password.</div>
+                    </div>
+                    <div class="row-control">
+                      <input id="tailnetPassword" class="setting-input w-md" type="password" autocomplete="off" />
+                      <button class="btn btn-ghost" id="tailnetPairCancel" type="button">Cancel</button>
+                      <button class="btn btn-primary" id="tailnetPair" type="button">Connect</button>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row-text">
                       <label class="row-label" for="remoteUrl">Host URL</label>
                       <div class="row-help">The model is whatever the host operator configured.</div>
                     </div>

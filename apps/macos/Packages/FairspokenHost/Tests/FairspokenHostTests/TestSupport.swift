@@ -5,7 +5,7 @@ import Synchronization
 import FairspokenCore
 
 /// In-memory `HTTPTransport`: the test writes request bytes in, reads response bytes out.
-final class PipeTransport: HTTPTransport, @unchecked Sendable {
+final class PipeTransport: FairspokenHost.HTTPTransport, @unchecked Sendable {
     let peerAddress: String?
     private let input: AsyncStream<[UInt8]>
     private let inputContinuation: AsyncStream<[UInt8]>.Continuation
@@ -122,6 +122,14 @@ enum TestAudio {
     static func chunked(_ bytes: [UInt8]) -> [UInt8] { HTTPStatus.chunk(bytes) }
 }
 
+/// A clock the pairing limiter reads, moved by hand.
+final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = ContinuousClock.now
+    var now: ContinuousClock.Instant { lock.withLock { current } }
+    func advance(_ d: Duration) { lock.withLock { current += d } }
+}
+
 /// A runtime + router over a stub backend, driven through pipes.
 struct Harness {
     let runtime: HostRuntime
@@ -129,15 +137,19 @@ struct Harness {
     let backend: StubSpeechBackend
 
     init(token: String? = "secret", workers: Int = 1, queue: Int = 4, maxStreams: Int = 4, transcribeDelay: Duration = .milliseconds(20),
-         heartbeat: Duration = .seconds(15), configURL: URL? = nil) {
+         heartbeat: Duration = .seconds(15), configURL: URL? = nil, pairingPassword: String = "", displayName: String = "",
+         pairingLimiter: PairingLimiter = PairingLimiter()) {
         var config = HostConfiguration()
         config.token = token ?? ""
+        config.pairingPassword = pairingPassword
+        config.displayName = displayName
         config.workerCount = workers
         config.workerModels = Array(repeating: HostConfiguration.defaultModel, count: workers)
         config.queueCapacity = queue
         config.maxActiveStreams = maxStreams
         backend = StubSpeechBackend(transcribeDelay: transcribeDelay)
-        runtime = HostRuntime(configuration: config, configURL: configURL, backend: backend, serverVersion: "9.9.9-test")
+        runtime = HostRuntime(configuration: config, configURL: configURL, backend: backend, serverVersion: "9.9.9-test",
+                              pairingLimiter: pairingLimiter)
         router = HostRouter(runtime: runtime, dashboardHTML: Array("<html>dashboard</html>".utf8), heartbeat: heartbeat)
     }
 
@@ -164,7 +176,7 @@ struct Harness {
                  peer: String? = "127.0.0.1") async -> ParsedResponse {
         let (pipe, task) = connect(peer: peer)
         var head = "\(method) \(target) HTTP/1.1\r\nHost: test\r\nConnection: close\r\n"
-        if auth, let token = runtime.configuration.authToken { head += "Authorization: Bearer \(token)\r\n" }
+        if auth, let token = runtime.authToken { head += "Authorization: Bearer \(token)\r\n" }
         for (k, v) in headers { head += "\(k): \(v)\r\n" }
         if !body.isEmpty { head += "Content-Length: \(body.count)\r\n" }
         head += "\r\n"

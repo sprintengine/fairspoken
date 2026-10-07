@@ -13,6 +13,7 @@ mod hugging_face;
 mod insertion;
 mod live_preview;
 mod local_models;
+mod machine;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
@@ -28,6 +29,7 @@ mod remote_transcription;
 mod settings;
 mod sounds;
 mod speed_test;
+mod tailnet_discovery;
 mod transcript_cleanup;
 mod transcript_history;
 mod transcription;
@@ -739,6 +741,63 @@ fn test_remote_transcription_host(
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
     check_remote_transcription_host(&settings)
+}
+
+/// Scans the tailnet for transcription hosts (Tailscale CLI + `/v1/hello`).
+#[tauri::command]
+async fn discover_tailnet_hosts() -> Result<Vec<tailnet_discovery::DiscoveredHost>, String> {
+    tauri::async_runtime::spawn_blocking(tailnet_discovery::discover_hosts)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Probes a typed machine name, `name:port` or URL for a transcription host.
+#[tauri::command]
+async fn probe_transcription_host(
+    address: String,
+) -> Result<tailnet_discovery::DiscoveredHost, String> {
+    tauri::async_runtime::spawn_blocking(move || tailnet_discovery::probe_address(&address))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Makes a discovered host the transcription location. With a password it
+/// pairs first (`POST /v1/pair`) and saves the token it gets back; without
+/// one (a host that has no token) it saves the URL alone.
+#[tauri::command]
+async fn connect_transcription_host(
+    app: AppHandle,
+    url: String,
+    password: Option<String>,
+) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = match password {
+            Some(password) => {
+                let client_name =
+                    machine::computer_name().unwrap_or_else(|| "Fairspoken".to_string());
+                tailnet_discovery::pair_with_host(&url, &password, &client_name)?
+                    .unwrap_or_default()
+            }
+            None => String::new(),
+        };
+        let services = app.state::<AppServices>();
+        let mut next = services
+            .settings
+            .lock()
+            .map_err(|_| "Settings service lock failed".to_string())?
+            .current();
+        next.remote_url = url;
+        next.remote_auth_token = token;
+        next.transcription_location = TranscriptionLocation::RemoteHost;
+        save_settings_inner(app.clone(), Some(next), None, app.state::<AppServices>())?;
+        services
+            .settings
+            .lock()
+            .map_err(|_| "Settings service lock failed".to_string())
+            .map(|service| service.current())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Native window bounds (logical points) for each mini-pill layout state.
@@ -2841,6 +2900,9 @@ pub fn run() {
             prepare_transcription_model,
             begin_prepare_transcription_model,
             test_remote_transcription_host,
+            discover_tailnet_hosts,
+            probe_transcription_host,
+            connect_transcription_host,
             layout_pill_window,
             open_home_window,
             show_transcript_shelf_window,

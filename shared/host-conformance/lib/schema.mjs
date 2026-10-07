@@ -84,6 +84,7 @@ export const STATS_SPEC = {
   maxActiveStreams: t.range(1, 32),
   maxRecordingSeconds: t.range(10, 600),
   useGpu: t.bool,
+  pairingEnabled: t.bool,
   model: t.nestring,
   models: t.array(itemOf(MODEL)),
   modelDownload: t.nullOr(t.object(DOWNLOAD)),
@@ -143,6 +144,7 @@ export const EVENT_SPECS = {
   job_failed: { ...EVENT_COMMON, jobId: t.uint, worker: t.uintOrNull, client: t.stringOrNull, error: t.nestring },
   worker_state: { ...EVENT_COMMON, worker: t.uint, state: t.oneOf(WORKER_STATES), model: t.stringOrNull },
   model_download: { ...EVENT_COMMON, model: t.nestring, stage: t.oneOf(DOWNLOAD_STAGES), percentage: t.range(0, 100) },
+  pairing: { ...EVENT_COMMON, client: t.stringOrNull, clientName: t.stringOrNull, ok: t.bool },
 };
 
 /** Exactly the fields PROTOCOL.md lists for the event type (unknown types pass). */

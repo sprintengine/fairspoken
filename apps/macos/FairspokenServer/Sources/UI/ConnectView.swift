@@ -4,17 +4,22 @@ import CoreImage.CIFilterBuiltins
 import FairspokenUI
 import SwiftUI
 
-/// The server address and token clients need, with copy buttons and a QR code.
+/// How clients connect: pairing from a tailnet scan first, then the address, token and QR
+/// code for setting a client up by hand.
 struct ConnectView: View {
     @Environment(ServerController.self) private var controller
     @State private var showToken = false
     @State private var copied: String?
+    @State private var listening = false
+    @State private var listenProblem: String?
 
     var body: some View {
         let config = controller.configuration
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                PageHeader(title: "Connect", subtitle: "What to type into Fairspoken on each computer that should use this server")
+                PageHeader(title: "Connect", subtitle: "How Fairspoken on your other computers finds and uses this server")
+                pairingCard
+                Text("Set up by hand").font(.title3.weight(.semibold))
                 HStack(alignment: .top, spacing: 18) {
                     SurfaceCard(padding: 22) {
                         VStack(alignment: .leading, spacing: 16) {
@@ -78,7 +83,7 @@ struct ConnectView: View {
                 }
                 SurfaceCard(padding: 22) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Setting up a client").font(.headline)
+                        Text("Setting up a client by hand").font(.headline)
                         step(1, "On the Mac: open Fairspoken › Settings › Transcription, choose My transcription host, paste the address and the token, then Test connection.")
                         step(2, "On Windows or Linux: Fairspoken › Settings › Transcription › My host, with the same address as the Host URL and the same token.")
                         step(3, "Dictate as usual. Each dictation streams to this server while you speak; the text comes back about a tenth of a second after you let go.")
@@ -88,8 +93,9 @@ struct ConnectView: View {
                     SurfaceCard(padding: 22) {
                         VStack(alignment: .leading, spacing: 10) {
                             Label("Only this Mac can connect", systemImage: "lock").font(.headline)
-                            Text("The server listens on 127.0.0.1. To serve other computers, either set the address to 0.0.0.0 (or this Mac's Tailscale address) under Configuration, or keep it private and publish it on your tailnet with Tailscale:")
+                            Text("The server listens on 127.0.0.1, so other computers can't reach it and a tailnet scan doesn't find it. Either listen on this Mac's Tailscale address, or keep it private and publish it on your tailnet with Tailscale:")
                                 .font(.callout)
+                            listenOnTailscaleButton
                             HStack {
                                 Text(tailscaleCommand).font(.fsData(.callout, weight: .medium)).textSelection(.enabled)
                                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -109,6 +115,66 @@ struct ConnectView: View {
     }
 
     private var tailscaleCommand: String { "tailscale serve --bg \(controller.configuration.port)" }
+
+    /// The main path: the client scans the tailnet, picks this Mac and types the password.
+    private var pairingCard: some View {
+        let config = controller.configuration
+        return SurfaceCard(padding: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Pair from your other computer", systemImage: "dot.radiowaves.left.and.right").font(.headline)
+                    Spacer()
+                    Text(config.pairingEnabled ? "Pairing on" : "Pairing off")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(config.pairingEnabled ? Color.fsSuccess : .secondary)
+                }
+                step(1, "On your other computer, open Fairspoken › Settings › Transcription › My host › Find hosts on my tailnet.")
+                step(2, "Pick \u{201C}\(controller.hostName)\u{201D} from the list.")
+                step(3, "Type the pairing password. Fairspoken saves the address and token and tests the connection.")
+                if !config.pairingEnabled {
+                    HStack {
+                        Text("Set a pairing password first (6 to 128 characters; six digits are fine).")
+                            .font(.callout).foregroundStyle(Color.fsGorseText)
+                        Spacer()
+                        Button("Set a pairing password", systemImage: "key") { controller.section = .configuration }
+                            .buttonStyle(.glass)
+                    }
+                }
+                if controller.isLoopbackOnly {
+                    Text("Listening on 127.0.0.1, this Mac turns up in a scan only once it's published with `\(tailscaleCommand)` (see below), or after you listen on its Tailscale address.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if !controller.isDiscoverableDirectly {
+                    Text(config.port != HostConfiguration.defaultPort
+                         ? "A scan probes port \(HostConfiguration.defaultPort) only. On port \(String(config.port)), type this Mac's name and port in Find hosts instead."
+                         : "A scan probes each device's Tailscale address. This address isn't one, so publish the server with `\(tailscaleCommand)` or listen on the Tailscale address.")
+                        .font(.caption).foregroundStyle(Color.fsGorseText)
+                    listenOnTailscaleButton
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var listenOnTailscaleButton: some View {
+        if let tailscale = controller.addresses.tailscale {
+            HStack(spacing: 10) {
+                Button(listening ? "Restarting…" : "Listen on my Tailscale address (\(tailscale.address))", systemImage: "network") {
+                    listening = true
+                    listenProblem = nil
+                    Task {
+                        if case .failed(let m) = await controller.listenOnTailscale() { listenProblem = m }
+                        listening = false
+                    }
+                }
+                .buttonStyle(.glass)
+                .disabled(listening)
+                if let listenProblem { Text(listenProblem).font(.caption).foregroundStyle(Color.fsError) }
+            }
+            Text("Only devices on your tailnet can reach that address. Saving restarts the server on port \(String(HostConfiguration.defaultPort)).")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("Connect Tailscale on this Mac to listen on its tailnet address.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
 
     private func step(_ n: Int, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {

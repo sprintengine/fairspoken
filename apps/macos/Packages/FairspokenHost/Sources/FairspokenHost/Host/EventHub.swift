@@ -12,6 +12,8 @@ public enum HostWireEvent: Sendable {
     case jobFailed(jobId: UInt64, worker: Int?, client: String?, error: String)
     case workerState(worker: Int, state: String, model: String?)
     case modelDownload(model: String, stage: String, percentage: Int, error: String?)
+    /// A `POST /v1/pair` attempt. Never carries the password.
+    case pairing(client: String?, clientName: String?, ok: Bool)
 
     public var name: String {
         switch self {
@@ -23,6 +25,7 @@ public enum HostWireEvent: Sendable {
         case .jobFailed: "job_failed"
         case .workerState: "worker_state"
         case .modelDownload: "model_download"
+        case .pairing: "pairing"
         }
     }
 
@@ -51,6 +54,9 @@ public enum HostWireEvent: Sendable {
             var fields: [(String, JSONValue)] = [at, ("model", .string(m)), ("stage", .string(s)), ("percentage", .int(p))]
             if let e { fields.append(("error", .string(e))) }
             return .object(fields)
+        case .pairing(let c, let n, let ok):
+            // Like every event, the type is the SSE `event:` line only (Rust `HostEventKind::Pairing`).
+            return .object([at, ("client", .optionalString(c)), ("clientName", .optionalString(n)), ("ok", .bool(ok))])
         }
     }
 

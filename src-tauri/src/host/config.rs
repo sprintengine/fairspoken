@@ -1,3 +1,4 @@
+use super::pairing::{deserialize_password_change, validate_pairing_password, HostAuth};
 use super::update::UpdatePrefs;
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
@@ -107,6 +108,34 @@ pub(super) struct PersistedHostConfig {
     /// panel or `--set-update-channel`.
     #[serde(flatten)]
     pub(super) update: UpdatePrefs,
+    /// The host token when it lives in this file (generated for pairing, or
+    /// written by the Swift host, which shares the format). An env token is
+    /// never saved here. Empty means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) token: Option<String>,
+    /// Edited from the dashboard or `--set-pairing-password`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) pairing_password: Option<String>,
+    /// Display name in `/v1/hello`; `FAIRSPOKEN_HOST_NAME` overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+}
+
+impl PersistedHostConfig {
+    /// The file a first write creates: live settings seeded from the
+    /// environment, as the host would on its first boot.
+    pub(super) fn seeded(config: HostRuntimeConfig) -> Self {
+        Self {
+            max_active_streams: config.max_active_streams,
+            max_recording_seconds: config.max_recording_seconds,
+            use_gpu: config.use_gpu,
+            worker_models: config.worker_models,
+            update: UpdatePrefs::default(),
+            token: None,
+            pairing_password: None,
+            name: None,
+        }
+    }
 }
 
 pub(super) fn default_host_config_path() -> PathBuf {
@@ -183,6 +212,7 @@ pub(super) fn overlay_persisted_config(
 }
 
 pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<(), String> {
+    let auth = live.auth();
     write_persisted_config(
         path,
         &PersistedHostConfig {
@@ -191,6 +221,9 @@ pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<
             use_gpu: live.use_gpu(),
             worker_models: live.worker_models(),
             update: live.update_prefs(),
+            token: auth.saved_token,
+            pairing_password: auth.saved_pairing_password,
+            name: live.saved_name(),
         },
     )
 }
@@ -205,7 +238,30 @@ pub(super) fn write_persisted_config(
     }
     let payload = serde_json::to_string_pretty(persisted)
         .map_err(|err| format!("Failed to serialize host config: {err}"))?;
-    fs::write(path, payload).map_err(|err| format!("Failed to write host config: {err}"))
+    write_private_file(path, payload.as_bytes())
+        .map_err(|err| format!("Failed to write host config: {err}"))
+}
+
+/// The config file can hold the token and pairing password, so it is
+/// readable by its owner only where the platform supports that.
+#[cfg(unix)]
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    // `mode` only applies to a new file; tighten one written by older builds.
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(contents)
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    fs::write(path, contents)
 }
 
 /// Knobs an operator may change at runtime through `POST /v1/config`.
@@ -218,6 +274,10 @@ pub(super) struct HostLiveConfig {
     pub(super) use_gpu: AtomicBool,
     worker_models: Mutex<Vec<SttModel>>,
     update_prefs: Mutex<UpdatePrefs>,
+    auth: Mutex<HostAuth>,
+    /// The display name in `/v1/hello`, and the config file's `name` (kept
+    /// as found so a rewrite of the file doesn't drop or bake in a default).
+    name: Mutex<(String, Option<String>)>,
 }
 
 impl HostLiveConfig {
@@ -228,7 +288,37 @@ impl HostLiveConfig {
             use_gpu: AtomicBool::new(config.use_gpu),
             worker_models: Mutex::new(config.worker_models.clone()),
             update_prefs: Mutex::new(UpdatePrefs::default()),
+            auth: Mutex::new(HostAuth::default()),
+            name: Mutex::new((String::new(), None)),
         }
+    }
+
+    pub(super) fn auth(&self) -> HostAuth {
+        lock(&self.auth).clone()
+    }
+
+    pub(super) fn set_auth(&self, auth: HostAuth) {
+        *lock(&self.auth) = auth;
+    }
+
+    pub(super) fn token(&self) -> Option<String> {
+        lock(&self.auth).token.clone()
+    }
+
+    pub(super) fn pairing_enabled(&self) -> bool {
+        lock(&self.auth).pairing_enabled()
+    }
+
+    pub(super) fn name(&self) -> String {
+        lock(&self.name).0.clone()
+    }
+
+    fn saved_name(&self) -> Option<String> {
+        lock(&self.name).1.clone()
+    }
+
+    pub(super) fn set_name(&self, display: String, saved: Option<String>) {
+        *lock(&self.name) = (display, saved);
     }
 
     pub(super) fn update_prefs(&self) -> UpdatePrefs {
@@ -304,6 +394,9 @@ pub(super) struct HostConfigUpdate {
     pub(super) model: Option<String>,
     /// One model id per worker; length must match the worker count.
     pub(super) worker_models: Option<Vec<String>>,
+    /// Absent leaves pairing alone; `null` or `""` turns it off.
+    #[serde(default, deserialize_with = "deserialize_password_change")]
+    pub(super) pairing_password: Option<Option<String>>,
 }
 
 /// Validates every supplied field before applying any of them, so a rejected
@@ -353,6 +446,19 @@ pub(super) fn apply_config_update(
         }
         (None, None) => None,
     };
+    // Generating a token is fallible, so it happens before anything applies.
+    let next_auth = match &update.pairing_password {
+        Some(password) => {
+            let password = password.clone().filter(|password| !password.is_empty());
+            if let Some(password) = &password {
+                validate_pairing_password(password)?;
+            }
+            let mut auth = live.auth();
+            auth.set_pairing_password(password)?;
+            Some(auth)
+        }
+        None => None,
+    };
 
     if let Some(value) = update.max_active_streams {
         live.max_active_streams.store(value, Ordering::Relaxed);
@@ -367,7 +473,18 @@ pub(super) fn apply_config_update(
     if let Some(models) = next_worker_models {
         live.set_worker_models(models);
     }
+    if let Some(auth) = next_auth {
+        live.set_auth(auth);
+    }
     Ok(())
+}
+
+/// The critical sections only read or replace the value, so a poisoned lock
+/// still holds a usable one.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn env_usize(name: &str, default: usize) -> usize {

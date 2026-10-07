@@ -26,6 +26,12 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
     public var port = defaultPort
     /// Bearer token; empty means no authentication.
     public var token = ""
+    /// What clients type to get the token from `POST /v1/pair`; empty turns pairing off.
+    /// Never returned by a route, logged or sent in an event.
+    public var pairingPassword = ""
+    /// The name `/v1/hello` shows scanning clients (`name` in the file, as in the Rust host);
+    /// empty uses this Mac's name.
+    public var displayName = ""
     /// Hold an IOPM assertion against idle sleep while serving.
     public var preventSleep = true
 
@@ -33,7 +39,8 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case maxActiveStreams, maxRecordingSeconds, useGpu, workerModels, workerCount, queueCapacity
-        case bindAddress, port, token, preventSleep
+        case bindAddress, port, token, pairingPassword, preventSleep
+        case displayName = "name"
     }
 
     public init(from decoder: Decoder) throws {
@@ -48,7 +55,27 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
         bindAddress = try c.decodeIfPresent(String.self, forKey: .bindAddress) ?? d.bindAddress
         port = try c.decodeIfPresent(Int.self, forKey: .port) ?? d.port
         token = try c.decodeIfPresent(String.self, forKey: .token) ?? d.token
+        pairingPassword = try c.decodeIfPresent(String.self, forKey: .pairingPassword) ?? d.pairingPassword
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? d.displayName
         preventSleep = try c.decodeIfPresent(Bool.self, forKey: .preventSleep) ?? d.preventSleep
+    }
+
+    /// The optional fields are left out while unset, so a file without pairing reads the same
+    /// in a host that validates `pairingPassword` when present.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(maxActiveStreams, forKey: .maxActiveStreams)
+        try c.encode(maxRecordingSeconds, forKey: .maxRecordingSeconds)
+        try c.encode(useGpu, forKey: .useGpu)
+        try c.encode(workerModels, forKey: .workerModels)
+        try c.encode(workerCount, forKey: .workerCount)
+        try c.encode(queueCapacity, forKey: .queueCapacity)
+        try c.encode(bindAddress, forKey: .bindAddress)
+        try c.encode(port, forKey: .port)
+        try c.encode(token, forKey: .token)
+        if !pairingPassword.isEmpty { try c.encode(pairingPassword, forKey: .pairingPassword) }
+        if !displayName.isEmpty { try c.encode(displayName, forKey: .displayName) }
+        try c.encode(preventSleep, forKey: .preventSleep)
     }
 
     /// Clamps every number into range and fits the model list to the worker count, the way
@@ -63,6 +90,7 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
         if !(0...65535).contains(c.port) { c.port = Self.defaultPort } // 0 = any free port (tests)
         c.bindAddress = c.bindAddress.trimmingCharacters(in: .whitespaces)
         if c.bindAddress.isEmpty { c.bindAddress = "127.0.0.1" }
+        c.displayName = Self.cleanName(c.displayName) ?? ""
         let valid = c.workerModels.map { knownModels.contains($0) ? $0 : Self.defaultModel }
         if valid.count != c.workerCount {
             c.workerModels = Array(repeating: valid.first ?? Self.defaultModel, count: c.workerCount)
@@ -88,11 +116,34 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
         return models.allSatisfy { $0 == first } ? first : "mixed"
     }
 
-    /// A random 32-character token (base32-ish, no ambiguous characters).
+    public var pairingEnabled: Bool { !pairingPassword.isEmpty }
+
+    /// Host and client names as shown: trimmed, without control characters, at most 64
+    /// characters; nil when nothing is left (Rust `resolve_host_name`, `PairRequest::client_name`).
+    public static func cleanName(_ raw: String, maxLength: Int = 64) -> String? {
+        var kept = String.UnicodeScalarView()
+        kept.append(contentsOf: raw.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars
+            .filter { $0.properties.generalCategory != .control }.prefix(maxLength))
+        let name = String(kept).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    /// A pairing password's length in Unicode scalars (Rust `chars().count()`).
+    public static let pairingPasswordLength = 6...128
+
+    /// Why `password` can't be a pairing password, or nil if it can. Empty means "off" and is fine.
+    public static func pairingPasswordProblem(_ password: String) -> String? {
+        guard !password.isEmpty, !pairingPasswordLength.contains(password.unicodeScalars.count) else { return nil }
+        return "pairingPassword must be \(pairingPasswordLength.lowerBound) to \(pairingPasswordLength.upperBound) characters"
+    }
+
+    /// 32 random bytes, base64url without padding (43 characters), as PROTOCOL.md specifies
+    /// for the token a host generates when pairing is turned on.
     public static func generateToken() -> String {
-        let alphabet = Array("abcdefghjkmnpqrstuvwxyz23456789")
         var rng = SystemRandomNumberGenerator()
-        return String((0..<32).map { _ in alphabet[Int(rng.next() % UInt64(alphabet.count))] })
+        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
     }
 }
 
@@ -162,9 +213,9 @@ public enum HostConfigurationStore {
 
     /// The effective configuration for a run. The file (if any) is the durable configuration
     /// edited in the app and through `POST /v1/config`; without one, `FAIRSPOKEN_HOST_*`
-    /// variables seed it. Restart-only settings (address, token, workers, queue) set in the
-    /// environment override the file for this run, as they are what a LaunchAgent or a test
-    /// harness passes. Returns whether the file existed.
+    /// variables seed it. Restart-only settings (address, token, pairing password, name,
+    /// workers, queue) set in the environment override the file for this run, as they are what
+    /// a LaunchAgent or a test harness passes.
     public static func resolve(file: HostConfiguration?, environment: [String: String], knownModels: Set<String>) throws(StoreError) -> HostConfiguration {
         var config = file ?? HostConfiguration()
         func string(_ suffix: String) -> String? { HostEnvironment.value(suffix, in: environment) }
@@ -175,6 +226,15 @@ public enum HostConfigurationStore {
             config.port = port
         }
         if let token = string("TOKEN") { config.token = token }
+        if let name = string("NAME").flatMap({ HostConfiguration.cleanName($0) }) { config.displayName = name }
+        if let password = string("PAIRING_PASSWORD"), !password.isEmpty {
+            guard HostConfiguration.pairingPasswordProblem(password) == nil else {
+                throw .invalid("FAIRSPOKEN_HOST_PAIRING_PASSWORD must be \(HostConfiguration.pairingPasswordLength.lowerBound) to \(HostConfiguration.pairingPasswordLength.upperBound) characters")
+            }
+            config.pairingPassword = password
+        } else if HostConfiguration.pairingPasswordProblem(config.pairingPassword) != nil {
+            throw .invalid("The host config's pairingPassword must be \(HostConfiguration.pairingPasswordLength.lowerBound) to \(HostConfiguration.pairingPasswordLength.upperBound) characters (fix or delete it)")
+        }
         if let workers = int("WORKERS") { config.workerCount = workers.clamped(to: HostConfiguration.workerCountRange) }
         if let queue = int("QUEUE_CAPACITY") { config.queueCapacity = queue }
         if file == nil {
@@ -226,16 +286,20 @@ public struct HostConfigUpdate: Sendable, Equatable {
     public var useGpu: Bool?
     public var model: String?
     public var workerModels: [String]?
+    /// nil leaves pairing as it is; `""` (or JSON `null`) turns it off.
+    public var pairingPassword: String?
 
-    public init(maxActiveStreams: Int? = nil, maxRecordingSeconds: Int? = nil, useGpu: Bool? = nil, model: String? = nil, workerModels: [String]? = nil) {
+    public init(maxActiveStreams: Int? = nil, maxRecordingSeconds: Int? = nil, useGpu: Bool? = nil, model: String? = nil, workerModels: [String]? = nil,
+                pairingPassword: String? = nil) {
         self.maxActiveStreams = maxActiveStreams
         self.maxRecordingSeconds = maxRecordingSeconds
         self.useGpu = useGpu
         self.model = model
         self.workerModels = workerModels
+        self.pairingPassword = pairingPassword
     }
 
-    static let fields = ["maxActiveStreams", "maxRecordingSeconds", "useGpu", "model", "workerModels"]
+    static let fields = ["maxActiveStreams", "maxRecordingSeconds", "useGpu", "model", "workerModels", "pairingPassword"]
 
     /// Parses the JSON body with the Rust host's typing rules (`u32`, `u16`, `bool`, strings).
     public static func parse(_ body: [UInt8]) throws(ParseError) -> HostConfigUpdate {
@@ -247,7 +311,7 @@ public struct HostConfigUpdate: Sendable, Equatable {
             throw .invalid("Invalid config update: invalid type, expected struct HostConfigUpdate")
         }
         for key in dict.keys.sorted() where !fields.contains(key) {
-            throw .invalid("Invalid config update: unknown field `\(key)`, expected one of `maxActiveStreams`, `maxRecordingSeconds`, `useGpu`, `model`, `workerModels`")
+            throw .invalid("Invalid config update: unknown field `\(key)`, expected one of `maxActiveStreams`, `maxRecordingSeconds`, `useGpu`, `model`, `workerModels`, `pairingPassword`")
         }
         var update = HostConfigUpdate()
         func present(_ key: String) -> Any? {
@@ -279,6 +343,16 @@ public struct HostConfigUpdate: Sendable, Equatable {
                 throw .invalid("Invalid config update: workerModels must be an array of strings")
             }
             update.workerModels = strings
+        }
+        if let v = dict["pairingPassword"] {
+            // `null` is meaningful here: it turns pairing off, like "".
+            if v is NSNull {
+                update.pairingPassword = ""
+            } else if let s = v as? String {
+                update.pairingPassword = s
+            } else {
+                throw .invalid("Invalid config update: pairingPassword must be a string or null")
+            }
         }
         return update
     }
@@ -329,13 +403,15 @@ public struct HostLiveSettings: Sendable, Equatable {
         return next
     }
 
-    var configResponse: JSONValue {
+    /// The `POST /v1/config` answer. It reports whether pairing is on, never the password.
+    func configResponse(pairingEnabled: Bool) -> JSONValue {
         .object([
             ("maxActiveStreams", .int(maxActiveStreams)),
             ("maxRecordingSeconds", .int(maxRecordingSeconds)),
             ("useGpu", .bool(useGpu)),
             ("model", .string(modelSummary)),
             ("workerModels", .array(workerModels.map { .string($0) })),
+            ("pairingEnabled", .bool(pairingEnabled)),
         ])
     }
 }

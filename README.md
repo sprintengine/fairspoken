@@ -136,6 +136,26 @@ Open `https://<machine>.<tailnet>.ts.net/?token=<token>` to reach the
 dashboard and download a model. On each client, set the host URL to
 `https://<machine>.<tailnet>.ts.net` and enter the token.
 
+#### Pairing with a password
+
+Instead of copying the token to every client, give the host a pairing
+password (6 to 128 characters; a six-digit number works):
+
+```bash
+FAIRSPOKEN_HOST_PAIRING_PASSWORD=<password> src-tauri/target/release/transcription-host
+# or save it in the host config:
+transcription-host --set-pairing-password      # reads it from standard input
+transcription-host --clear-pairing-password
+```
+
+The dashboard's **Pairing** card sets or clears it too. A host without a
+token generates one when you set a password. On each client, choose **My
+host**, click **Find hosts on my tailnet** (or add the machine by name),
+pick the host and enter the password; the app saves the URL and token and
+tests the connection. Five wrong passwords from one address lock it out for
+10 minutes. `FAIRSPOKEN_HOST_NAME` sets the name clients see (default: the
+machine's name).
+
 Plain `http://` also works for tailnet addresses (`100.64.0.0/10`, MagicDNS
 names and `*.ts.net`) because tailnet traffic is already encrypted. For that,
 bind the host with `FAIRSPOKEN_HOST_ADDR=0.0.0.0:48173` instead of using

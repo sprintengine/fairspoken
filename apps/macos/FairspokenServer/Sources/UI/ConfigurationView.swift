@@ -4,15 +4,16 @@ import FairspokenUI
 import FairspokenUpdates
 import SwiftUI
 
-/// Edits host-config.json. Limits, the accelerator and model assignments apply at once
-/// (the same path as `POST /v1/config`); address, port, token, workers and queue restart
-/// the server.
+/// Edits host-config.json. Limits, the accelerator, model assignments, the pairing password
+/// and the name apply at once (the same path as `POST /v1/config`); address, port, token,
+/// workers and queue restart the server.
 struct ConfigurationView: View {
     @Environment(ServerController.self) private var controller
     @Environment(UpdateController.self) private var updates
     @State private var draft = HostConfiguration()
     @State private var loaded = false
     @State private var showToken = false
+    @State private var showPassword = false
     @State private var message: (text: String, isError: Bool)?
     @State private var saving = false
 
@@ -24,6 +25,7 @@ struct ConfigurationView: View {
         let saved = controller.configuration
         let restartNeeded = draft.bindAddress != saved.bindAddress || draft.port != saved.port || draft.token != saved.token
             || draft.workerCount != saved.workerCount || draft.queueCapacity != saved.queueCapacity
+            || (draft.pairingEnabled && draft.token.trimmingCharacters(in: .whitespaces).isEmpty)
         VStack(alignment: .leading, spacing: 0) {
             PageHeader(title: "Configuration", subtitle: controller.configURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                 Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([controller.configURL]) }
@@ -33,6 +35,7 @@ struct ConfigurationView: View {
             .padding(.top, 22)
             Form {
                 network
+                pairing
                 workers
                 limits
                 thisMac
@@ -70,10 +73,13 @@ struct ConfigurationView: View {
             if !loaded { draft = controller.configuration; loaded = true }
             controller.refreshAddresses()
         }
-        .onChange(of: controller.configuration) { _, next in
+        .onChange(of: controller.configuration) { old, next in
             // Edits made elsewhere (the web dashboard, the Models page) show up here.
             if !saving { draft.maxActiveStreams = next.maxActiveStreams; draft.maxRecordingSeconds = next.maxRecordingSeconds
-                draft.useGpu = next.useGpu; if draft.workerCount == next.workerCount { draft.workerModels = next.workerModels } }
+                draft.useGpu = next.useGpu; if draft.workerCount == next.workerCount { draft.workerModels = next.workerModels }
+                // A pairing password set from the dashboard (and the token it generated), unless edited here.
+                if draft.pairingPassword == old.pairingPassword { draft.pairingPassword = next.pairingPassword }
+                if draft.token == old.token { draft.token = next.token } }
         }
     }
 
@@ -136,6 +142,62 @@ struct ConfigurationView: View {
             Text("Network")
         } footer: {
             Text("Clients send the token as `Authorization: Bearer <token>`. Behind `tailscale serve`, keep 127.0.0.1: Tailscale forwards each device's address.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var pairing: some View {
+        let problem = HostConfiguration.pairingPasswordProblem(draft.pairingPassword) != nil
+        let loopback = ["127.0.0.1", "::1"].contains(draft.bindAddress)
+        return Section {
+            LabeledContent("Name on your tailnet") {
+                TextField("Name", text: $draft.displayName, prompt: Text(MachineName.current()))
+                    .labelsHidden().multilineTextAlignment(.trailing).frame(width: 260)
+            }
+            LabeledContent("Pairing password") {
+                HStack {
+                    if showPassword {
+                        TextField("Pairing password", text: $draft.pairingPassword, prompt: Text("off"))
+                            .labelsHidden().font(.fsData()).frame(minWidth: 220)
+                    } else {
+                        SecureField("Pairing password", text: $draft.pairingPassword, prompt: Text("off"))
+                            .labelsHidden().frame(minWidth: 220)
+                    }
+                    Button(showPassword ? "Hide" : "Show") { showPassword.toggle() }
+                    Button("Turn off") { draft.pairingPassword = "" }
+                        .disabled(draft.pairingPassword.isEmpty)
+                }
+            }
+            if problem {
+                Label(ServerController.pairingPasswordHint, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(Color.fsError)
+            } else if draft.pairingEnabled && draft.token.trimmingCharacters(in: .whitespaces).isEmpty {
+                Label("Pairing hands out the token, so saving creates one and every client then needs it.", systemImage: "key")
+                    .font(.caption).foregroundStyle(Color.fsGorseText)
+            } else if draft.pairingEnabled {
+                Label("Pairing is on: Fairspoken on your other computers can find this Mac and connect with this password.", systemImage: "checkmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Label("Pairing is off: clients need the address and the token, typed in by hand.", systemImage: "circle.dashed")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if draft.pairingEnabled && loopback {
+                HStack {
+                    Text("At 127.0.0.1, a scan finds this Mac only through `tailscale serve`. Or listen on the Tailscale address:")
+                        .font(.caption).foregroundStyle(Color.fsGorseText)
+                    Spacer()
+                    if let t = controller.addresses.tailscale {
+                        Button("Listen on \(t.address)") { draft.bindAddress = t.address; draft.port = HostConfiguration.defaultPort }
+                    }
+                }
+            } else if draft.pairingEnabled && draft.port != HostConfiguration.defaultPort {
+                Text("A scan probes port \(HostConfiguration.defaultPort) only. On port \(String(draft.port)), clients type this Mac's name and port instead.")
+                    .font(.caption).foregroundStyle(Color.fsGorseText)
+            }
+        } header: {
+            Text("Pairing")
+        } footer: {
+            Text("A client on your tailnet picks this Mac from Find hosts on my tailnet and types the password once; the server answers with the token. Five wrong tries from one device (twenty in all) lock pairing for ten minutes.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

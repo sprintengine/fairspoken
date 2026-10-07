@@ -24,12 +24,109 @@ When the host has a token (`FAIRSPOKEN_HOST_TOKEN`), every route except
 A missing or wrong token answers `401 {"error":"unauthorized"}`. Errors
 elsewhere are `{"error": "<message>"}` with a 4xx/5xx status.
 
+`GET /v1/hello` and `POST /v1/pair` (below) never require the token.
+
+## Discovery and pairing
+
+A client finds hosts on the user's tailnet without the user typing an
+address, and pairs with a password the host's operator chose instead of the
+long token.
+
+### Pairing password
+
+The operator may set a pairing password (`FAIRSPOKEN_HOST_PAIRING_PASSWORD`,
+or `pairingPassword` in the host config file, the env var winning). Rules:
+
+- 6–128 characters. A six-digit number is allowed.
+- Setting a password on a host with no token makes the host generate one
+  (32 random bytes, base64url, no padding) and persist it, because pairing
+  must hand the client a token. Set through `POST /v1/config`, the generated
+  token is required from the next request on (a dashboard opened without a
+  token pairs to get it).
+- Stored in the host config file next to the token (same file, `0600` where
+  the platform supports it). It is never returned by any route, logged, or
+  sent in events. `/v1/stats` reports only `"pairingEnabled": bool`.
+- `POST /v1/config` accepts `pairingPassword: string | null` (`null` or `""`
+  turns pairing off) with the same validation; the answer reports
+  `pairingEnabled`, never the password.
+
+### GET /v1/hello (no auth)
+
+Identifies a Fairspoken host to a scanning client. Answers `200`:
+
+```jsonc
+{
+  "service": "fairspoken-host",   // clients ignore any other value
+  "protocol": 1,                  // bumps only on incompatible discovery/pairing changes
+  "name": "Studio Mac",           // operator-set display name, else the machine's host name
+  "serverVersion": "0.4.0",
+  "auth": "password"              // none: no token | password: pair with POST /v1/pair | token: token set, no pairing password
+}
+```
+
+It reveals nothing else (no models, clients or stats). Hosts answer it
+cheaply; clients probe many addresses at once.
+
+### POST /v1/pair (no auth)
+
+Body (`deny_unknown_fields`, at most 4 KB, else `413`):
+`{"password": "<string>", "clientName": "<string>"?}`. `clientName` is
+informational, e.g. "Conal's MacBook"; the host trims it, strips control
+characters and truncates it to 64 characters (never rejects it), and may show
+it in its client list.
+
+| Status | Body | When |
+| --- | --- | --- |
+| `200` | `{"token": "<token>", "name": "<host name>"}` | Password matches. `token` is the host token. |
+| `200` | `{"token": null, "name": "<host name>"}` | The host has no token (`auth: "none"`); nothing to pair. |
+| `401` | `{"error": "wrong password"}` | Mismatch. |
+| `404` | `{"error": "pairing disabled"}` | Token set but no pairing password. |
+| `429` | `{"error": "too many attempts", "retryAfterSeconds": n}` | Rate limit (below). Also sets `Retry-After`. |
+| `400` | `{"error": "<message>"}` | Malformed body. |
+
+- The comparison is constant-time.
+- Rate limit: at most 5 failed attempts per client address per 10 minutes,
+  and 20 failed attempts across all addresses per 10 minutes. Once exceeded,
+  every attempt (right or wrong) from that scope answers `429` until the
+  window has room again. Successes don't count. State is in memory only.
+- Each attempt with a well-formed body emits a `pairing` event on
+  `/v1/events`: `{at, client, clientName, ok}` (`clientName` cleaned as above
+  or `null`; `ok` is true for either `200`, including `token: null`).
+- The client address follows the same rule as `/v1/stats` `client`.
+
+### Client discovery (informative)
+
+Clients scan with the Tailscale CLI, which every desktop Tailscale install
+ships: `tailscale status --json` (look on `PATH`, then
+`/Applications/Tailscale.app/Contents/MacOS/Tailscale` on macOS and
+`%ProgramFiles%\Tailscale\tailscale.exe` on Windows). For `Self` and every
+peer with `Online: true` (skipping phones and TVs: `OS` `iOS`, `android`,
+`tvOS`), the client probes in parallel (≤ 32 at once, 1.5 s timeout each):
+
+1. `https://<DNSName without the trailing dot>/v1/hello`, for a host
+   published with `tailscale serve` over HTTPS,
+2. `http://<DNSName without the trailing dot>/v1/hello` (port 80), for one
+   published with `tailscale serve` over plain HTTP, and
+3. `http://<first IPv4 in TailscaleIPs>:48173/v1/hello`, for a host bound to
+   `0.0.0.0` or its Tailscale address on the default port.
+
+A peer that answers with `service: "fairspoken-host"` is listed once, at the
+first URL in that order that answered. Without the CLI, or for a
+non-default port, the user can type a machine name or `name:port`, which the
+client probes the same way (MagicDNS resolves bare machine names). A bare
+name only works over HTTP unless the CLI expands it to the full `*.ts.net`
+name, because `tailscale serve` certificates cover only that name. After a
+successful pair, the client saves the URL and token into its existing
+remote-host settings and runs its normal connection test.
+
 ## Endpoints
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | Dashboard HTML (no auth; it authenticates its own calls) |
 | GET | `/favicon.ico` | `204`, no auth |
+| GET | `/v1/hello` | Discovery identity (no auth, below) |
+| POST | `/v1/pair` | Exchange the pairing password for the token (no auth, below) |
 | GET | `/v1/health` | `{ok, mode: "standalone-host", backend, serverVersion}` |
 | GET | `/v1/stats` | Full host snapshot (below) |
 | GET | `/v1/events` | Live Server-Sent Events feed (below) |
@@ -72,11 +169,12 @@ response is the same JSON as `/v1/transcriptions`.
 ### POST /v1/config
 
 Body (every field optional; `deny_unknown_fields`):
-`{maxActiveStreams 1–32, maxRecordingSeconds 10–600, useGpu, model | workerModels[]}`.
+`{maxActiveStreams 1–32, maxRecordingSeconds 10–600, useGpu, model | workerModels[], pairingPassword}`
+(`pairingPassword` as in "Pairing password" above).
 `model` sets every worker; `workerModels` must list exactly one id per
 worker. All fields validate before any apply; the result persists to the host
 config file. Answers `{maxActiveStreams, maxRecordingSeconds, useGpu, model,
-workerModels}`. Worker count and queue capacity are restart-only.
+workerModels, pairingEnabled}`. Worker count and queue capacity are restart-only.
 
 ### POST /v1/models/download
 
@@ -146,7 +244,7 @@ when no stream, queued or running job remains.
   "serverVersion": "0.1.0", "bindAddr": "127.0.0.1:48173", "uptimeSeconds": 812,
   "activeSessions": 2, "activeStreams": 1, "queuedJobs": 0, "runningJobs": 1,
   "workerCount": 2, "queueCapacity": 8, "maxActiveStreams": 4,
-  "maxRecordingSeconds": 600, "useGpu": true,
+  "maxRecordingSeconds": 600, "useGpu": true, "pairingEnabled": true,
   "model": "parakeet-tdt-0.6b-v3",          // or "mixed" when workers differ
   "models": [                                // every model this build can serve
     { "id": "parakeet-tdt-0.6b-v3", "name": "Parakeet TDT 0.6B v3",
@@ -215,6 +313,7 @@ events that follow to it yields the current state with no gap or overlap.
 | `job_failed` | `{at, jobId, worker, client, error}` |
 | `worker_state` | `{at, worker, state, model}` |
 | `model_download` | `{at, model, stage, percentage, error?}` |
+| `pairing` | `{at, client, clientName, ok}` (see `POST /v1/pair`) |
 
 Semantics:
 

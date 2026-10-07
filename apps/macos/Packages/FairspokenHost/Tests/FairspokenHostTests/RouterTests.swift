@@ -58,7 +58,7 @@ struct RouterTests {
         #expect(await h.request("POST", "/v1/config", body: Array("nope".utf8)).status == 400)
         let ok = await h.request("POST", "/v1/config", body: Array(#"{"maxActiveStreams":8,"workerModels":["parakeet-ultra","parakeet-tdt-0.6b-v3"]}"#.utf8))
         #expect(ok.status == 200)
-        #expect(ok.body == #"{"maxActiveStreams":8,"maxRecordingSeconds":600,"useGpu":true,"model":"mixed","workerModels":["parakeet-ultra","parakeet-tdt-0.6b-v3"]}"#)
+        #expect(ok.body == #"{"maxActiveStreams":8,"maxRecordingSeconds":600,"useGpu":true,"model":"mixed","workerModels":["parakeet-ultra","parakeet-tdt-0.6b-v3"],"pairingEnabled":false}"#)
         let saved = try #require(try HostConfigurationStore.load(url))
         #expect(saved.maxActiveStreams == 8 && saved.workerModels == ["parakeet-ultra", "parakeet-tdt-0.6b-v3"])
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)

@@ -73,6 +73,16 @@ interface RemoteHealth {
   serverVersion?: string;
 }
 
+// A transcription host that answered GET /v1/hello (tailnet_discovery.rs).
+interface DiscoveredHost {
+  name: string;
+  machine: string;
+  url: string;
+  auth: "none" | "password" | "token";
+  serverVersion?: string | null;
+  isSelf: boolean;
+}
+
 interface ModelPrepareProgressEvent {
   model: string;
   stage: string;
@@ -154,6 +164,17 @@ const remoteAuthToken = required<HTMLInputElement>("remoteAuthToken");
 const remoteTimeoutSeconds = required<HTMLInputElement>("remoteTimeoutSeconds");
 const remoteStatus = required<HTMLElement>("remoteStatus");
 const remoteTest = required<HTMLButtonElement>("remoteTest");
+const tailnetScan = required<HTMLButtonElement>("tailnetScan");
+const tailnetStatus = required<HTMLElement>("tailnetStatus");
+const tailnetStatusDefault = tailnetStatus.textContent ?? "";
+const tailnetHosts = required<HTMLElement>("tailnetHosts");
+const tailnetAddress = required<HTMLInputElement>("tailnetAddress");
+const tailnetProbe = required<HTMLButtonElement>("tailnetProbe");
+const tailnetPairRow = required<HTMLElement>("tailnetPairRow");
+const tailnetPairHelp = required<HTMLElement>("tailnetPairHelp");
+const tailnetPassword = required<HTMLInputElement>("tailnetPassword");
+const tailnetPair = required<HTMLButtonElement>("tailnetPair");
+const tailnetPairCancel = required<HTMLButtonElement>("tailnetPairCancel");
 const cloudPanel = required<HTMLElement>("cloudPanel");
 const cloudAuthToken = required<HTMLInputElement>("cloudAuthToken");
 const cloudStatus = required<HTMLElement>("cloudStatus");
@@ -823,6 +844,137 @@ async function testRemoteHost(statusEl: HTMLElement, buttonEl: HTMLButtonElement
   }
 }
 
+// Finding a host: a tailnet scan or a typed name lists hosts; picking one
+// pairs with its password (or saves an open host's URL), then runs the
+// normal connection test. A host with only a token falls back to the
+// Token field below.
+let pairingHost: DiscoveredHost | null = null;
+let tailnetBusy = false;
+
+function setTailnetBusy(busy: boolean): void {
+  tailnetBusy = busy;
+  tailnetScan.disabled = tailnetProbe.disabled = tailnetPair.disabled = busy;
+  for (const row of tailnetHosts.querySelectorAll<HTMLButtonElement>("button")) row.disabled = busy;
+}
+
+function hostAccess(host: DiscoveredHost): string {
+  if (host.auth === "password") return "Password";
+  if (host.auth === "none") return "Open";
+  return "Token";
+}
+
+function renderTailnetHosts(hosts: DiscoveredHost[]): void {
+  tailnetHosts.replaceChildren(...hosts.map((host) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "ds-list-row tailnet-host";
+    row.setAttribute("role", "listitem");
+    const text = document.createElement("span"); text.className = "ds-list-row-text";
+    const title = document.createElement("span"); title.className = "ds-list-row-title"; title.textContent = host.name;
+    const detail = document.createElement("span"); detail.className = "ds-list-row-supporting";
+    detail.textContent = `${host.isSelf ? "This computer" : host.machine} · ${host.url}`;
+    text.append(title, detail);
+    const access = document.createElement("span"); access.className = "ds-list-row-trailing"; access.textContent = hostAccess(host);
+    row.append(text, access);
+    row.title = host.auth === "password" ? "Connect with the host's pairing password" : host.auth === "none" ? "Connect (this host needs no token)" : "Connect with the host's token";
+    row.addEventListener("click", () => void chooseHost(host));
+    return row;
+  }));
+  tailnetHosts.hidden = hosts.length === 0;
+}
+
+function closePairing(): void {
+  pairingHost = null;
+  tailnetPassword.value = "";
+  tailnetPairRow.hidden = true;
+}
+
+async function findTailnetHosts(): Promise<void> {
+  if (tailnetBusy) return;
+  closePairing();
+  setTailnetBusy(true);
+  tailnetStatus.textContent = "Looking for hosts on your tailnet…";
+  try {
+    const hosts = await invoke<DiscoveredHost[]>("discover_tailnet_hosts");
+    renderTailnetHosts(hosts);
+    tailnetStatus.textContent = hosts.length
+      ? `Found ${hosts.length} host${hosts.length === 1 ? "" : "s"}. Choose one to connect.`
+      : "No Fairspoken hosts answered on your tailnet. Check that the host is running, or add it by name.";
+  } catch (error) {
+    renderTailnetHosts([]);
+    tailnetStatus.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    setTailnetBusy(false);
+  }
+}
+
+async function checkTypedHost(): Promise<void> {
+  const address = tailnetAddress.value.trim();
+  if (tailnetBusy) return;
+  if (!address) { tailnetAddress.focus(); return; }
+  closePairing();
+  setTailnetBusy(true);
+  tailnetStatus.textContent = `Checking ${address}…`;
+  try {
+    const host = await invoke<DiscoveredHost>("probe_transcription_host", { address });
+    renderTailnetHosts([host]);
+    tailnetStatus.textContent = `${host.name} answered. Choose it to connect.`;
+  } catch (error) {
+    tailnetStatus.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    setTailnetBusy(false);
+  }
+}
+
+async function chooseHost(host: DiscoveredHost): Promise<void> {
+  if (tailnetBusy) return;
+  if (host.auth === "password") {
+    pairingHost = host;
+    tailnetPassword.value = "";
+    tailnetPairHelp.textContent = `Enter the pairing password for ${host.name}. Its operator set it on the host's dashboard.`;
+    tailnetPairRow.hidden = false;
+    tailnetPassword.focus();
+    return;
+  }
+  closePairing();
+  if (host.auth === "none") {
+    await connectHost(host, null);
+    return;
+  }
+  // A token but no pairing password: the user pastes the token as before.
+  if (remoteUrl.value.trim().replace(/\/+$/, "") !== host.url) remoteAuthToken.value = "";
+  remoteUrl.value = host.url;
+  const saved = await persistSettings();
+  tailnetStatus.textContent = saved
+    ? `${host.name} has no pairing password. Paste its token in the Token field.`
+    : tailnetStatusDefault;
+  remoteAuthToken.focus();
+}
+
+async function connectHost(host: DiscoveredHost, password: string | null): Promise<void> {
+  setTailnetBusy(true);
+  tailnetStatus.textContent = password === null ? `Connecting to ${host.name}…` : `Pairing with ${host.name}…`;
+  try {
+    const saved = await invoke<Settings>("connect_transcription_host", { url: host.url, password });
+    currentSettings = normalizeSettings(saved);
+    applyToForm(currentSettings);
+    closePairing();
+    tailnetStatus.textContent = `Connected to ${host.name}.`;
+    addEvent("info", `Transcription host set to ${host.name} (${host.url})`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    tailnetStatus.textContent = message;
+    if (password !== null) {
+      tailnetPassword.select();
+      tailnetPassword.focus();
+    }
+    return;
+  } finally {
+    setTailnetBusy(false);
+  }
+  await testRemoteHost(remoteStatus, remoteTest, "Remote host");
+}
+
 async function loadAudioDevices(): Promise<void> {
   const selected = audioDeviceSelect.value || currentSettings.audioDevice || "";
   const devices = await navigator.mediaDevices?.enumerateDevices().catch(() => []) ?? [];
@@ -975,6 +1127,22 @@ modelPrepare.addEventListener("click", () => {
 remoteTest.addEventListener("click", () => {
   void testRemoteHost(remoteStatus, remoteTest, "Remote host");
 });
+tailnetScan.addEventListener("click", () => void findTailnetHosts().catch(reportAsyncError));
+tailnetProbe.addEventListener("click", () => void checkTypedHost().catch(reportAsyncError));
+tailnetAddress.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); void checkTypedHost().catch(reportAsyncError); }
+});
+const submitPairing = () => {
+  if (!pairingHost || tailnetBusy) return;
+  if (!tailnetPassword.value) { tailnetPassword.focus(); return; }
+  void connectHost(pairingHost, tailnetPassword.value).catch(reportAsyncError);
+};
+tailnetPair.addEventListener("click", submitPairing);
+tailnetPassword.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); submitPairing(); }
+  if (event.key === "Escape") { event.preventDefault(); closePairing(); }
+});
+tailnetPairCancel.addEventListener("click", closePairing);
 cloudTest.addEventListener("click", () => {
   void testRemoteHost(cloudStatus, cloudTest, "Fairspoken Cloud");
 });

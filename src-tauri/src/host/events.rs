@@ -83,6 +83,12 @@ pub(super) enum HostEventKind {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// One `POST /v1/pair` attempt. Never carries the password.
+    Pairing {
+        client: Option<String>,
+        client_name: Option<String>,
+        ok: bool,
+    },
 }
 
 impl HostEventKind {
@@ -96,6 +102,7 @@ impl HostEventKind {
             Self::JobFailed { .. } => "job_failed",
             Self::WorkerState { .. } => "worker_state",
             Self::ModelDownload { .. } => "model_download",
+            Self::Pairing { .. } => "pairing",
         }
     }
 }
@@ -406,6 +413,19 @@ mod tests {
             },
         };
         assert!(!download.frame().unwrap().contains("error"));
+        let pairing = HostEvent {
+            at: 3,
+            kind: HostEventKind::Pairing {
+                client: Some("100.64.0.7".into()),
+                client_name: Some("Conal's MacBook".into()),
+                ok: true,
+            },
+        };
+        assert_eq!(
+            pairing.frame().unwrap(),
+            "event: pairing\ndata: {\"at\":3,\"client\":\"100.64.0.7\",\
+             \"clientName\":\"Conal's MacBook\",\"ok\":true}\n\n"
+        );
         assert_eq!(sse_frame("snapshot", "{}"), "event: snapshot\ndata: {}\n\n");
     }
 

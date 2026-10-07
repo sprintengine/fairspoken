@@ -21,6 +21,8 @@ nonisolated enum HeadlessServer {
                 var toSave = resolved
                 // Only persist what the environment didn't force for this run.
                 if HostEnvironment.value("TOKEN", in: ServerInfo.environment) != nil { toSave.token = "" }
+                if HostEnvironment.value("PAIRING_PASSWORD", in: ServerInfo.environment)?.isEmpty == false { toSave.pairingPassword = "" }
+                if HostEnvironment.value("NAME", in: ServerInfo.environment) != nil { toSave.displayName = "" }
                 try HostConfigurationStore.save(toSave, to: url)
                 say("Created \(url.path)\(toSave.token.isEmpty ? "" : " with a new token (shown in the app under Connect)")")
             }
@@ -39,7 +41,8 @@ nonisolated enum HeadlessServer {
         }
         say("\(ServerInfo.displayName) \(ServerInfo.version) listening on http://\(config.bindAddress):\(host.boundPort)"
             + " · \(config.workerCount) worker(s) · \(config.workerModels.joined(separator: ", "))"
-            + (config.authToken == nil ? " · no token (every client is allowed)" : " · token required"))
+            + (host.runtime.authToken == nil ? " · no token (every client is allowed)" : " · token required")
+            + " · \"\(host.runtime.displayName)\" pairing " + (host.runtime.pairingEnabled ? "on" : "off"))
         let sleepGuard = SleepGuard()
         if config.preventSleep { sleepGuard.hold(reason: "\(ServerInfo.displayName) is serving transcription requests") }
 
@@ -62,6 +65,13 @@ nonisolated enum HeadlessServer {
         var parser = SSEParser()
         for await frame in frames {
             for case .event(let e) in parser.feed(frame) {
+                if e.type == "pairing" {
+                    // Carries no password; the address and the name the client gave.
+                    let data = (try? JSONSerialization.jsonObject(with: Data(e.data.utf8))) as? [String: Any] ?? [:]
+                    let who = [data["clientName"] as? String, data["client"] as? String].compactMap { $0 }.joined(separator: " at ")
+                    say("pairing from \(who.isEmpty ? "unknown client" : who): \(data["ok"] as? Bool == true ? "paired" : "refused")")
+                    continue
+                }
                 guard let event = try? HostEvent.decode(e) else { continue }
                 switch event {
                 case .jobCompleted(let j):

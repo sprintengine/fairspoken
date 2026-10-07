@@ -2,7 +2,7 @@
 
 import { check, describe, eq, expectError } from '../lib/assert.mjs';
 
-const ECHO_KEYS = ['maxActiveStreams', 'maxRecordingSeconds', 'useGpu', 'model', 'workerModels'];
+const ECHO_KEYS = ['maxActiveStreams', 'maxRecordingSeconds', 'useGpu', 'model', 'workerModels', 'pairingEnabled'];
 
 function configOf(stats) {
   return {
@@ -11,6 +11,7 @@ function configOf(stats) {
     useGpu: stats.useGpu,
     model: stats.model,
     workerModels: stats.workers.map((w) => w.assignedModel),
+    pairingEnabled: stats.pairingEnabled,
   };
 }
 
@@ -29,7 +30,7 @@ const otherSeconds = (n) => (n === 300 ? 301 : 300);
 export default [
   {
     name: 'config.echo',
-    description: 'POST /v1/config {} answers 200 with exactly {maxActiveStreams, maxRecordingSeconds, useGpu, model, workerModels} matching /v1/stats',
+    description: 'POST /v1/config {} answers 200 with exactly {maxActiveStreams, maxRecordingSeconds, useGpu, model, workerModels, pairingEnabled} matching /v1/stats',
     async run(ctx) {
       const res = await ctx.postConfig({});
       check(res.status === 200, `POST /v1/config {}: ${describe(res)}`);

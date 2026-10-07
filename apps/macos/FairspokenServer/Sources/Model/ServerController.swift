@@ -63,6 +63,8 @@ final class ServerController {
     private(set) var stats = HostStats()
     private(set) var addresses = NetworkAddresses.current()
     private(set) var loginItemEnabled = LoginItem.isEnabled
+    /// Recent `POST /v1/pair` attempts, newest first (refreshed with `stats`).
+    private(set) var pairingAttempts: [PairingAttempt] = []
     private(set) var notice: String?
     @ObservationIgnored let animator = FlowAnimator()
     @ObservationIgnored let backend = FluidAudioBackend()
@@ -128,8 +130,9 @@ final class ServerController {
             let started = try await TranscriptionHost.start(configuration: config, configURL: configURL, backend: backend,
                                                             dashboardHTML: ServerInfo.dashboardHTML, serverVersion: ServerInfo.version)
             host = started
-            hostConfiguration = config
-            configuration = config
+            // The runtime's copy: it holds the token generated for a pairing password, if any.
+            hostConfiguration = started.runtime.configuration
+            configuration = started.runtime.configuration
             started.runtime.setLiveChangeHandler { [weak self] settings in
                 Task { @MainActor in self?.adoptLiveSettings(settings) }
             }
@@ -172,6 +175,14 @@ final class ServerController {
         configuration.maxRecordingSeconds = s.maxRecordingSeconds
         configuration.useGpu = s.useGpu
         configuration.workerModels = s.workerModels
+        // `POST /v1/config` may also have set the pairing password (and with it a new token).
+        if let credentials = runtime?.credentials {
+            configuration.pairingPassword = credentials.pairingPassword ?? ""
+            if let token = credentials.token, token != configuration.authToken {
+                configuration.token = token
+                hostConfiguration?.token = token
+            }
+        }
     }
 
     // MARK: Editing
@@ -190,6 +201,8 @@ final class ServerController {
         next.token = next.token.trimmingCharacters(in: .whitespacesAndNewlines)
         if let problem = Self.validate(next) { return .failed(problem) }
         next = next.normalized(knownModels: knownModels)
+        // Pairing hands out the token, so a pairing password needs one.
+        if next.pairingEnabled && next.token.isEmpty { next.token = HostConfiguration.generateToken() }
         do { try HostConfigurationStore.save(next, to: configURL) } catch { return .failed(error.localizedDescription) }
         let needsRestart = hostConfiguration.map { running in
             running.workerCount != next.workerCount || running.queueCapacity != next.queueCapacity
@@ -203,10 +216,12 @@ final class ServerController {
         if let runtime {
             do {
                 _ = try runtime.applyConfigUpdate(HostConfigUpdate(maxActiveStreams: next.maxActiveStreams, maxRecordingSeconds: next.maxRecordingSeconds,
-                                                                   useGpu: next.useGpu, workerModels: next.workerModels))
+                                                                   useGpu: next.useGpu, workerModels: next.workerModels,
+                                                                   pairingPassword: next.pairingPassword))
             } catch {
                 return .failed("\(error)")
             }
+            runtime.setDisplayName(next.displayName)
         }
         applySleepGuard()
         return .saved
@@ -221,7 +236,21 @@ final class ServerController {
         }
         guard HostConfiguration.workerCountRange.contains(c.workerCount) else { return "Use 1 to 8 workers." }
         guard HostConfiguration.queueCapacityRange.contains(c.queueCapacity) else { return "The queue holds 1 to 64 jobs." }
+        if HostConfiguration.pairingPasswordProblem(c.pairingPassword) != nil { return pairingPasswordHint }
         return nil
+    }
+
+    static let pairingPasswordHint = "The pairing password needs \(HostConfiguration.pairingPasswordLength.lowerBound) to \(HostConfiguration.pairingPasswordLength.upperBound) characters. Six digits are fine."
+
+    /// Listens on this Mac's Tailscale address (default port), where clients scanning the
+    /// tailnet look. Restarts the server.
+    func listenOnTailscale() async -> SaveOutcome {
+        addresses = .current()
+        guard let tailscale = addresses.tailscale else { return .failed("This Mac has no Tailscale address. Is Tailscale connected?") }
+        var next = configuration
+        next.bindAddress = tailscale.address
+        next.port = HostConfiguration.defaultPort
+        return await save(next)
     }
 
     func setPreventSleep(_ on: Bool) {
@@ -281,6 +310,7 @@ final class ServerController {
         animator.reset()
         live = HostLiveState()
         stats = HostStats()
+        pairingAttempts = []
         switch source {
         case .demo: startDemo()
         case .live: startLive()
@@ -333,6 +363,7 @@ final class ServerController {
         }
         guard let runtime, let s = Self.decodeStats(runtime.statsJSON().serialized) else { return }
         stats = s
+        pairingAttempts = runtime.pairingAttempts()
         if reconcile { live.reconcile(with: s, now: Date().timeIntervalSince1970 * 1000) }
     }
 
@@ -423,6 +454,25 @@ final class ServerController {
     }
 
     var primaryEndpoint: Endpoint? { endpoints.first }
+
+    /// The name clients scanning the tailnet see (`/v1/hello`).
+    var hostName: String {
+        runtime?.displayName ?? (configuration.displayName.isEmpty ? MachineName.current() : configuration.displayName)
+    }
+
+    /// Whether a client scanning the tailnet probes this listener directly: on the Tailscale
+    /// address (or every interface) at the default port. Behind `tailscale serve` (127.0.0.1)
+    /// it finds the HTTPS name instead, which this app can't see from here.
+    var isDiscoverableDirectly: Bool {
+        guard configuration.port == HostConfiguration.defaultPort else { return false }
+        let bind = configuration.bindAddress
+        return bind == "0.0.0.0" || bind == "::" || NetworkAddresses.isTailscale(bind)
+    }
+
+    /// The name a client sent with its last successful pairing from `address`, if any.
+    func pairedName(for address: String) -> String? {
+        pairingAttempts.first { $0.client == address && $0.ok && $0.clientName != nil }?.clientName
+    }
 
     /// Whether other devices can reach the listener directly.
     var isLoopbackOnly: Bool { ["127.0.0.1", "::1"].contains(configuration.bindAddress) }

@@ -17,7 +17,8 @@ node shared/host-conformance/run.mjs --url http://127.0.0.1:48970 --token secret
 | Option | Meaning |
 | --- | --- |
 | `--url URL` | Host base URL (required). |
-| `--token T` | The host's token. Without it the `auth.*` checks are skipped. |
+| `--token T` | The host's token. Without it the `auth.*` checks and `config.pairing-password` are skipped. |
+| `--pairing-password P` | The host's pairing password. Without it `pair.correct-password` and `pair.password-not-revealed` are skipped, and `pair.rate-limit` / `pair.events` check only wrong passwords. |
 | `--only a,b` | Run only these checks or groups (`stream` matches `stream.*`). |
 | `--skip a,b` | Leave out these checks or groups. |
 | `--slow` | Include checks that wait on timers (the 15 s heartbeat). |
@@ -41,6 +42,10 @@ Rust (release binary, throwaway config file, stops the host on exit):
 
 ```sh
 shared/host-conformance/start-rust-host.sh 48970 secret
+# with a pairing password, for the pair.* checks:
+FAIRSPOKEN_HOST_PAIRING_PASSWORD=conformance-pw \
+  shared/host-conformance/start-rust-host.sh 48970 secret
+node shared/host-conformance/run.mjs --url http://127.0.0.1:48970 --token secret --pairing-password conformance-pw
 # or with a small queue so capacity.queue-full can run:
 FAIRSPOKEN_HOST_WORKERS=1 FAIRSPOKEN_HOST_QUEUE_CAPACITY=2 \
   shared/host-conformance/start-rust-host.sh 48970 secret
@@ -66,7 +71,8 @@ Host variables: `FAIRSPOKEN_HOST_ADDR`, `FAIRSPOKEN_HOST_TOKEN`,
 `FAIRSPOKEN_HOST_CONFIG_PATH`, `FAIRSPOKEN_HOST_WORKERS`,
 `FAIRSPOKEN_HOST_QUEUE_CAPACITY`, `FAIRSPOKEN_HOST_MODEL`,
 `FAIRSPOKEN_HOST_MAX_ACTIVE_STREAMS`, `FAIRSPOKEN_HOST_MAX_RECORDING_SECONDS`,
-`FAIRSPOKEN_HOST_USE_GPU`. A persisted config file overrides the env values
+`FAIRSPOKEN_HOST_USE_GPU`, `FAIRSPOKEN_HOST_PAIRING_PASSWORD`,
+`FAIRSPOKEN_HOST_NAME`. A persisted config file overrides the env values
 for the live settings, so use a fresh config path for each run. Both hosts
 still accept the former `MULTIVOICE_HOST_*` names when the new ones are unset.
 
@@ -77,6 +83,7 @@ still accept the former `MULTIVOICE_HOST_*` names when the new ones are unset.
 | `root`, `health`, `stats` | `GET /` dashboard and `/favicon.ico` without auth; `/v1/health` body; every `/v1/stats` field and type, worker/model consistency (`model` is the uniform worker model or `mixed`, `assignedWorkers` matches `workers[].assignedModel`, counts match the arrays). |
 | `auth`, `routes` | 401 `{"error":"unauthorized"}` on every route without, with a wrong, or with a near-miss token; Bearer on every method; `?token=` on GET only; 404 `{"error":"not_found"}` for unknown routes. |
 | `http` | `Expect: 100-continue` POST; two requests on one keep-alive connection. |
+| `hello`, `pair` | `GET /v1/hello` without a token (exact fields, `auth` consistent with the token and `/v1/stats` `pairingEnabled`); `POST /v1/pair`: 400 for malformed bodies, 404 `pairing disabled` / `token: null` without a password, the right password's token, 401 `wrong password`, 429 with `Retry-After` and `retryAfterSeconds` after 5 failures from one address (also for the right password), `pairing` events, and the password in no answer or event. `config.pairing-password` sets, validates and clears it through `POST /v1/config` and restores it. |
 | `config` | Echo of `{}`; 400 for out-of-range values, unknown fields, `model` with `workerModels`, wrong `workerModels` length, unknown model ids and invalid bodies, each with the configuration unchanged afterwards (also when a valid field rides along); a valid change shows in `/v1/stats` and reverts. |
 | `events` | `/v1/events` headers, snapshot first frame, exact frame format and payload fields, one chunk per frame, HTTP/1.0 close-delimited body, heartbeat (`--slow`), the 16-subscriber limit and slot reuse, the event sequence of a stream and a batch job, snapshot plus events equal to `/v1/stats`. |
 | `clients` | Attribution from `X-Forwarded-For` and `Tailscale-User-Login` on loopback requests. |
@@ -101,5 +108,13 @@ prefers one no worker serves) and never downloads a missing one.
 `queueCapacity` at most 4. Start the host with
 `FAIRSPOKEN_HOST_QUEUE_CAPACITY=2` to run it.
 
-Everything else (auth, config, events framing, error statuses) runs without
-a model.
+Everything else (auth, config, pairing, events framing, error statuses) runs
+without a model.
+
+## Pairing rate limit
+
+`pair.rate-limit` sends 5 wrong passwords from one forwarded address (it
+needs a loopback URL), and a run spends about 7 of the host's 20 allowed
+failures per 10 minutes overall. Run the suite at most twice per 10 minutes
+against one host process, or restart the host between runs (the limit lives
+in memory); otherwise the right-password checks answer 429.

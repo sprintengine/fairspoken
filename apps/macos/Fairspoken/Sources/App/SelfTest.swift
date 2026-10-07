@@ -11,10 +11,24 @@ import FairspokenCore
 ///    `LocalBatchSession` + post-processor the hotkey path uses.
 /// 2. With `--host`: streams the file through `RemoteStreamSession` (framed PCM16, chunked,
 ///    paced at 4× real time) while subscribed to `/v1/events`, and reports both.
+///
+///   Fairspoken --discover [name | name:port [--password P]]
+///
+/// Scans the tailnet the way Settings › Find my host does (or probes one typed entry) and
+/// prints what answered; with `--password`, pairs with the typed host (nothing is saved).
 @MainActor
 enum SelfTest {
     static func runIfRequested() -> Bool {
         let args = AppInfo.arguments
+        if let i = args.firstIndex(of: "--discover") {
+            let entry = i + 1 < args.count && !args[i + 1].hasPrefix("-") ? args[i + 1] : nil
+            let password = args.firstIndex(of: "--password").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+            Task {
+                await discover(entry: entry, password: password)
+                exit(0)
+            }
+            return true
+        }
         guard let i = args.firstIndex(of: "--selftest"), i + 1 < args.count else { return false }
         let file = URL(fileURLWithPath: args[i + 1])
         func value(_ flag: String) -> String? {
@@ -29,6 +43,32 @@ enum SelfTest {
     }
 
     private static func say(_ s: String) { FileHandle.standardOutput.write(Data((s + "\n").utf8)) }
+
+    private static func discover(entry: String?, password: String?) async {
+        let discovery = TailnetDiscovery()
+        say("tailscale: \(discovery.locateCLI() ?? "not found")")
+        let t = ContinuousClock.now
+        do {
+            if let entry {
+                let host = try await discovery.probe(entry: entry)
+                say(String(describing: host))
+                if let password {
+                    let response = try await HostPairingClient().pair(url: host.url, password: password, clientName: HostFinder.computerName)
+                    say("paired: name=\(response.name ?? "?") token=\(response.token.map { "\($0.prefix(4))… (\($0.count) chars)" } ?? "none")")
+                }
+            } else {
+                let status = try await discovery.status()
+                let candidates = TailnetDiscovery.candidates(from: status)
+                say("probing \(candidates.count) machines: " + candidates.map { "\($0.machine) \($0.urls.map(\.absoluteString))" }.joined(separator: ", "))
+                let hosts = await discovery.probe(candidates)
+                if hosts.isEmpty { say("no Fairspoken hosts answered") }
+                for host in hosts { say(String(describing: host)) }
+            }
+        } catch {
+            say("FAIL: \(error.localizedDescription)")
+        }
+        say("took \((ContinuousClock.now - t) / .milliseconds(1)) ms, client name “\(HostFinder.computerName)”")
+    }
 
     private static func run(file: URL, model: String, host: String?, token: String) async {
         guard let samples = try? load16k(file) else { say("FAIL: cannot read \(file.path)"); return }

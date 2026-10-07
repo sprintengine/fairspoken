@@ -216,9 +216,12 @@ private struct AudioSettings: View {
 private struct TranscriptionSettings: View {
     @Environment(AppModel.self) private var model
     @State private var token = ""
+    @State private var machine = ""
+    @FocusState private var tokenFocused: Bool
 
     var body: some View {
         let s = model.settings.settings
+        @Bindable var finder = model.hostFinder
         Form {
             Section("Where speech is recognised") {
                 Picker("Engine", selection: Binding(get: { s.transcriptionLocation == .remoteHost ? TranscriptionLocation.remoteHost : .local },
@@ -242,13 +245,19 @@ private struct TranscriptionSettings: View {
                     LabeledContent("Status", value: model.models.engineState.label)
                 }
             }
+            FindHostSection(machine: $machine)
             Section("My host") {
                 TextField("Host URL", text: Binding(get: { s.remoteUrl }, set: { v in model.settings.update { $0.remoteUrl = v } }),
                           prompt: Text("http://practice-mini.local:48173"))
                     .onSubmit { model.hostStatus.refresh(force: true) }
                 SecureField("Token", text: $token, prompt: Text("Bearer token"))
+                    .focused($tokenFocused)
                     .onSubmit { model.settings.remoteToken = token; model.hostStatus.refresh(force: true) }
                     .onChange(of: token) { _, v in model.settings.remoteToken = v }
+                if let host = finder.needsToken, host.url.absoluteString == s.remoteUrl, token.isEmpty {
+                    Label("\(host.name) needs its token. Fairspoken Server shows it under Connect.", systemImage: "key")
+                        .font(.caption).foregroundStyle(Color.mvAmber)
+                }
                 Stepper(value: Binding(get: { s.remoteTimeoutSeconds }, set: { v in model.settings.update { $0.remoteTimeoutSeconds = v } }),
                         in: 5...300, step: 5) {
                     LabeledContent("Timeout", value: "\(s.remoteTimeoutSeconds) s")
@@ -267,6 +276,159 @@ private struct TranscriptionSettings: View {
             token = model.settings.remoteToken
             model.hostStatus.refresh()
         }
+        // Pairing writes the token; show it here too.
+        .onChange(of: model.settings.remoteToken) { _, v in if token != v { token = v } }
+        .onChange(of: finder.needsToken) { _, host in if host != nil { tokenFocused = true } }
+        .sheet(item: $finder.pairing) { host in PairingSheet(host: host) }
+    }
+}
+
+/// "Find hosts on my tailnet", what answered, and a field for a machine name or name:port.
+private struct FindHostSection: View {
+    @Environment(AppModel.self) private var model
+    @Binding var machine: String
+
+    var body: some View {
+        let finder = model.hostFinder
+        let s = model.settings.settings
+        let searching = finder.scan == .searching
+        Section {
+            HStack(spacing: 10) {
+                Button {
+                    finder.findHosts()
+                } label: {
+                    Label(searching ? "Searching your tailnet…" : "Find hosts on my tailnet", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.glass)
+                .disabled(searching)
+                if searching { ProgressView().controlSize(.small) }
+            }
+            switch finder.scan {
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(Color.mvAmber)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .done where finder.hosts.isEmpty:
+                Text("No Fairspoken host answered on your tailnet. Check that the host is running and reachable over Tailscale, or type its machine name below.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            default:
+                EmptyView()
+            }
+            ForEach(finder.hosts) { host in
+                DiscoveredHostRow(host: host, inUse: s.transcriptionLocation == .remoteHost && s.remoteUrl == host.url.absoluteString,
+                                  busy: finder.pairingBusy && finder.pairing?.id == host.id) {
+                    finder.choose(host)
+                }
+            }
+            HStack {
+                TextField("Machine name", text: $machine, prompt: Text("studio-mac or studio-mac:48173"))
+                    .onSubmit(lookUp)
+                Button(finder.lookingUp ? "Looking…" : "Look up", action: lookUp)
+                    .buttonStyle(.glass)
+                    .disabled(finder.lookingUp || machine.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let error = finder.lookupError {
+                Text(error).font(.caption).foregroundStyle(Color.mvCoral)
+            }
+        } header: {
+            Text("Find my host")
+        } footer: {
+            Text("Looks for Fairspoken hosts on your Tailscale network. If Tailscale's command-line tool isn't on this Mac, or the host uses another port, type its machine name.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func lookUp() {
+        let entry = machine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !entry.isEmpty else { return }
+        model.hostFinder.lookUp(entry)
+    }
+}
+
+/// One host that answered: its name, machine and URL, a lock when it needs a password.
+private struct DiscoveredHostRow: View {
+    var host: DiscoveredHost
+    var inUse: Bool
+    var busy: Bool
+    var choose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: host.isThisMac ? "desktopcomputer" : "server.rack")
+                .font(.title3)
+                .foregroundStyle(Color.mvTeal)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(host.name).font(.body.weight(.medium))
+                    if host.auth == .password {
+                        Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Needs a password")
+                    }
+                }
+                Text("\(host.machine)\(host.isThisMac ? " (this Mac)" : "") · \(host.url.absoluteString)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            if inUse {
+                Label("In use", systemImage: "checkmark.circle.fill").foregroundStyle(Color.mvGreen).font(.callout.weight(.medium))
+            } else {
+                Button(host.auth == .password ? "Pair…" : "Use", action: choose)
+                    .buttonStyle(.glass)
+                    .disabled(busy)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Asks for the host's pairing password and trades it for the token.
+private struct PairingSheet: View {
+    var host: DiscoveredHost
+    @Environment(AppModel.self) private var model
+    @State private var password = ""
+
+    var body: some View {
+        let finder = model.hostFinder
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Pair with \(host.name)", systemImage: "lock.fill")
+                .font(.title3.weight(.semibold))
+            Text("Enter the pairing password set on \(host.machine). \(AppInfo.displayName) keeps the host's token in your Keychain.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Pairing password", text: $password)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(pair)
+            if let error = finder.pairingError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(Color.mvCoral)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                if finder.pairingBusy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel", role: .cancel) { finder.cancelPairing() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Pair", action: pair)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.glassProminent)
+                    .tint(.mvTeal)
+                    .disabled(!canPair)
+            }
+        }
+        .padding(22)
+        .frame(width: 400)
+    }
+
+    /// Pairing passwords are 6–128 characters.
+    private var canPair: Bool { (6...128).contains(password.count) && !model.hostFinder.pairingBusy }
+
+    private func pair() {
+        guard canPair else { return }
+        model.hostFinder.pair(password: password)
     }
 }
 

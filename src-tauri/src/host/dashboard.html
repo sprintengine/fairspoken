@@ -321,10 +321,16 @@
   .form[data-open="true"] { display: grid; }
   .form-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
   .form-row label { color: var(--text-2); }
-  .form input[type="number"], .form select {
+  .form input[type="number"], .form input[type="password"], .form select {
     height: 30px; padding: 0 10px; border-radius: 9px;
     background: var(--glass-strong); border: 1px solid var(--hairline-strong);
   }
+  .form input[type="password"] { width: 200px; }
+  .form-row label small { display: block; color: var(--text-3); font-size: 11.5px; }
+  .pairing-hint { color: var(--text-3); font-size: 12px; margin-top: 8px; }
+  .notice form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+  .notice input[type="password"] { height: 28px; width: 180px; padding: 0 10px; border-radius: 9px; background: var(--glass-strong); border: 1px solid var(--hairline-strong); }
+  .notice .form-error { flex-basis: 100%; text-align: right; }
   .form input[type="number"] { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
   .form select { max-width: 250px; }
   .form input:focus-visible, .form select:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
@@ -559,6 +565,24 @@
           </div>
         </form>
       </div>
+      <div class="card glass" id="pairingCard" aria-labelledby="pairingTitle">
+        <div class="card-head">
+          <h2 id="pairingTitle">Pairing</h2>
+          <span class="grow"></span>
+          <button class="btn" id="clearPairing" type="button" hidden>Turn off</button>
+          <button class="btn" id="editPairing" type="button" aria-expanded="false" aria-controls="pairingForm" disabled>Set password</button>
+        </div>
+        <div class="kv" id="pairingView"></div>
+        <p class="pairing-hint" id="pairingHint"></p>
+        <form class="form" id="pairingForm" data-open="false" novalidate>
+          <div class="form-row"><label for="inPairing">Pairing password<small>6 to 128 characters, a six-digit number works</small></label><input id="inPairing" type="password" autocomplete="new-password" maxlength="128"></div>
+          <p class="form-error" id="pairingError" role="alert"></p>
+          <div class="form-actions">
+            <button class="btn" id="cancelPairing" type="button">Cancel</button>
+            <button class="btn primary" id="applyPairing" type="submit">Save password</button>
+          </div>
+        </form>
+      </div>
       <div class="card glass" id="updatesCard" aria-labelledby="updatesTitle" hidden>
         <div class="card-head">
           <h2 id="updatesTitle">Updates</h2>
@@ -646,7 +670,7 @@
     "large-v3-turbo": ["Whisper Large v3 Turbo", "OpenAI"],
   };
   const EVENT_TYPES = ["stream_started", "stream_finished", "job_queued", "job_started",
-    "job_completed", "job_failed", "worker_state", "model_download"];
+    "job_completed", "job_failed", "worker_state", "model_download", "pairing"];
   const STATE_LABEL = { idle: "Idle", loading: "Loading model", transcribing: "Transcribing", "model-unavailable": "Model missing" };
 
   /* ── Formatting ── */
@@ -1534,6 +1558,130 @@
   $("configForm").addEventListener("submit", applyConfig);
   $("configForm").addEventListener("keydown", (e) => { if (e.key === "Escape") closeConfig(); });
 
+  /* ── Pairing ── */
+  // GET /v1/hello needs no token: it names the host and says whether a
+  // password pairs with it. The password itself never comes back.
+  const P = { hello: null, editing: false, busy: false };
+  const fetchHello = async () => {
+    if (DEMO) { P.hello = demo.hello(); renderPairing(); return; }
+    try {
+      const res = await fetch("/v1/hello", { cache: "no-store" });
+      if (res.ok) P.hello = await res.json();
+    } catch { /* unreachable: the connection status already says so */ }
+    renderPairing();
+    if (S.conn === "unauthorized") renderNotice();
+  };
+  const pairingEnabled = () => (S.stats && typeof S.stats.pairingEnabled === "boolean" ? S.stats.pairingEnabled : Boolean(P.hello && P.hello.auth === "password"));
+  const renderPairing = () => {
+    const view = $("pairingView");
+    view.replaceChildren();
+    const on = pairingEnabled();
+    if (P.hello) kvRow(view, "Host name", P.hello.name, "shown to clients");
+    kvRow(view, "Pairing", on ? "On" : "Off");
+    $("pairingHint").textContent = on
+      ? "Fairspoken on your other computers can find this host on your tailnet and connect with the password."
+      : "Set a password so Fairspoken on your other computers can connect without copying the token.";
+    $("editPairing").disabled = P.busy || (!S.stats && !DEMO);
+    $("editPairing").textContent = P.editing ? "Close" : on ? "Change password" : "Set password";
+    $("clearPairing").hidden = !on || P.editing;
+    $("clearPairing").disabled = P.busy;
+  };
+  const openPairing = () => {
+    P.editing = true;
+    $("inPairing").value = "";
+    $("pairingError").textContent = "";
+    $("pairingForm").dataset.open = "true";
+    $("editPairing").setAttribute("aria-expanded", "true");
+    renderPairing();
+    $("inPairing").focus();
+  };
+  const closePairing = () => {
+    P.editing = false;
+    $("inPairing").value = "";
+    $("pairingForm").dataset.open = "false";
+    $("editPairing").setAttribute("aria-expanded", "false");
+    renderPairing();
+  };
+  // POST /v1/pair; resolves to the host token (null on a host without one).
+  const pairWith = async (password) => {
+    const res = await fetch("/v1/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password, clientName: "Host dashboard" }) });
+    const body = await res.json().catch(() => null);
+    if (res.status === 429) throw new Error(`Too many attempts. Try again in ${Math.ceil(((body && body.retryAfterSeconds) || 60) / 60)} min.`);
+    if (res.status === 401) throw new Error("Wrong password.");
+    if (!res.ok) throw new Error((body && body.error) || `Host answered ${res.status}.`);
+    return body.token;
+  };
+  const openWithToken = (next) => {
+    const url = new URL(location.href);
+    url.searchParams.set("token", next);
+    location.replace(url.toString());
+  };
+  const savePairing = async (password) => {
+    if (password !== null && [...password].length < 6) { $("pairingError").textContent = "Use at least 6 characters."; return; }
+    // Setting a password on a host with no token makes the host generate
+    // one, which this page then needs for every call: pair to learn it.
+    const hadNoToken = !token && P.hello && P.hello.auth === "none";
+    P.busy = true;
+    $("applyPairing").disabled = true;
+    $("pairingError").textContent = "";
+    renderPairing();
+    try {
+      const data = DEMO ? demo.applyPairing(password) : await (async () => {
+        const res = await fetch("/v1/config", { method: "POST", headers: authHeaders(true), body: JSON.stringify({ pairingPassword: password }) });
+        if (res.status === 401) { setConn("unauthorized", "Unauthorized"); throw new Error("Unauthorized — the change was not applied."); }
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error((body && body.error) || `Host rejected the change (${res.status}).`);
+        return body;
+      })();
+      if (S.stats) S.stats.pairingEnabled = data.pairingEnabled;
+      if (hadNoToken && password !== null && !DEMO) {
+        openWithToken(await pairWith(password));
+        return;
+      }
+      closePairing();
+      toast({ title: data.pairingEnabled ? "Pairing password saved" : "Pairing turned off", body: data.pairingEnabled ? "Clients connecting now are asked for it." : "Clients need the token to connect.", icon: "check", tone: "done", timeout: 4000 });
+      fetchHello();
+    } catch (err) {
+      $("pairingError").textContent = err instanceof TypeError ? "Host unreachable — the change was not applied." : err.message;
+      if (!P.editing) toast({ title: "Pairing was not changed", body: $("pairingError").textContent, icon: "lock", timeout: 6000 });
+    } finally {
+      P.busy = false;
+      $("applyPairing").disabled = false;
+      renderPairing();
+    }
+  };
+  const unlockForm = () => {
+    const form = h("form");
+    const input = h("input");
+    input.type = "password";
+    input.autocomplete = "current-password";
+    input.setAttribute("aria-label", "Pairing password");
+    const go = h("button", "btn primary", "Open dashboard");
+    go.type = "submit";
+    const error = h("span", "form-error");
+    error.setAttribute("role", "alert");
+    form.append(input, go, error);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      go.disabled = true;
+      error.textContent = "";
+      try {
+        const next = await pairWith(input.value);
+        if (next) openWithToken(next);
+        else location.reload();
+      } catch (err) {
+        error.textContent = err instanceof TypeError ? "Host unreachable." : err.message;
+        go.disabled = false;
+      }
+    });
+    return form;
+  };
+  $("editPairing").addEventListener("click", () => (P.editing ? closePairing() : openPairing()));
+  $("cancelPairing").addEventListener("click", closePairing);
+  $("clearPairing").addEventListener("click", () => savePairing(null));
+  $("pairingForm").addEventListener("submit", (event) => { event.preventDefault(); savePairing($("inPairing").value); });
+  $("pairingForm").addEventListener("keydown", (e) => { if (e.key === "Escape") closePairing(); });
+
   const startDownload = async (model) => {
     S.downloadError = "";
     if (DEMO) { demo.download(model); return; }
@@ -1603,7 +1751,12 @@
     if (S.conn === "unauthorized") {
       notice.dataset.visible = "true";
       notice.dataset.tone = "error";
-      notice.innerHTML = "This host requires a token. Open the dashboard as <code>/?token=…</code> with the host's <code>FAIRSPOKEN_HOST_TOKEN</code>.";
+      if (P.hello && P.hello.auth === "password") {
+        notice.appendChild(h("span", "", "This host requires a token. Enter its pairing password to open the dashboard."));
+        notice.appendChild(unlockForm());
+      } else {
+        notice.innerHTML = "This host requires a token. Open the dashboard as <code>/?token=…</code> with the host's <code>FAIRSPOKEN_HOST_TOKEN</code>.";
+      }
       return;
     }
     const stats = S.stats;
@@ -1738,6 +1891,7 @@
       renderChrome(stats);
       renderKpis(stats);
       if (!S.editing) renderConfig(stats);
+      renderPairing();
       renderModels(stats);
       renderNotice();
       renderLifetime(stats);
@@ -1844,6 +1998,12 @@
         stats.modelDownload = { model: d.model, stage: d.stage, percentage: d.percentage, error: d.error || null };
         if (d.stage === "ready" || d.stage === "error") resyncSoon(100);
         break;
+      case "pairing": {
+        const who = d.clientName || clientName(d.client);
+        if (d.ok) toast({ title: `${who} paired`, body: d.clientName ? clientName(d.client) : "Connected with the pairing password.", icon: "check", tone: "done", timeout: 5000 });
+        else toast({ title: "Pairing attempt refused", body: `${who} sent a wrong password or tried too often.`, icon: "lock", timeout: 6000 });
+        return;
+      }
       default:
         return;
     }
@@ -2107,7 +2267,7 @@
         activeSessions: host.streams.length + host.workers.filter((w) => w.job).length,
         activeStreams: host.streams.length, queuedJobs: host.queue.length, runningJobs: host.workers.filter((w) => w.job).length,
         workerCount: host.workerCount, queueCapacity: host.queueCapacity, maxActiveStreams: host.maxActiveStreams,
-        maxRecordingSeconds: host.maxRecordingSeconds, useGpu: host.useGpu,
+        maxRecordingSeconds: host.maxRecordingSeconds, useGpu: host.useGpu, pairingEnabled: demoPairing,
         model: new Set(host.workerModels).size === 1 ? host.workerModels[0] : "mixed",
         models, modelDownload: host.download,
         rejectedJobs: host.rejectedJobs, failedJobs: host.failedJobs,
@@ -2151,7 +2311,10 @@
       setInterval(tick, 250);
       setInterval(() => applySnapshot(snapshot()), 5000);
     };
-    return { start, snapshot, applyConfig, download };
+    let demoPairing = true;
+    const hello = () => ({ service: "fairspoken-host", protocol: 1, name: "Riverside host", serverVersion: host.serverVersion, auth: demoPairing ? "password" : "token" });
+    const applyPairing = (password) => { demoPairing = password !== null && password !== ""; return { pairingEnabled: demoPairing }; };
+    return { start, snapshot, applyConfig, download, hello, applyPairing };
   })();
 
   /* ══════════════════ Updates ══════════════════ */
@@ -2163,6 +2326,7 @@
     download: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2v7.3"/><path d="M5 6.7l3 3 3-3"/><path d="M2.5 10.3v1.9c0 .7.6 1.3 1.3 1.3h8.4c.7 0 1.3-.6 1.3-1.3v-1.9"/></svg>',
     restart: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 8.4A5.2 5.2 0 1 1 11.6 4.3"/><path d="M12.4 1.6v3h-3"/></svg>',
     check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.4l2.9 2.9 6.1-6.6"/></svg>',
+    lock: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.6"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
   };
   const CHANNEL_HINT = {
     stable: "Stable: tested releases. Recommended for a host people rely on.",
@@ -2506,6 +2670,7 @@
 
   applyTheme();
   refreshUpdate();
+  fetchHello();
   if (DEMO) demo.start();
   else {
     // The event stream opens with a snapshot; polling (and its first fetch)

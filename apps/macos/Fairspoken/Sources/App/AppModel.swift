@@ -35,6 +35,7 @@ final class AppModel {
     let models: ModelLibrary
     let dictation: DictationController
     let hostStatus: HostStatus
+    let hostFinder: HostFinder
     let updates: UpdateController
     @ObservationIgnored let hotkeys: HotkeyController
 
@@ -48,6 +49,7 @@ final class AppModel {
         models = ModelLibrary()
         dictation = DictationController(settings: settings, models: models, history: history, permissions: permissions)
         hostStatus = HostStatus(settings: settings)
+        hostFinder = HostFinder(settings: settings, hostStatus: hostStatus)
         var updateConfig = UpdateController.Configuration(appName: AppInfo.displayName, version: AppInfo.version, build: AppInfo.build)
         #if DEBUG
         updateConfig.feedOverride = UpdateController.Configuration.debugFeedOverride()

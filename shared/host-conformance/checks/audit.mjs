@@ -11,7 +11,7 @@ import { terminalProblems } from '../lib/context.mjs';
 export default [
   {
     name: 'events.audit',
-    description: 'over the whole run: every frame well-formed, every payload has exactly its PROTOCOL.md fields, every job_queued has exactly one terminal event, no transcript text in any event, and the snapshot plus all events matches the final /v1/stats',
+    description: 'over the whole run: every frame well-formed, every payload has exactly its PROTOCOL.md fields, every job_queued has exactly one terminal event, no transcript text or pairing password in any event, and the snapshot plus all events matches the final /v1/stats',
     async run(ctx) {
       const sub = ctx.audit;
       if (!sub) skip('the audit subscriber was not opened');
@@ -42,6 +42,9 @@ export default [
       const texts = [...new Set(ctx.transcripts.map((t) => t.trim()).filter((t) => t.length >= 8))];
       for (const text of texts) {
         if (sub.frames.some((f) => f.raw.includes(text) || f.raw.includes(JSON.stringify(text).slice(1, -1)))) problems.push(`transcript ${JSON.stringify(text)} appears in the event feed`);
+      }
+      for (const secret of ctx.pairingSecrets) {
+        if (sub.frames.some((f) => f.raw.includes(secret))) problems.push('a pairing password appears in the event feed');
       }
       problems.push(...compareWithStats(reduce(snapshot, sub.events.slice(1)), stats).map((p) => `final state: ${p}`));
       const unique = [...new Set(problems)];

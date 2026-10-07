@@ -5,9 +5,11 @@ import { check, describe, fail, poll, skip } from './assert.mjs';
 import { framesFor, makeSpeech } from './audio.mjs';
 
 export class Context {
-  constructor({ url, token, slow, transcriptCheck }) {
+  constructor({ url, token, pairingPassword, slow, transcriptCheck }) {
     this.host = new Host(url, token);
     this.token = token || null;
+    this.pairingPassword = pairingPassword || null;
+    this.pairingSecrets = []; // every pairing password the run used, for the leak checks
     this.slow = !!slow;
     this.transcriptCheck = transcriptCheck !== false;
     this.notes = [];

@@ -4,17 +4,18 @@ import Foundation
 /// PROTOCOL.md, mirroring `handle_request` and friends in src-tauri/src/host/mod.rs.
 public final class HostRouter: Sendable {
     public let runtime: HostRuntime
-    private let token: String?
     private let dashboardHTML: [UInt8]
     let heartbeat: Duration
 
     static let maxConfigBodyBytes = 4 * 1024
+    static let maxClientNameLength = 64
+    /// The rate limiter's key for a request with no peer address.
+    static let unknownClient = "unknown"
     static let maxBatchHeaderBytes = 64 * 1024
     static let maxBatchBytesPerSecond = 192_000 * 2
 
     public init(runtime: HostRuntime, dashboardHTML: [UInt8], heartbeat: Duration = .seconds(15)) {
         self.runtime = runtime
-        self.token = runtime.configuration.authToken
         self.dashboardHTML = dashboardHTML
         self.heartbeat = heartbeat
     }
@@ -30,6 +31,15 @@ public final class HostRouter: Sendable {
         }
         if method == "GET" && path == "/favicon.ico" {
             await request.respond(status: 204)
+            return
+        }
+        // Discovery and pairing come before the client has the token.
+        if method == "GET" && path == "/v1/hello" {
+            await hello(request)
+            return
+        }
+        if method == "POST" && path == "/v1/pair" {
+            await pair(request)
             return
         }
         guard authorized(head) else {
@@ -63,7 +73,7 @@ public final class HostRouter: Sendable {
 
     /// `Authorization: Bearer <token>` on any method, or `?token=` on GET only.
     func authorized(_ head: HTTPRequestHead) -> Bool {
-        guard let token else { return true }
+        guard let token = runtime.authToken else { return true }
         if let auth = head.header("authorization"), auth.hasPrefix("Bearer "),
            Self.constantTimeEqual(Array(auth.dropFirst(7).utf8), Array(token.utf8)) {
             return true
@@ -142,6 +152,72 @@ public final class HostRouter: Sendable {
         }
     }
 
+    // MARK: Discovery and pairing
+
+    /// Who this is, for a client scanning the tailnet. Nothing else: no models, clients or stats.
+    private func hello(_ request: HTTPServerRequest) async {
+        await request.respondJSON(200, .object([
+            ("service", .string("fairspoken-host")), ("protocol", .int(1)), ("name", .string(runtime.displayName)),
+            ("serverVersion", .string(runtime.serverVersion)), ("auth", .string(runtime.credentials.authMode)),
+        ]))
+    }
+
+    struct PairRequest: Equatable {
+        var password: String
+        var clientName: String?
+    }
+
+    /// `{"password": "…", "clientName": "…"?}` with unknown fields rejected (serde's
+    /// `deny_unknown_fields`). `clientName` is tidied like a host name (trimmed, no control characters, at most 64); it is only shown.
+    static func parsePairRequest(_ body: [UInt8]) -> Result<PairRequest, RequestError> {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(body)) as? [String: Any] else {
+            return .failure(RequestError(message: "Invalid pair request: expected a JSON object with a password field"))
+        }
+        for key in object.keys.sorted() where key != "password" && key != "clientName" {
+            return .failure(RequestError(message: "Invalid pair request: unknown field `\(key)`, expected `password` or `clientName`"))
+        }
+        guard let password = object["password"] as? String else {
+            return .failure(RequestError(message: object["password"] == nil ? "Invalid pair request: missing field `password`"
+                                                                            : "Invalid pair request: password must be a string"))
+        }
+        var clientName: String?
+        switch object["clientName"] {
+        case nil, is NSNull: break
+        case let name as String: clientName = HostConfiguration.cleanName(name, maxLength: maxClientNameLength)
+        default:
+            return .failure(RequestError(message: "Invalid pair request: clientName must be a string"))
+        }
+        return .success(PairRequest(password: password, clientName: clientName))
+    }
+
+    private func pair(_ request: HTTPServerRequest) async {
+        let body: [UInt8]
+        do { body = try await request.readBody(limit: Self.maxConfigBodyBytes) } catch {
+            await request.respondError(413, "Pair request body is too large")
+            return
+        }
+        let parsed: PairRequest
+        switch Self.parsePairRequest(body) {
+        case .success(let p): parsed = p
+        case .failure(let e):
+            await request.respondError(400, e.message)
+            return
+        }
+        let client = Self.clientAddress(peer: request.peerAddress, head: request.head)
+        let name: JSONValue = .string(runtime.displayName)
+        switch runtime.pair(password: parsed.password, clientName: parsed.clientName, client: client) {
+        case .paired(let token):
+            await request.respondJSON(200, .object([("token", .optionalString(token)), ("name", name)]))
+        case .wrongPassword:
+            await request.respondError(401, "wrong password")
+        case .disabled:
+            await request.respondError(404, "pairing disabled")
+        case .limited(let seconds):
+            let body: JSONValue = .object([("error", .string("too many attempts")), ("retryAfterSeconds", .int(seconds))])
+            await request.respond(status: 429, contentType: "application/json", body: body.bytes, extraHeaders: [("Retry-After", String(seconds))])
+        }
+    }
+
     // MARK: Config and models
 
     private func config(_ request: HTTPServerRequest) async {
@@ -157,7 +233,7 @@ public final class HostRouter: Sendable {
         }
         do {
             let next = try runtime.applyConfigUpdate(update)
-            await request.respondJSON(200, next.configResponse)
+            await request.respondJSON(200, next.configResponse(pairingEnabled: runtime.pairingEnabled))
         } catch {
             switch error {
             case .invalid(let m): await request.respondError(400, m)

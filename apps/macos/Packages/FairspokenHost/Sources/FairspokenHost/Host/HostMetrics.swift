@@ -45,6 +45,7 @@ func nowEpochMs() -> UInt64 { UInt64((Date().timeIntervalSince1970 * 1000).round
 public final class HostMetrics: Sendable {
     public static let recentCapacity = 50
     public static let maxTrackedClients = 32
+    public static let maxPairingAttempts = 20
 
     struct WorkerStatus {
         var state: WorkerPhase = .idle
@@ -96,6 +97,9 @@ public final class HostMetrics: Sendable {
         var recent: [Record] = []
         var clients: [String: ClientStats] = [:]
         var modelDownload: ModelDownloadState?
+        var nextPairingID: UInt64 = 0
+        /// Newest first, for the app; `/v1/stats` doesn't report them.
+        var pairings: [PairingAttempt] = []
     }
 
     let state: Mutex<State>
@@ -276,6 +280,17 @@ public final class HostMetrics: Sendable {
         }
     }
 
+    /// A `POST /v1/pair` attempt: remembered for the app and sent as a `pairing` event.
+    func recordPairing(client: String?, clientName: String?, outcome: PairingAttempt.Outcome) {
+        state.withLock { s in
+            s.nextPairingID += 1
+            let attempt = PairingAttempt(id: s.nextPairingID, atMs: nowEpochMs(), client: client, clientName: clientName, outcome: outcome)
+            publish(.pairing(client: client, clientName: clientName, ok: attempt.ok))
+            s.pairings.insert(attempt, at: 0)
+            if s.pairings.count > Self.maxPairingAttempts { s.pairings.removeLast(s.pairings.count - Self.maxPairingAttempts) }
+        }
+    }
+
     func clientRequest(_ client: String?) {
         state.withLock { s in touchClient(&s, client) { $0.requests += 1 } }
     }
@@ -338,7 +353,8 @@ public final class HostMetrics: Sendable {
     }
 
     /// The `/v1/stats` body. Call with the lock held (`locked`) when pairing with a subscription.
-    static func snapshot(_ s: State, bindAddr: String, serverVersion: String, live: HostLiveSettings, models: [ModelInfo]) -> JSONValue {
+    static func snapshot(_ s: State, bindAddr: String, serverVersion: String, live: HostLiveSettings, models: [ModelInfo],
+                         pairingEnabled: Bool) -> JSONValue {
         let now = ContinuousClock.now
         let installed = Dictionary(uniqueKeysWithValues: models.map { ($0.descriptor.id, $0.installed) })
         let workers: [JSONValue] = s.workers.enumerated().map { index, w in
@@ -401,6 +417,7 @@ public final class HostMetrics: Sendable {
             ("maxActiveStreams", .int(live.maxActiveStreams)),
             ("maxRecordingSeconds", .int(live.maxRecordingSeconds)),
             ("useGpu", .bool(live.useGpu)),
+            ("pairingEnabled", .bool(pairingEnabled)),
             ("model", .string(live.modelSummary)),
             ("models", .array(modelList)),
             ("modelDownload", download),

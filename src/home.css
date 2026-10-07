@@ -285,6 +285,12 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .row-control .btn { height: 28px; padding: 0 12px; }
 .status-text { color: var(--text-secondary); font-size: var(--fs-meta); }
 
+/* Hosts found on the tailnet: each is a list row the user picks. */
+.tailnet-hosts { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--border); }
+.tailnet-hosts[hidden] { display: none; }
+.tailnet-host { margin: 0; }
+.tailnet-host .ds-list-row-title { color: var(--text); }
+
 /* Mic level — owned by the Microphone row so the live level reads as the
    selected device's. Movement is the status; no separate dot. */
 .mic-control { flex-direction: column; align-items: flex-end; gap: 6px; }

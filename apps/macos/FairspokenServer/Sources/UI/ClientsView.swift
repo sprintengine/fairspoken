@@ -3,7 +3,8 @@ import FairspokenUI
 import FairspokenCore
 import SwiftUI
 
-/// Every client the server has seen (up to 32, most recent first) and the last 50 jobs.
+/// Every client the server has seen (up to 32, most recent first), recent pairing attempts
+/// and the last 50 jobs.
 struct ClientsView: View {
     @Environment(ServerController.self) private var controller
 
@@ -36,7 +37,8 @@ struct ClientsView: View {
         let stats = controller.stats
         let streaming = Set(controller.live.streams.values)
         let clients = stats.clients.map { c in
-            ClientRow(id: c.address, name: HostLiveState.displayName(forClient: c.address), address: c.address, streaming: streaming.contains(c.address),
+            ClientRow(id: c.address, name: controller.pairedName(for: c.address) ?? HostLiveState.displayName(forClient: c.address), address: c.address,
+                      streaming: streaming.contains(c.address),
                       requests: c.requests, completed: c.completed, rejected: c.rejected, failed: c.failed,
                       audioMinutes: c.totalAudioSeconds / 60, lastSeenMs: c.lastSeenMs, lastModel: c.lastModel.map(HostLiveState.prettyModelName) ?? "–")
         }
@@ -71,6 +73,19 @@ struct ClientsView: View {
                 .scrollContentBackground(.hidden)
                 .frame(height: 280)
             }
+            if !controller.pairingAttempts.isEmpty {
+                Text("Pairing").font(.title3.weight(.semibold))
+                SurfaceCard(padding: 0) {
+                    Table(controller.pairingAttempts) {
+                        TableColumn("When") { a in Text(ServerFormat.clock(Double(a.atMs))).font(.fsData(.callout)) }.width(80)
+                        TableColumn("Device") { a in Text(a.clientName ?? "–").fontWeight(.medium) }.width(min: 140, ideal: 200)
+                        TableColumn("Address") { a in Text(a.client ?? "unknown").foregroundStyle(.secondary) }.width(min: 120, ideal: 160)
+                        TableColumn("Result") { a in Self.outcome(a.outcome) }.width(min: 140, ideal: 200)
+                    }
+                    .scrollContentBackground(.hidden)
+                    .frame(height: 140)
+                }
+            }
             Text("Recent jobs").font(.title3.weight(.semibold))
             SurfaceCard(padding: 0) {
                 Table(jobs) {
@@ -91,5 +106,15 @@ struct ClientsView: View {
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder private static func outcome(_ o: PairingAttempt.Outcome) -> some View {
+        switch o {
+        case .paired: Label("Paired", systemImage: "checkmark.circle.fill").foregroundStyle(Color.fsSuccess)
+        case .open: Label("No token needed", systemImage: "lock.open").foregroundStyle(.secondary)
+        case .wrongPassword: Label("Wrong password", systemImage: "xmark.circle").foregroundStyle(Color.fsError)
+        case .disabled: Label("Pairing off", systemImage: "circle.dashed").foregroundStyle(.secondary)
+        case .limited: Label("Too many tries", systemImage: "hourglass").foregroundStyle(Color.fsGorseText)
+        }
     }
 }

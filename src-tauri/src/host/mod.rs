@@ -2,6 +2,7 @@ mod catalog;
 mod cli;
 mod config;
 mod events;
+mod pairing;
 mod update;
 
 use crate::audio::{AudioFrame, Recording};
@@ -20,6 +21,10 @@ use config::{
 use config::{parse_bool, parse_worker_models, PersistedHostConfig};
 use events::{
     sse_frame, EventHub, FrameWriter, HostEvent, HostEventKind, SseWriter, HEARTBEAT_INTERVAL,
+};
+use pairing::{
+    attempt_pairing, resolve_host_name, Hello, HostAuth, PairOutcome, PairRequest, PairingLimiter,
+    HOST_NAME_ENV, PAIRING_PASSWORD_ENV,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -70,7 +75,6 @@ pub fn run_transcription_host() -> Result<(), String> {
 
     let addr = crate::app_dirs::env_var("FAIRSPOKEN_HOST_ADDR")
         .unwrap_or_else(|| "127.0.0.1:48173".to_string());
-    let token = crate::app_dirs::env_var("FAIRSPOKEN_HOST_TOKEN");
     let mut config = HostRuntimeConfig::from_env()?;
     // Dashboard edits are the durable configuration; the environment only
     // seeds the first boot (or a deleted config file).
@@ -80,6 +84,25 @@ pub fn run_transcription_host() -> Result<(), String> {
         .as_ref()
         .map(|persisted| persisted.update.clone())
         .unwrap_or_default();
+    // Unlike the live settings, the token, pairing password and name from
+    // the environment win over the file on every start.
+    let (auth, generated_token) = HostAuth::resolve(
+        crate::app_dirs::env_var("FAIRSPOKEN_HOST_TOKEN"),
+        persisted
+            .as_ref()
+            .and_then(|persisted| persisted.token.clone()),
+        crate::app_dirs::env_var(PAIRING_PASSWORD_ENV),
+        persisted
+            .as_ref()
+            .and_then(|persisted| persisted.pairing_password.clone()),
+    )?;
+    let saved_name = persisted
+        .as_ref()
+        .and_then(|persisted| persisted.name.clone());
+    let host_name = resolve_host_name(
+        crate::app_dirs::env_var(HOST_NAME_ENV),
+        saved_name.as_deref(),
+    );
     if let Some(persisted) = persisted {
         overlay_persisted_config(&mut config, persisted);
     }
@@ -96,6 +119,26 @@ pub fn run_transcription_host() -> Result<(), String> {
         config_path,
     )?);
     runtime.live.set_update_prefs(update_prefs);
+    runtime.live.set_auth(auth);
+    runtime.live.set_name(host_name, saved_name);
+    if generated_token {
+        // Pairing hands out the token, so it must survive a restart.
+        persist_live_config(&runtime.config_path, &runtime.live)
+            .map_err(|err| format!("Failed to save the generated pairing token: {err}"))?;
+        println!(
+            "Generated a host token for pairing; saved in {}",
+            runtime.config_path.display()
+        );
+    }
+    println!(
+        "Host name \"{}\"; pairing {}",
+        runtime.live.name(),
+        if runtime.live.pairing_enabled() {
+            "on (clients pair with the password)"
+        } else {
+            "off"
+        }
+    );
 
     let idle_metrics = Arc::clone(&metrics);
     let updater = Arc::new(Updater::new(
@@ -130,7 +173,6 @@ pub fn run_transcription_host() -> Result<(), String> {
     for request in server.incoming_requests() {
         let response = handle_request(
             request,
-            token.as_deref(),
             Arc::clone(&runtime),
             Arc::clone(&metrics),
             &updater,
@@ -166,7 +208,6 @@ fn bind_server(addr: &str) -> Result<Server, String> {
 
 fn handle_request(
     request: Request,
-    token: Option<&str>,
     runtime: Arc<HostRuntime>,
     metrics: Arc<Mutex<HostMetrics>>,
     updater: &Arc<Updater>,
@@ -186,7 +227,20 @@ fn handle_request(
             .map_err(|err| format!("Failed to send favicon response: {err}"));
     }
 
-    if !authorized(&request, token) {
+    // Discovery and pairing are how a client without the token finds the
+    // host and gets one; they reveal nothing else.
+    if matches!((request.method(), path), (&Method::Get, "/v1/hello")) {
+        let name = runtime.live.name();
+        let hello = Hello::new(&name, SERVER_VERSION, runtime.live.auth().mode());
+        let body = serde_json::to_string(&hello)
+            .map_err(|err| format!("Failed to serialize hello response: {err}"))?;
+        return respond_json(request, StatusCode(200), body);
+    }
+    if matches!((request.method(), path), (&Method::Post, "/v1/pair")) {
+        return handle_pair(request, &runtime);
+    }
+
+    if !authorized(&request, runtime.live.token().as_deref()) {
         return respond_json(
             request,
             StatusCode(401),
@@ -459,11 +513,13 @@ fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Resu
     let update: HostConfigUpdate = match serde_json::from_slice(&body) {
         Ok(update) => update,
         Err(err) => {
-            return respond_error(
-                request,
-                StatusCode(400),
-                &format!("Invalid config update: {err}"),
-            )
+            // serde quotes offending values, which could be the password.
+            let message = if String::from_utf8_lossy(&body).contains("pairingPassword") {
+                "Invalid config update: pairingPassword must be a string or null, and every other field as documented".to_string()
+            } else {
+                format!("Invalid config update: {err}")
+            };
+            return respond_error(request, StatusCode(400), &message);
         }
     };
 
@@ -492,9 +548,75 @@ fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Resu
             .iter()
             .map(|model| model.model_id())
             .collect::<Vec<_>>(),
+        "pairingEnabled": runtime.live.pairing_enabled(),
     })
     .to_string();
     respond_json(request, StatusCode(200), body)
+}
+
+const MAX_PAIR_BODY_BYTES: u64 = 4 * 1024;
+
+/// `POST /v1/pair`: the pairing password in, the host token out. Answers
+/// never echo the request, which carries the password.
+fn handle_pair(mut request: Request, runtime: &HostRuntime) -> Result<(), String> {
+    let body = match read_limited_body(&mut request.as_reader(), MAX_PAIR_BODY_BYTES) {
+        Ok(body) => body,
+        Err(err) => return respond_error(request, StatusCode(413), &err),
+    };
+    let Ok(pair) = serde_json::from_slice::<PairRequest>(&body) else {
+        return respond_error(
+            request,
+            StatusCode(400),
+            r#"Invalid pair request: expected {"password": "<string>", "clientName": "<string>"}"#,
+        );
+    };
+    let client = client_ip(&request);
+    let outcome = {
+        let auth = runtime.live.auth();
+        let mut limiter = runtime
+            .pairing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        attempt_pairing(
+            &auth,
+            &mut limiter,
+            client.as_deref().unwrap_or("unknown"),
+            &pair.password,
+            Instant::now(),
+        )
+    };
+    if let Ok(metrics) = runtime.metrics.lock() {
+        metrics.publish(HostEventKind::Pairing {
+            client,
+            client_name: pair.client_name(),
+            ok: matches!(outcome, PairOutcome::Paired { .. }),
+        });
+    }
+    let name = runtime.live.name();
+    match outcome {
+        PairOutcome::Paired { token } => respond_json(
+            request,
+            StatusCode(200),
+            serde_json::json!({ "token": token, "name": name }).to_string(),
+        ),
+        PairOutcome::WrongPassword => respond_error(request, StatusCode(401), "wrong password"),
+        PairOutcome::Disabled => respond_error(request, StatusCode(404), "pairing disabled"),
+        PairOutcome::RateLimited {
+            retry_after_seconds,
+        } => {
+            let retry_after = Header::from_bytes(
+                &b"Retry-After"[..],
+                retry_after_seconds.to_string().as_bytes(),
+            )
+            .map_err(|_| "Failed to create Retry-After header".to_string())?;
+            let body = serde_json::json!({
+                "error": "too many attempts",
+                "retryAfterSeconds": retry_after_seconds,
+            })
+            .to_string();
+            respond_json_with(request, StatusCode(429), body, Some(retry_after))
+        }
+    }
 }
 
 fn respond_update_status(
@@ -668,6 +790,7 @@ struct HostRuntime {
     models: ModelService,
     config_path: PathBuf,
     next_job_id: AtomicU64,
+    pairing: Mutex<PairingLimiter>,
 }
 
 struct TranscriptionJob {
@@ -764,6 +887,7 @@ impl HostRuntime {
             models,
             config_path,
             next_job_id: AtomicU64::new(1),
+            pairing: Mutex::new(PairingLimiter::default()),
         })
     }
 
@@ -1420,14 +1544,25 @@ fn header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
 }
 
 fn respond_json(request: Request, status: StatusCode, body: String) -> Result<(), String> {
+    respond_json_with(request, status, body, None)
+}
+
+fn respond_json_with(
+    request: Request,
+    status: StatusCode,
+    body: String,
+    extra: Option<Header>,
+) -> Result<(), String> {
     let content_type = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
         .map_err(|_| "Failed to create response content-type header".to_string())?;
+    let mut response = Response::from_string(body)
+        .with_status_code(status)
+        .with_header(content_type);
+    if let Some(header) = extra {
+        response = response.with_header(header);
+    }
     request
-        .respond(
-            Response::from_string(body)
-                .with_status_code(status)
-                .with_header(content_type),
-        )
+        .respond(response)
         .map_err(|err| format!("Failed to send response: {err}"))
 }
 
@@ -2025,6 +2160,7 @@ impl HostMetrics {
             max_active_streams: live.max_active_streams(),
             max_recording_seconds: live.max_recording_seconds(),
             use_gpu: live.use_gpu(),
+            pairing_enabled: live.pairing_enabled(),
             model: live.model_summary(),
             models: model_snapshots(models, &assigned_models),
             model_download: self.model_download.clone(),
@@ -2136,6 +2272,9 @@ struct StatsSnapshot<'a> {
     max_active_streams: u32,
     max_recording_seconds: u16,
     use_gpu: bool,
+    /// Whether clients can pair with a password; the password itself is
+    /// never reported.
+    pairing_enabled: bool,
     /// The served model: one id when uniform across workers, else "mixed".
     model: String,
     /// Every model this build can serve, installed or not, with the workers
@@ -2216,6 +2355,7 @@ mod tests {
                 std::process::id()
             )),
             next_job_id: AtomicU64::new(1),
+            pairing: Mutex::new(super::PairingLimiter::default()),
         }
     }
 
@@ -2718,6 +2858,7 @@ mod tests {
                 use_gpu: Some(false),
                 model: None,
                 worker_models: None,
+                pairing_password: None,
             },
             &live,
         )
@@ -2734,6 +2875,7 @@ mod tests {
                 use_gpu: Some(true),
                 model: None,
                 worker_models: None,
+                pairing_password: None,
             },
             &live,
         )
@@ -2750,6 +2892,7 @@ mod tests {
                 use_gpu: None,
                 model: None,
                 worker_models: None,
+                pairing_password: None,
             },
             &live,
         )
@@ -2768,6 +2911,7 @@ mod tests {
             model: model.map(str::to_string),
             worker_models: worker_models
                 .map(|models| models.into_iter().map(str::to_string).collect()),
+            pairing_password: None,
         }
     }
 
@@ -2889,6 +3033,7 @@ mod tests {
                 use_gpu: Some(false),
                 model: None,
                 worker_models: Some(vec!["parakeet".to_string(), "parakeet".to_string()]),
+                pairing_password: None,
             },
             &live,
         )
@@ -2917,6 +3062,52 @@ mod tests {
     }
 
     #[test]
+    fn config_update_sets_and_clears_the_pairing_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("host-config.json");
+        let config = test_config();
+        let live = HostLiveConfig::new(&config);
+        let update = |body: &str| -> Result<(), String> {
+            let update: super::HostConfigUpdate =
+                serde_json::from_str(body).map_err(|err| err.to_string())?;
+            super::apply_config_update(&update, &live)
+        };
+
+        // Too short: rejected with nothing applied, and the error doesn't echo it.
+        let err = update(r#"{"maxActiveStreams":3,"pairingPassword":"abc"}"#).unwrap_err();
+        assert!(!err.contains("abc"));
+        assert_eq!(live.max_active_streams(), 1);
+        assert!(!live.pairing_enabled());
+
+        // A host with no token generates one so pairing has something to hand out.
+        update(r#"{"pairingPassword":"123456"}"#).unwrap();
+        assert!(live.pairing_enabled());
+        let token = live.token().expect("generated token");
+        super::persist_live_config(&path, &live).unwrap();
+        let saved = super::load_persisted_config(&path).unwrap().unwrap();
+        assert_eq!(saved.token.as_deref(), Some(token.as_str()));
+        assert_eq!(saved.pairing_password.as_deref(), Some("123456"));
+
+        let metrics = HostMetrics::new(&config);
+        let stats =
+            serde_json::to_value(metrics.snapshot("127.0.0.1:0", &live, &ModelService::default()))
+                .unwrap();
+        assert_eq!(stats["pairingEnabled"], true);
+        assert!(!stats.to_string().contains("123456"));
+
+        // Absent leaves it alone; null and "" turn it off and keep the token.
+        update(r#"{"useGpu":false}"#).unwrap();
+        assert!(live.pairing_enabled());
+        update(r#"{"pairingPassword":null}"#).unwrap();
+        assert!(!live.pairing_enabled());
+        assert_eq!(live.token(), Some(token));
+        update(r#"{"pairingPassword":"654321"}"#).unwrap();
+        update(r#"{"pairingPassword":""}"#).unwrap();
+        assert!(!live.pairing_enabled());
+        assert!(update(r#"{"pairingPassword":123456}"#).is_err());
+    }
+
+    #[test]
     fn overlay_clamps_ranges_and_adapts_stale_worker_model_lists() {
         let mut config = HostRuntimeConfig {
             worker_count: 2,
@@ -2932,6 +3123,9 @@ mod tests {
                 // Written when the host ran three workers; now it runs two.
                 worker_models: vec![SttModel::Parakeet, SttModel::Parakeet, SttModel::Parakeet],
                 update: Default::default(),
+                token: None,
+                pairing_password: None,
+                name: None,
             },
         );
         assert_eq!(config.max_active_streams, 32);
@@ -3233,21 +3427,18 @@ mod tests {
         let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
         let (job_tx, _job_rx) = mpsc::sync_channel(1);
         let runtime = Arc::new(test_runtime(config, job_tx, Arc::clone(&metrics)));
+        runtime.live.set_auth(super::HostAuth {
+            token: Some("secret".to_string()),
+            ..Default::default()
+        });
         let updater = test_updater(&runtime, "0.2.0", "http://127.0.0.1:9/");
         let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
         let addr = server.server_addr().to_ip().expect("ip address");
         let accept_metrics = Arc::clone(&metrics);
         thread::spawn(move || {
             let request = server.recv().expect("request");
-            super::handle_request(
-                request,
-                Some("secret"),
-                runtime,
-                accept_metrics,
-                &updater,
-                "127.0.0.1:0",
-            )
-            .expect("handled");
+            super::handle_request(request, runtime, accept_metrics, &updater, "127.0.0.1:0")
+                .expect("handled");
             // Keep the listener (and the connection it owns) alive while the
             // stream thread runs.
             thread::sleep(Duration::from_secs(5));
