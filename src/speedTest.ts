@@ -257,12 +257,12 @@ export function createSpeedTest(opts: {
     }
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Speed test" }),
+
         h("div", { class: "st-h", text: "How much faster is your voice?" }),
         h("div", {
           class: "st-sub",
           text:
-            "Type this passage, then say it out loud. We'll time both — from your real keystrokes and a real transcription, not an average.",
+            "Type this passage, then say it. We time both.",
         }),
         h("div", { class: "passage-wrap" }, [h("div", { class: "passage preview", text: passage })]),
         h("div", { class: "st-actions" }, actions),
@@ -290,7 +290,7 @@ export function createSpeedTest(opts: {
 
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Speed test · step 1 of 2" }),
+        h("div", { class: "st-step", text: "Step 1 of 2" }),
         h("div", { class: "st-live" }, [
           h("div", { class: "lv" }, [tClock, h("span", { text: "elapsed" })]),
           h("div", { class: "lv" }, [tWpm, h("span", { text: "wpm" })]),
@@ -384,7 +384,7 @@ export function createSpeedTest(opts: {
 
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Speed test · step 1 of 2" }),
+        h("div", { class: "st-step", text: "Step 1 of 2" }),
         legLine,
         h("div", { class: "st-h st-h-sm", text: "Now read it aloud." }),
         h("div", { class: "passage-wrap" }, [h("div", { class: "passage", text: passage })]),
@@ -421,7 +421,7 @@ export function createSpeedTest(opts: {
 
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Speed test · step 2 of 2" }),
+        h("div", { class: "st-step", text: "Step 2 of 2" }),
         h("div", { class: "listen" }, [h("span", { class: "rdot" }), "Listening…", sClock]),
         h("div", { class: "passage-wrap" }, [h("div", { class: "passage spoken", text: passage })]),
         buildPreviewBlock(),
@@ -439,7 +439,7 @@ export function createSpeedTest(opts: {
     state = "transcribing";
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Speed test · step 2 of 2" }),
+        h("div", { class: "st-step", text: "Step 2 of 2" }),
         h("div", { class: "transcribe" }, [h("span", { class: "tdot" }), "Transcribing your audio…"]),
         h("div", { class: "passage-wrap" }, [h("div", { class: "passage preview", text: passage })]),
         buildPreviewBlock(),

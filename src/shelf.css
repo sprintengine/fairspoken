@@ -1,0 +1,253 @@
+/* Transcript shelf window: the stack of copied messages above the pill.
+   Crystal look (design/crystal/README.md): each clip is a frosted silver card
+   that firms up when pointed at. Follows the app appearance (appearance.ts). */
+@import "./design-system/tokens.css";
+@import "./crystalTokens.css";
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+.shelf-root,
+.shelf-root body {
+  width: 360px;
+  height: 240px;
+  overflow: hidden;
+  background: transparent;
+  font-family: var(--sem-font-family-ui);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--crystal-ink);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.shelf-window {
+  width: 360px;
+  height: 240px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 8px 8px 0;
+  background: transparent;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.shelf-drag-handle {
+  align-self: center;
+  margin-bottom: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 4px 0;
+  cursor: grab;
+  app-region: drag;
+  -webkit-app-region: drag;
+  opacity: 0.5;
+  transition: opacity 180ms ease;
+}
+.shelf-drag-handle:active { cursor: grabbing; }
+.shelf-window:hover .shelf-drag-handle,
+.shelf-window:focus-within .shelf-drag-handle { opacity: 1; }
+.shelf-drag-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--crystal-ink-3);
+}
+
+/* ── Clips and the live bubble ────────────────────────────────── */
+.live-transcript-bubble,
+.transcript-clip {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+  width: 344px;
+  max-width: 344px;
+  border-radius: 14px;
+  background: var(--crystal-surface-strong);
+  -webkit-backdrop-filter: var(--crystal-glass-filter);
+  backdrop-filter: var(--crystal-glass-filter);
+  border: 1px solid var(--crystal-hairline);
+  color: var(--crystal-ink);
+  box-shadow: inset 0 1px 0 var(--crystal-edge), var(--crystal-shadow-float);
+  pointer-events: auto;
+  opacity: 0.55;
+  transition: opacity 180ms ease, border-color 180ms ease;
+}
+.live-transcript-bubble {
+  padding: 10px 12px;
+  border-color: var(--crystal-tint-strong);
+  opacity: 0.8;
+}
+.shelf-window:hover .transcript-clip,
+.shelf-window:focus-within .transcript-clip,
+.shelf-window:hover .live-transcript-bubble,
+.shelf-window:focus-within .live-transcript-bubble { opacity: 1; }
+.live-transcript-bubble[hidden] { display: none; }
+.live-transcript-text { overflow-wrap: anywhere; color: var(--crystal-ink); }
+
+.transcript-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 360px;
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  pointer-events: auto;
+  scrollbar-gutter: stable;
+}
+.transcript-shelf:empty { display: none; }
+.shelf-empty { padding: 9px 12px; color: var(--crystal-ink-2); }
+
+.transcript-clip {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  gap: 6px;
+  align-items: start;
+  flex: 0 0 auto;
+  min-height: 48px;
+  max-width: calc(100% - 8px);
+  padding: 9px 8px 9px 12px;
+  text-align: left;
+}
+.shelf-window .transcript-clip:hover,
+.shelf-window .transcript-clip:focus-within { border-color: var(--sem-color-border-strong); }
+.transcript-clip[data-removing="true"] {
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+/* Brief green confirmation when a clip is copied, just before the stack closes. */
+.transcript-clip[data-just-copied="true"] { animation: clip-copied 440ms ease forwards; }
+@keyframes clip-copied {
+  0% { border-color: var(--crystal-accent); box-shadow: 0 0 0 1.5px var(--crystal-accent), var(--crystal-shadow-float); }
+  100% { border-color: var(--crystal-hairline); box-shadow: inset 0 1px 0 var(--crystal-edge), var(--crystal-shadow-float); }
+}
+
+.transcript-clip-content { min-width: 0; display: flex; flex-direction: column; }
+.transcript-clip-copy {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.transcript-clip-copy:focus-visible,
+.transcript-clip-close:focus-visible,
+.transcript-clip-expand:focus-visible {
+  outline: 2px solid var(--crystal-accent);
+  outline-offset: 2px;
+}
+.transcript-clip-text { display: block; overflow-wrap: anywhere; color: var(--crystal-ink); }
+.transcript-clip-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.transcript-clip-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--crystal-ink-3);
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.transcript-clip[data-copied="true"] .transcript-clip-meta::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--crystal-accent);
+  flex: 0 0 auto;
+}
+.transcript-clip-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--crystal-tint);
+  color: var(--crystal-ink-2);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.transcript-clip-expand {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--crystal-ink-2);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+.transcript-clip-expand:hover { color: var(--crystal-ink); }
+.transcript-clip-close {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--crystal-ink-3);
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  transition: color 160ms ease, background 160ms ease, opacity 140ms ease;
+}
+.transcript-clip:hover .transcript-clip-close,
+.transcript-clip:focus-within .transcript-clip-close,
+.transcript-clip-close:focus-visible { opacity: 1; }
+.transcript-clip-close:hover { color: var(--crystal-ink); background: var(--crystal-fill-active); }
+
+/* ── Right-click menu ─────────────────────────────────────────── */
+.shelf-context-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 120px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--crystal-surface-strong);
+  -webkit-backdrop-filter: var(--crystal-glass-filter);
+  backdrop-filter: var(--crystal-glass-filter);
+  border: 1px solid var(--crystal-hairline);
+  box-shadow: var(--crystal-shadow-float);
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+.shelf-context-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--crystal-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.shelf-context-item:hover,
+.shelf-context-item:focus-visible { outline: none; background: var(--crystal-fill-active); }
+
+@media (prefers-reduced-motion: reduce) {
+  .transcript-clip[data-just-copied="true"] {
+    animation: none;
+    border-color: var(--crystal-accent);
+    box-shadow: 0 0 0 1.5px var(--crystal-accent), var(--crystal-shadow-float);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .live-transcript-bubble, .transcript-clip { opacity: 1; }
+}

@@ -1,6 +1,7 @@
 @import "./design-system/tokens.css";
 @import "./design-system/popover.css";
 @import "./design-system/button.css";
+@import "./crystalTokens.css";
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; }
 @property --preview-glow-angle {
@@ -167,14 +168,14 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
 .cursor-preview-insertion {
   color: inherit;
   background: var(--sem-color-status-good-soft);
-  border-radius: var(--sem-radius-chip);
+  border-radius: 4px;
   animation: preview-insertion-fade var(--sem-motion-duration-deliberate) var(--sem-motion-ease-standard) forwards;
 }
 .cursor-preview-deletion {
   color: var(--sem-color-status-danger);
   background: var(--sem-color-status-danger-soft);
   text-decoration: line-through;
-  border-radius: var(--sem-radius-chip);
+  border-radius: 4px;
   animation: preview-deletion-fade var(--sem-motion-duration-deliberate) var(--sem-motion-ease-standard) forwards;
 }
 .cursor-preview-deletion + .cursor-preview-insertion { margin-inline-start: var(--sem-space-3xs); }
@@ -191,7 +192,7 @@ body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; 
 @media (prefers-reduced-motion: reduce) {
   .cursor-preview-insertion, .cursor-preview-deletion { animation: none; }
   /* The rim still has to say "live", so it stays lit — it just stops sweeping,
-     resolving to a static violet-to-magenta arc. The brush holds a steady glow
+     resolving to a static green-to-silver arc. The brush holds a steady glow
      rather than pulsing. */
   .cursor-preview.is-live::before,
   .cursor-preview.is-live::after,

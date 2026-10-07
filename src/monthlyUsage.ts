@@ -72,7 +72,7 @@ export function mountMonthlyUsage(root: HTMLElement): (summary: MonthlyUsageSumm
   function render(): void {
     buttons.forEach(({ button, value }) => button.setAttribute("aria-pressed", String(range === value)));
     if (!summary) {
-      total.textContent = "Monthly stats are unavailable. Try reopening Home.";
+      total.textContent = "Monthly stats are unavailable.";
       chart.replaceChildren();
       chart.hidden = true;
       note.textContent = "";
@@ -109,8 +109,8 @@ export function mountMonthlyUsage(root: HTMLElement): (summary: MonthlyUsageSumm
     chart.replaceChildren(list);
     chart.scrollLeft = chart.scrollWidth;
     note.textContent = summary.totalWords === 0
-      ? "No words dictated yet. Your monthly totals will stay here when notes are removed."
-      : `${words === 0 ? "No dated words in this range. " : ""}UTC calendar months · Current month is still in progress.${summary.unallocatedWords > 0 ? ` ${summary.unallocatedWords.toLocaleString()} lifetime words have no available month and are not plotted.` : ""}`;
+      ? "No words yet."
+      : `${words === 0 ? "No words in this range." : ""}${summary.unallocatedWords > 0 ? ` ${summary.unallocatedWords.toLocaleString()} older words have no month.` : ""}`.trim();
   }
   return (next) => { summary = next; render(); };
 }

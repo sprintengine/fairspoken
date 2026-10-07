@@ -183,12 +183,12 @@ export function createVoiceAccuracyTest(opts: {
     resetPreview();
 
     const body: Child[] = [
-      h("div", { class: "st-step", text: "Voice accuracy test" }),
+      
       h("div", { class: "st-h", text: "Did it hear what you said?" }),
       h("div", {
         class: "st-sub",
         text:
-          "Read this passage aloud. We record and transcribe it through your real backend, then show the words it caught and the ones it missed. Nothing is saved.",
+          "Read this aloud. Nothing is saved.",
       }),
       h("div", { class: "passage-wrap" }, [h("div", { class: "passage preview", text: passage })]),
     ];
@@ -215,10 +215,6 @@ export function createVoiceAccuracyTest(opts: {
         }),
         h("button", { class: "btn btn-ghost", text: "Close", onClick: onExit }),
       ]),
-      h("div", {
-        class: "st-hint",
-        text: "Side-effect-free: this test never touches your clipboard, notes, history, or stats.",
-      }),
     );
 
     container.replaceChildren(h("div", {}, body));
@@ -247,7 +243,7 @@ export function createVoiceAccuracyTest(opts: {
 
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Voice accuracy test" }),
+        
         h("div", { class: "listen" }, [h("span", { class: "rdot" }), "Listening…", sClock]),
         h("div", { class: "passage-wrap" }, [h("div", { class: "passage spoken", text: passage })]),
         buildPreviewBlock(),
@@ -281,7 +277,7 @@ export function createVoiceAccuracyTest(opts: {
     state = "transcribing";
     container.replaceChildren(
       h("div", {}, [
-        h("div", { class: "st-step", text: "Voice accuracy test" }),
+        
         h("div", { class: "transcribe" }, [
           h("span", { class: "tdot" }),
           "Finalizing the transcript…",

@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import "@fontsource/inter/latin-600.css"; // brand wordmark, matching the title strip
+
 import "./dashboardShell";
 import "./homeStats";
 import "./notes";
@@ -13,6 +13,8 @@ import { selectSettingsCategory, updateSettingsHeading } from "./settingsNavigat
 import { createSpeedTest } from "./speedTest";
 import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
 import "./settingsPremium.css";
+// Crystal theme last: it restyles the surfaces the sheets above lay out.
+import "./crystal.css";
 
 // The home window shell: owns sidebar navigation between the four screens.
 // The Settings screen's own controls are driven independently by settings.ts,
