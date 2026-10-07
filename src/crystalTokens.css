@@ -1,0 +1,172 @@
+/* Crystal: frosted silver glass on a cool, near-neutral backdrop, with a green
+   client hint (design/crystal/README.md). This file only declares tokens. It
+   loads after the vendored design-system tokens and re-points their semantic
+   colours at the Crystal palette, so every existing component follows.
+
+   Selectors are doubled (`:root:root`, `[data-mode][data-mode]`) so these win
+   over tokens.css and light-scope.css regardless of stylesheet order, while a
+   nested `[data-mode]` preview pane still resolves to its own mode. */
+
+:root:root,
+[data-mode="light"][data-mode] {
+  /* Spec neutrals */
+  --crystal-page: #edeff2;
+  --crystal-page-sheen: #ffffff;
+  --crystal-surface: rgba(255, 255, 255, 0.62);
+  --crystal-surface-strong: rgba(255, 255, 255, 0.82);
+  --crystal-edge: rgba(255, 255, 255, 0.85);
+  --crystal-hairline: rgba(16, 24, 32, 0.09);
+  --crystal-ink: #15191d;
+  --crystal-ink-2: #5b6670;
+  --crystal-ink-3: #8a949c;
+  /* Client accent: green, used sparingly. */
+  --crystal-accent: #2e8b5e;
+  --crystal-accent-hover: #26774f;
+  --crystal-tint: rgba(46, 139, 94, 0.07);
+  --crystal-tint-strong: rgba(46, 139, 94, 0.13);
+  --crystal-wash: rgba(46, 139, 94, 0.075);
+  /* Status: functional, never decorative. */
+  --crystal-ok: #2e8b5e;
+  --crystal-warn: #9a6b12;
+  --crystal-error: #b4283c;
+  --crystal-live: #d9483b;
+  /* Neutral fills for hover, pressed and the selected chip of a segmented
+     control, derived from ink so they stay silver rather than tinted. */
+  --crystal-fill-hover: rgba(16, 24, 32, 0.045);
+  --crystal-fill-active: rgba(16, 24, 32, 0.075);
+  --crystal-chip: #ffffff;
+  --crystal-track: rgba(16, 24, 32, 0.12);
+  --crystal-shadow: 0 8px 24px rgba(16, 24, 32, 0.06);
+  --crystal-shadow-float: 0 12px 32px rgba(16, 24, 32, 0.12), 0 2px 6px rgba(16, 24, 32, 0.06);
+
+  --sem-color-text-default: #2b3238;
+  --sem-color-text-on-accent: #ffffff;
+  --sem-color-border-default: rgba(16, 24, 32, 0.12);
+  --sem-color-border-strong: rgba(16, 24, 32, 0.2);
+  --sem-color-status-neutral-soft: rgba(16, 24, 32, 0.07);
+  --sem-color-status-good-soft: rgba(46, 139, 94, 0.16);
+  --sem-color-status-warn-soft: rgba(154, 107, 18, 0.14);
+  --sem-color-status-danger-soft: rgba(180, 40, 60, 0.12);
+  --sem-color-status-good-faint: rgba(46, 139, 94, 0.08);
+  --sem-color-diff-changed: rgba(16, 24, 32, 0.06);
+  --sem-color-diff-changed-strong: rgba(16, 24, 32, 0.14);
+  --sem-color-overlay-scrim: rgba(16, 24, 32, 0.28);
+  --sem-color-activity-glow-start: rgba(46, 139, 94, 0.55);
+  --sem-color-activity-glow-end: #9aa6b0;
+  --sem-shadow-modal: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 16px 40px rgba(16, 24, 32, 0.14);
+  --sem-shadow-control-raised: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 1px 2px rgba(16, 24, 32, 0.16);
+  --sem-shadow-control-edge: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 1px 2px rgba(16, 24, 32, 0.06);
+  --sem-shadow-control-pressed: inset 0 1px 2px rgba(16, 24, 32, 0.1);
+}
+
+[data-mode="dark"][data-mode] {
+  --crystal-page: #0d0f12;
+  --crystal-page-sheen: #1b1f24;
+  --crystal-surface: rgba(255, 255, 255, 0.055);
+  --crystal-surface-strong: rgba(255, 255, 255, 0.09);
+  --crystal-edge: rgba(255, 255, 255, 0.1);
+  --crystal-hairline: rgba(255, 255, 255, 0.08);
+  --crystal-ink: #e8ecef;
+  --crystal-ink-2: #9aa4ad;
+  --crystal-ink-3: #6b747c;
+  --crystal-accent: #5ccb94;
+  --crystal-accent-hover: #74d6a6;
+  --crystal-tint: rgba(92, 203, 148, 0.1);
+  --crystal-tint-strong: rgba(92, 203, 148, 0.17);
+  --crystal-wash: rgba(92, 203, 148, 0.1);
+  --crystal-ok: #5ccb94;
+  --crystal-warn: #e7b95a;
+  --crystal-error: #ff7d8e;
+  --crystal-live: #ff6e62;
+  --crystal-fill-hover: rgba(255, 255, 255, 0.05);
+  --crystal-fill-active: rgba(255, 255, 255, 0.085);
+  --crystal-chip: rgba(255, 255, 255, 0.14);
+  --crystal-track: rgba(255, 255, 255, 0.14);
+  --crystal-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --crystal-shadow-float: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  --sem-color-text-default: #cdd3d8;
+  --sem-color-text-on-accent: #0b1a12;
+  --sem-color-border-default: rgba(255, 255, 255, 0.11);
+  --sem-color-border-strong: rgba(255, 255, 255, 0.17);
+  --sem-color-status-neutral-soft: rgba(255, 255, 255, 0.08);
+  --sem-color-status-good-soft: rgba(92, 203, 148, 0.18);
+  --sem-color-status-warn-soft: rgba(231, 185, 90, 0.16);
+  --sem-color-status-danger-soft: rgba(255, 125, 142, 0.16);
+  --sem-color-status-good-faint: rgba(92, 203, 148, 0.1);
+  --sem-color-diff-changed: rgba(255, 255, 255, 0.07);
+  --sem-color-diff-changed-strong: rgba(255, 255, 255, 0.16);
+  --sem-color-overlay-scrim: rgba(0, 0, 0, 0.55);
+  --sem-color-activity-glow-start: rgba(92, 203, 148, 0.6);
+  --sem-color-activity-glow-end: #c3ccd4;
+  --sem-shadow-modal: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 16px 48px rgba(0, 0, 0, 0.6);
+  --sem-shadow-control-raised: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sem-shadow-control-edge: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.25);
+  --sem-shadow-control-pressed: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* Reduced transparency: the same layout on solid fills. */
+@media (prefers-reduced-transparency: reduce) {
+  :root:root,
+  [data-mode="light"][data-mode] {
+    --crystal-surface: #f8f9fa;
+    --crystal-surface-strong: #ffffff;
+  }
+  [data-mode="dark"][data-mode] {
+    --crystal-surface: #181b1f;
+    --crystal-surface-strong: #20242a;
+  }
+}
+
+/* Mappings shared by both modes. They are declared on every mode scope so a
+   nested preview pane resolves them against its own palette. */
+:root:root,
+[data-mode][data-mode] {
+  --crystal-glass-filter: blur(24px) saturate(160%);
+  --crystal-backdrop:
+    radial-gradient(70% 60% at 0% 0%, var(--crystal-wash), transparent 70%),
+    linear-gradient(180deg, var(--crystal-page-sheen) 0%, var(--crystal-page) 62%);
+  --crystal-radius-card: 20px;
+  --crystal-radius-field: 12px;
+
+  --sem-color-bg-app: var(--crystal-page);
+  --sem-color-bg-surface: var(--crystal-surface);
+  --sem-color-bg-surface-raised: var(--crystal-surface-strong);
+  --sem-color-bg-hover: var(--crystal-fill-hover);
+  --sem-color-bg-active: var(--crystal-fill-active);
+  --sem-color-bg-selected: var(--crystal-fill-active);
+  --sem-color-bg-selected-resting: var(--crystal-fill-hover);
+  --sem-color-text-primary: var(--crystal-ink);
+  --sem-color-text-muted: var(--crystal-ink-2);
+  --sem-color-text-subtle: var(--crystal-ink-3);
+  --sem-color-text-disabled: var(--crystal-ink-3);
+  --sem-color-border-subtle: var(--crystal-hairline);
+  --sem-color-border-focus: var(--crystal-accent);
+  --sem-color-accent-primary: var(--crystal-accent);
+  --sem-color-accent-hover: var(--crystal-accent-hover);
+  --sem-color-accent-soft: var(--crystal-tint);
+  --sem-color-accent-soft-strong: var(--crystal-tint-strong);
+  --sem-color-status-neutral: var(--crystal-ink-2);
+  --sem-color-status-good: var(--crystal-ok);
+  --sem-color-status-warn: var(--crystal-warn);
+  --sem-color-status-danger: var(--crystal-error);
+  --sem-color-diff-added: var(--crystal-ok);
+  --sem-color-diff-removed: var(--crystal-error);
+  --sem-shadow-drawer: var(--crystal-shadow-float);
+  --sem-shadow-popover: var(--crystal-shadow-float);
+  --sem-font-family-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --sem-font-family-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace;
+  --sem-radius-chip: 999px;
+  --sem-radius-control: 10px;
+  --sem-radius-overlay: 14px;
+  --sem-radius-shell: 14px;
+  --sem-radius-shell-lg: 20px;
+  --sem-glass-blur: 24px;
+  --sem-glass-opacity: 0.62;
+  --sem-glass-saturation: 1.6;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root:root,
+  [data-mode][data-mode] { --crystal-glass-filter: none; }
+}

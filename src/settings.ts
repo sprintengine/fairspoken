@@ -196,7 +196,6 @@ const remoteStatus = required<HTMLElement>("remoteStatus");
 const remoteTest = required<HTMLButtonElement>("remoteTest");
 const tailnetScan = required<HTMLButtonElement>("tailnetScan");
 const tailnetStatus = required<HTMLElement>("tailnetStatus");
-const tailnetStatusDefault = tailnetStatus.textContent ?? "";
 const tailnetHosts = required<HTMLElement>("tailnetHosts");
 const tailnetAddress = required<HTMLInputElement>("tailnetAddress");
 const tailnetProbe = required<HTMLButtonElement>("tailnetProbe");
@@ -205,6 +204,7 @@ const tailnetPairHelp = required<HTMLElement>("tailnetPairHelp");
 const tailnetPassword = required<HTMLInputElement>("tailnetPassword");
 const tailnetPair = required<HTMLButtonElement>("tailnetPair");
 const tailnetPairCancel = required<HTMLButtonElement>("tailnetPairCancel");
+const remoteManual = required<HTMLDetailsElement>("remoteManual");
 const cloudPanel = required<HTMLElement>("cloudPanel");
 const cloudAuthToken = required<HTMLInputElement>("cloudAuthToken");
 const cloudStatus = required<HTMLElement>("cloudStatus");
@@ -434,7 +434,8 @@ function applyToForm(settings: Settings): void {
   }
   modelSelect.value = settings.model;
   const speechName = document.getElementById("selectedSpeechModel");
-  if (speechName) speechName.textContent = `${settings.model === "parakeet-ultra" ? "Moondream" : settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
+  // The select already names the model; this line only adds who made it.
+  if (speechName) speechName.textContent = settings.model === "parakeet-ultra" ? "Moondream" : settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI";
   const polishName = document.getElementById("selectedPolishModel");
   if (polishName) {
     polishName.textContent = settings.polishLocalModelPath
@@ -489,25 +490,22 @@ function updatePolishUi(settings: Settings): void {
   const hasToken = local || (cloudAvailable && settings.cloudAuthToken.trim() !== "");
   polishEnabled.disabled = !hasToken;
   polishHelp.textContent = local
-    ? settings.transcriptionLocation === "local"
-      ? "Cleans previews as you dictate locally, then runs a final pass. Manage local model downloads in Models."
-      : "Runs a final cleanup pass on this device after remote transcription finishes. Manage downloads in Models."
-    : !cloudAvailable ? "Fairspoken Cloud is not available in this build. Choose On this device."
-    : hasToken ? "Sends transcript text to Fairspoken Cloud for cleanup. Speech transcription can stay local."
-    : "Add your Fairspoken Cloud token below to enable cloud cleanup.";
+    ? "Removes fillers and self-corrections, on this device."
+    : !cloudAvailable ? "Fairspoken Cloud is not in this build. Choose This device."
+    : hasToken ? "Sends transcript text, never audio, to Fairspoken Cloud."
+    : "Add a Fairspoken Cloud token below to turn this on.";
   polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local || !cloudAvailable);
   document.getElementById("polishLocalModelRow")?.toggleAttribute("hidden", !local);
   document.getElementById("polishDeveloperPanel")?.toggleAttribute("hidden", !local);
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
   // The format decision reads the focused app through macOS Accessibility.
   polishFormatPanel.hidden = polishTonesPanel.hidden || !isMacOS();
-  formatAiDetectionHelp.textContent = "When no built-in rule knows a website or app, ask "
-    + (local ? "the local polish model" : "Fairspoken Cloud")
-    + " once which format fits, from the app name, window title, site address and field label"
-    + (local ? " (all on this device)" : ", which are sent to Fairspoken Cloud")
-    + ". Only the site or app and its format are saved, in the list below.";
-  contextAwarenessHelp.textContent = "On macOS, reads vocabulary from the focused window at recording start and limited text before the caret for final cleanup. No screenshots or continuous screen reading. "
-    + (local ? "Cleanup context stays on this device." : "When cloud cleanup runs, this context is sent with the transcript to Fairspoken Cloud.");
+  formatAiDetectionHelp.textContent = local
+    ? "Asks the polish model once per site or app, on this device."
+    : "Asks Fairspoken Cloud once per site or app, sending its name and title.";
+  contextAwarenessHelp.textContent = local
+    ? "Reads text near your cursor to spell names right. Stays on this device."
+    : "Reads text near your cursor to spell names right. Sent to Fairspoken Cloud with polish.";
 }
 
 // Mirror of the Rust normalization: only known categories and tones survive,
@@ -898,7 +896,7 @@ function updateSuperModeUi(): void {
   superModeRow.hidden = location === "cloud" || (local && !parakeet);
   superModeModelRow.hidden = !local || !parakeet || superModeSelect.value === "off";
   superModeHelp.textContent = location === "remote-host"
-    ? "Asks your host to also run Whisper on the same audio and merge the two. The host runs it only when it serves both engines and has spare workers, and reports whether it did. Auto and On both ask."
+    ? "Asks your host to add Whisper when it serves both engines and has room."
     : superModeHelpLocal;
 }
 
@@ -911,15 +909,22 @@ function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
   remoteHostPanel.hidden = location !== "remote-host";
   cloudPanel.hidden = location !== "cloud";
   if (location === "remote-host") {
-    remoteStatus.textContent = currentSettings.remoteUrl ? "Remote host not checked" : "Remote host not configured";
+    remoteStatus.textContent = currentSettings.remoteUrl ? hostLabel(currentSettings.remoteUrl) : "Not connected";
+    // Nothing to connect to yet: open on the list of hosts, not an empty form.
+    if (!currentSettings.remoteUrl && !scannedOnce) void findTailnetHosts().catch(reportAsyncError);
   }
   if (location === "cloud") {
     cloudStatus.textContent = !cloudAvailable
-      ? "Fairspoken Cloud is not available in this build. Choose Local or My host."
+      ? "Fairspoken Cloud is not in this build."
       : currentSettings.cloudAuthToken
-      ? "Allowance: shown after first dictation"
-      : "Paste a token to enable Fairspoken Cloud";
+      ? "Allowance appears after your first dictation."
+      : "Paste a token to start.";
   }
+}
+
+// "https://studio-mac.tail1234.ts.net:7861/" reads as "studio-mac.tail1234.ts.net:7861".
+function hostLabel(url: string): string {
+  try { return new URL(url).host || url; } catch { return url; }
 }
 
 // Both remote targets speak the same health protocol, so one test flow serves
@@ -928,26 +933,29 @@ async function testRemoteHost(statusEl: HTMLElement, buttonEl: HTMLButtonElement
   const saved = await persistSettings();
   if (!saved) return;
   buttonEl.disabled = true;
-  statusEl.textContent = `Checking ${label}...`;
+  // The host row names the host it is talking about; the cloud row needs no name.
+  const prefix = statusEl === remoteStatus && currentSettings.remoteUrl ? `${hostLabel(currentSettings.remoteUrl)} · ` : "";
+  statusEl.textContent = `${prefix}Checking…`;
   try {
     const health = await invoke<RemoteHealth>("test_remote_transcription_host");
-    statusEl.textContent = health.ok ? `Reachable (${health.mode})` : "Unavailable";
+    statusEl.textContent = `${prefix}${health.ok ? `Connected · ${health.mode}` : "Unavailable"}`;
     addEvent(health.ok ? "info" : "warning", `${label} ${health.ok ? "reachable" : "unavailable"}: ${health.backend}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    statusEl.textContent = `${label} unavailable`;
+    statusEl.textContent = `${prefix}Unavailable`;
     addEvent("error", message);
   } finally {
     buttonEl.disabled = false;
   }
 }
 
-// Finding a host: a tailnet scan or a typed name lists hosts; picking one
-// pairs with its password (or saves an open host's URL), then runs the
-// normal connection test. A host with only a token falls back to the
-// Token field below.
+// Finding a host: a tailnet scan (run on its own the first time My host is
+// chosen) or a typed name lists hosts; picking one pairs with its password
+// (or saves an open host's URL), then runs the normal connection test. A host
+// with only a token opens the manual address fields for its token.
 let pairingHost: DiscoveredHost | null = null;
 let tailnetBusy = false;
+let scannedOnce = false;
 
 function setTailnetBusy(busy: boolean): void {
   tailnetBusy = busy;
@@ -967,37 +975,47 @@ function renderTailnetHosts(hosts: DiscoveredHost[]): void {
     row.type = "button";
     row.className = "ds-list-row tailnet-host";
     row.setAttribute("role", "listitem");
+    row.dataset.url = host.url;
     const text = document.createElement("span"); text.className = "ds-list-row-text";
     const title = document.createElement("span"); title.className = "ds-list-row-title"; title.textContent = host.name;
     const detail = document.createElement("span"); detail.className = "ds-list-row-supporting";
-    detail.textContent = `${host.isSelf ? "This computer" : host.machine} · ${host.url}`;
+    detail.textContent = host.isSelf ? "This computer" : host.machine;
     text.append(title, detail);
     const access = document.createElement("span"); access.className = "ds-list-row-trailing"; access.textContent = hostAccess(host);
     row.append(text, access);
-    row.title = host.auth === "password" ? "Connect with the host's pairing password" : host.auth === "none" ? "Connect (this host needs no token)" : "Connect with the host's token";
+    row.title = host.url;
+    row.setAttribute("aria-current", String(host.url === currentSettings.remoteUrl));
     row.addEventListener("click", () => void chooseHost(host));
     return row;
   }));
   tailnetHosts.hidden = hosts.length === 0;
 }
 
+function markChosenHost(host: DiscoveredHost | null): void {
+  for (const row of tailnetHosts.querySelectorAll<HTMLElement>(".tailnet-host")) {
+    row.classList.toggle("is-chosen", host !== null && row.dataset.url === host.url);
+  }
+}
+
 function closePairing(): void {
   pairingHost = null;
   tailnetPassword.value = "";
   tailnetPairRow.hidden = true;
+  markChosenHost(null);
 }
 
 async function findTailnetHosts(): Promise<void> {
   if (tailnetBusy) return;
+  scannedOnce = true;
   closePairing();
   setTailnetBusy(true);
-  tailnetStatus.textContent = "Looking for hosts on your tailnet…";
+  tailnetStatus.textContent = "Scanning…";
   try {
     const hosts = await invoke<DiscoveredHost[]>("discover_tailnet_hosts");
     renderTailnetHosts(hosts);
     tailnetStatus.textContent = hosts.length
-      ? `Found ${hosts.length} host${hosts.length === 1 ? "" : "s"}. Choose one to connect.`
-      : "No Fairspoken hosts answered on your tailnet. Check that the host is running, or add it by name.";
+      ? ""
+      : "None found. Check the host is running, or enter its address.";
   } catch (error) {
     renderTailnetHosts([]);
     tailnetStatus.textContent = error instanceof Error ? error.message : String(error);
@@ -1013,15 +1031,18 @@ async function checkTypedHost(): Promise<void> {
   closePairing();
   setTailnetBusy(true);
   tailnetStatus.textContent = `Checking ${address}…`;
+  let found: DiscoveredHost | null = null;
   try {
-    const host = await invoke<DiscoveredHost>("probe_transcription_host", { address });
-    renderTailnetHosts([host]);
-    tailnetStatus.textContent = `${host.name} answered. Choose it to connect.`;
+    found = await invoke<DiscoveredHost>("probe_transcription_host", { address });
+    renderTailnetHosts([found]);
+    tailnetStatus.textContent = "";
   } catch (error) {
     tailnetStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     setTailnetBusy(false);
   }
+  // One answer: go straight on to its password (or connect an open host).
+  if (found) await chooseHost(found);
 }
 
 async function chooseHost(host: DiscoveredHost): Promise<void> {
@@ -1029,8 +1050,9 @@ async function chooseHost(host: DiscoveredHost): Promise<void> {
   if (host.auth === "password") {
     pairingHost = host;
     tailnetPassword.value = "";
-    tailnetPairHelp.textContent = `Enter the pairing password for ${host.name}. Its operator set it on the host's dashboard.`;
+    tailnetPairHelp.textContent = host.name;
     tailnetPairRow.hidden = false;
+    markChosenHost(host);
     tailnetPassword.focus();
     return;
   }
@@ -1039,13 +1061,13 @@ async function chooseHost(host: DiscoveredHost): Promise<void> {
     await connectHost(host, null);
     return;
   }
-  // A token but no pairing password: the user pastes the token as before.
+  // A token but no pairing password: open the manual fields for the token.
   if (remoteUrl.value.trim().replace(/\/+$/, "") !== host.url) remoteAuthToken.value = "";
   remoteUrl.value = host.url;
   const saved = await persistSettings();
-  tailnetStatus.textContent = saved
-    ? `${host.name} has no pairing password. Paste its token in the Token field.`
-    : tailnetStatusDefault;
+  markChosenHost(host);
+  if (saved) tailnetStatus.textContent = `${host.name} uses a token. Paste it below.`;
+  remoteManual.open = true;
   remoteAuthToken.focus();
 }
 
@@ -1057,7 +1079,8 @@ async function connectHost(host: DiscoveredHost, password: string | null): Promi
     currentSettings = normalizeSettings(saved);
     applyToForm(currentSettings);
     closePairing();
-    tailnetStatus.textContent = `Connected to ${host.name}.`;
+    tailnetStatus.textContent = "";
+    for (const row of tailnetHosts.querySelectorAll<HTMLElement>(".tailnet-host")) row.setAttribute("aria-current", String(row.dataset.url === currentSettings.remoteUrl));
     addEvent("info", `Transcription host set to ${host.name} (${host.url})`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

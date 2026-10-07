@@ -14,7 +14,7 @@
     <header class="titlebar" data-tauri-drag-region></header>
 
     <div class="workspace">
-      <!-- ── Sidebar ── -->
+      <!-- ── Sidebar: two glass capsules, places on top and personal below ── -->
       <aside class="sidebar" aria-label="App navigation">
         <nav class="nav" aria-label="Primary">
 <button class="nav-item ds-button ds-button--icon" type="button" data-screen="home" aria-label="Home" data-tooltip="Home" aria-current="page"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 11.5 12 5l8 6.5M6 10v9h12v-9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -43,7 +43,7 @@
           <div class="empty" id="homeEmpty" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19V9M9 19V5M14 19v-7M19 19v-11" stroke-linecap="round"/></svg>
             <div class="e-title">Start with your voice</div>
-            <div class="e-sub">Use your recording shortcut to dictate. Your words and time saved appear here.</div>
+            <div class="e-sub">Dictate with your shortcut. Your stats appear here.</div>
             <button class="btn btn-primary" data-open="speedtest" type="button">Run a speed test</button>
           </div>
 
@@ -53,103 +53,38 @@
               <div class="value num" id="statTimeSaved">—</div>
               <div class="sub" id="statTimeSavedSub"></div>
               <div class="hero-actions">
-                <button class="btn btn-primary" data-open="speedtest" type="button">Run a speed test</button>
-                <button class="btn btn-ghost btn-sm" data-open="voicetest" type="button">Test voice accuracy</button>
+                <button class="btn btn-primary" data-open="speedtest" type="button">Speed test</button>
+                <button class="btn" data-open="voicetest" type="button">Accuracy test</button>
               </div>
             </div>
             <section class="settings-section" aria-labelledby="usageTitle">
-              <h2 id="usageTitle">Usage</h2>
-              <div class="settings-card">
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Words dictated</div>
-                    <div class="row-help">Lifetime</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statTotalWords">0</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Spoken time</div>
-                    <div class="row-help">Lifetime</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statSpokenTime">0 m</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">This week</div>
-                    <div class="row-help" id="statWeekDelta"></div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statThisWeek">0</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Day streak</div>
-                    <div class="row-help" id="statBestStreak"></div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statStreak">0</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Speaking pace</div>
-                    <div class="row-help">Average words per minute</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statWpm">0</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Money saved</div>
-                    <div class="row-help" id="statMoneySavedMeta">vs cloud transcription</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statMoneySaved">$0</span></div>
-                </div>
-                <div class="row" id="statZeroEditTile" hidden>
-                  <div class="row-text">
-                    <div class="row-label">Zero-edit dictations</div>
-                    <div class="row-help" id="statZeroEditMeta">last 30 days</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="statZeroEdit">–</span></div>
-                </div>
+              <h2 id="usageTitle" class="sr-only">Usage</h2>
+              <div class="stat-grid">
+                <div class="stat"><div class="stat-label">Words dictated</div><div class="stat-value num" id="statTotalWords">0</div></div>
+                <div class="stat"><div class="stat-label">Spoken time</div><div class="stat-value num" id="statSpokenTime">0 m</div></div>
+                <div class="stat"><div class="stat-label">This week</div><div class="stat-value num" id="statThisWeek">0</div><div class="stat-meta" id="statWeekDelta"></div></div>
+                <div class="stat"><div class="stat-label">Day streak</div><div class="stat-value num" id="statStreak">0</div><div class="stat-meta" id="statBestStreak"></div></div>
+                <div class="stat"><div class="stat-label">Speaking pace</div><div class="stat-value num" id="statWpm">0</div><div class="stat-meta">words per minute</div></div>
+                <div class="stat"><div class="stat-label">Money saved</div><div class="stat-value num" id="statMoneySaved">$0</div><div class="stat-meta" id="statMoneySavedMeta">vs cloud transcription</div></div>
+                <div class="stat" id="statZeroEditTile" hidden><div class="stat-label">Zero-edit dictations</div><div class="stat-value num" id="statZeroEdit">–</div><div class="stat-meta" id="statZeroEditMeta">last 30 days</div></div>
               </div>
             </section>
             <section class="settings-section" aria-labelledby="performanceTitle" id="performanceSection" hidden>
-              <h2 id="performanceTitle">Performance</h2>
-              <p class="settings-section-help" id="perfSummary">Your last dictation</p>
-              <div class="settings-card">
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Wait after release</div>
-                    <div class="row-help" id="perfTotalMeta">Until the text is ready to insert</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="perfTotal">–</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Finishing transcription</div>
-                    <div class="row-help" id="perfTranscribeMeta">The last audio after you let go</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="perfTranscribe">–</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Speech model</div>
-                    <div class="row-help" id="perfModelMeta">Work done while you were talking</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="perfModel">–</span></div>
-                </div>
-                <div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Polish</div>
-                    <div class="row-help" id="perfPolishMeta">The pass at release</div>
-                  </div>
-                  <div class="row-control"><span class="num" id="perfPolish">–</span></div>
-                </div>
+              <div class="settings-section-header">
+                <h2 id="performanceTitle">Last dictation</h2>
+                <span class="settings-section-meta" id="perfSummary"></span>
+              </div>
+              <div class="stat-grid stat-grid--4">
+                <div class="stat"><div class="stat-label">Wait after release</div><div class="stat-value num" id="perfTotal">–</div><div class="stat-meta" id="perfTotalMeta"></div></div>
+                <div class="stat"><div class="stat-label">Final transcription</div><div class="stat-value num" id="perfTranscribe">–</div><div class="stat-meta" id="perfTranscribeMeta"></div></div>
+                <div class="stat"><div class="stat-label">Speech model</div><div class="stat-value num" id="perfModel">–</div><div class="stat-meta" id="perfModelMeta"></div></div>
+                <div class="stat"><div class="stat-label">Polish</div><div class="stat-value num" id="perfPolish">–</div><div class="stat-meta" id="perfPolishMeta"></div></div>
               </div>
             </section>
             <section class="settings-section" aria-labelledby="weekChartTitle">
               <h2 id="weekChartTitle">This week</h2>
-              <p class="settings-section-help">Words per day</p>
               <div class="settings-card">
-                <div class="chart" id="statChart"></div>
+                <div class="chart" id="statChart" aria-label="Words per day"></div>
               </div>
             </section>
           </div>
@@ -158,13 +93,12 @@
 
         <section class="screen" id="screen-profile" aria-label="Your profile">
           <div class="profile-content">
-            <div class="profile-heading"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><div><h2>Your profile</h2><p>On this device</p></div></div>
-            <p class="profile-summary">Your settings, dictionary and dictation history are stored on this device.</p>
+            <div class="profile-heading"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><div><h2>Your profile</h2><p>Everything stays on this device</p></div></div>
             <section class="settings-section" aria-label="Account">
               <div class="settings-card">
-                <div class="row"><div class="row-text"><div class="row-label">Appearance</div></div><div class="row-control"><button class="btn" type="button" data-route="settings" data-settings-target="appearance">Choose appearance</button></div></div>
-                <div class="row"><div class="row-text"><div class="row-label">Dictionary</div><div class="row-help">Your words, corrections and snippets.</div></div><div class="row-control"><button type="button" class="btn" data-route="dictionary">Open dictionary</button></div></div>
-                <div class="row"><div class="row-text"><div class="row-label">Preferences</div><div class="row-help">Microphone, shortcuts and privacy.</div></div><div class="row-control"><button type="button" class="btn" data-route="settings">Open settings</button></div></div>
+                <div class="row"><div class="row-text"><div class="row-label">Appearance</div></div><div class="row-control"><button class="btn" type="button" data-route="settings" data-settings-target="appearance">Change</button></div></div>
+                <div class="row"><div class="row-text"><div class="row-label">Dictionary</div></div><div class="row-control"><button type="button" class="btn" data-route="dictionary">Open</button></div></div>
+                <div class="row"><div class="row-text"><div class="row-label">Settings</div></div><div class="row-control"><button type="button" class="btn" data-route="settings">Open</button></div></div>
               </div>
             </section>
           </div>
@@ -183,49 +117,40 @@
           <div class="dict-stack">
             <section class="settings-section" aria-labelledby="suggestionsTitle" id="suggestionsSection" hidden>
               <h2 id="suggestionsTitle">Suggestions</h2>
-              <p class="settings-section-help">Fixes you made that Fairspoken will not apply on its own. Accept one to add it to your corrections.</p>
               <div class="settings-card" id="suggestionRows"></div>
             </section>
 
             <section class="settings-section" aria-labelledby="vocabTitle">
               <h2 id="vocabTitle">Vocabulary</h2>
-              <p class="settings-section-help">Names and terms to bias transcription</p>
               <div class="settings-card">
-                <form class="row" id="vocabAdd">
-                  <div class="row-text">
-                    <label class="row-label" for="vocabInput">Add a word</label>
-                  </div>
-                  <div class="row-control">
-                    <input id="vocabInput" class="setting-input w-md" type="text" placeholder="Add a word or name" aria-label="Add vocabulary word" autocomplete="off" />
-                    <button class="btn" type="submit">Add</button>
-                  </div>
+                <form class="row row--field" id="vocabAdd">
+                  <label class="sr-only" for="vocabInput">Add a word</label>
+                  <input id="vocabInput" class="setting-input" type="text" placeholder="Add a name or term" aria-label="Add vocabulary word" autocomplete="off" />
+                  <button class="btn" type="submit">Add</button>
                 </form>
                 <div class="chips" id="vocabChips"></div>
               </div>
             </section>
 
-            <section class="settings-section" aria-labelledby="packsTitle">
-              <h2 id="packsTitle">Packs</h2>
-              <p class="settings-section-help">Ready-made term lists for a field. Only the terms you seem to say are used, and they don't count toward your own words.</p>
-              <div class="settings-card" id="packRows"></div>
-            </section>
-
             <section class="settings-section" aria-labelledby="correctionsTitle">
               <div class="settings-section-header">
                 <h2 id="correctionsTitle">Corrections</h2>
-                <button class="btn" id="addCorrection" type="button">Add</button>
+                <button class="btn btn-sm" id="addCorrection" type="button">Add</button>
               </div>
-              <p class="settings-section-help">Replace a commonly mis-heard phrase with the right text.</p>
               <div class="settings-card" id="correctionRows"></div>
             </section>
 
             <section class="settings-section" aria-labelledby="snippetsTitle">
               <div class="settings-section-header">
                 <h2 id="snippetsTitle">Snippets</h2>
-                <button class="btn" id="addSnippet" type="button">Add</button>
+                <button class="btn btn-sm" id="addSnippet" type="button">Add</button>
               </div>
-              <p class="settings-section-help">Say a short trigger to expand it into longer text.</p>
               <div class="settings-card" id="snippetRows"></div>
+            </section>
+
+            <section class="settings-section" aria-labelledby="packsTitle">
+              <h2 id="packsTitle">Packs</h2>
+              <div class="settings-card" id="packRows"></div>
             </section>
 
             <section class="settings-section" aria-labelledby="learningTitle">
@@ -234,7 +159,7 @@
                 <div class="row">
                   <div class="row-text">
                     <label class="row-label" for="learnFromEdits">Learn from my corrections</label>
-                    <div class="row-help">On macOS, when you fix a dictated word where it landed, misheard names join your vocabulary and a fix you make twice becomes a correction. Only the word and its fix are kept. Medicine names are only ever suggested. Turn this off for clinical dictation unless you review what it learns.</div>
+                    <div class="row-help">Names you fix join your vocabulary; medicine names are only suggested.</div>
                   </div>
                   <div class="row-control">
                     <input id="learnFromEdits" class="switch" type="checkbox" role="switch" />
@@ -261,31 +186,22 @@
         </section>
 
         <section class="screen" id="screen-models" aria-label="Models">
-          <div class="models-toolbar">
-            <p>Choose what listens and what cleans up your words.</p>
-            <button class="ds-button ds-button--outline" id="refreshModels" type="button">Refresh status</button>
-          </div>
-          <p id="modelFeedback" class="model-feedback" role="status" aria-live="polite"></p>
-          <section class="settings-section" aria-labelledby="modelSearchTitle">
-            <h2 id="modelSearchTitle">Find models</h2>
-            <div class="settings-card">
-              <div class="row row--stacked">
-                <div class="row-text">
-                  <label class="row-label" for="modelSearch">Search</label>
-                  <div class="row-help" id="modelSearchStatus" role="status" aria-live="polite">Search speech models on this device and Hugging Face.</div>
-                </div>
-                <div class="row-control">
-                  <span class="ds-field-box" id="modelSearchBox">
-                    <svg class="model-search-hint" viewBox="0 0 11 11" fill="none" aria-hidden="true"><circle cx="4.5" cy="4.5" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M7 7l2.5 2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-                    <input id="modelSearch" class="ds-input ds-input--seamless" type="search" placeholder="Search models or publishers…" autocomplete="off" maxlength="120" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="modelSearchListbox" aria-label="Search speech models on this device and Hugging Face." aria-describedby="modelSearchStatus" />
-                    <button type="button" id="modelSearchClear" class="model-search-clear" hidden>Clear</button>
-                  </span>
-                </div>
+          <section class="settings-section" aria-label="Find models">
+            <div class="settings-card model-search-card">
+              <div class="row row--field">
+                <span class="ds-field-box" id="modelSearchBox">
+                  <svg class="model-search-hint" viewBox="0 0 11 11" fill="none" aria-hidden="true"><circle cx="4.5" cy="4.5" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M7 7l2.5 2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                  <input id="modelSearch" class="ds-input ds-input--seamless" type="search" placeholder="Search models on this device and Hugging Face" autocomplete="off" maxlength="120" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="modelSearchListbox" aria-label="Search speech models on this device and Hugging Face." aria-describedby="modelSearchStatus" />
+                  <button type="button" id="modelSearchClear" class="model-search-clear" hidden>Clear</button>
+                </span>
+                <button class="btn" id="refreshModels" type="button">Refresh</button>
               </div>
+              <div class="model-search-status" id="modelSearchStatus" role="status" aria-live="polite"></div>
               <div id="modelSearchListbox" class="ds-popover model-search-popover" role="listbox" aria-label="Model search results" hidden></div>
               <div id="modelSearchResults" aria-busy="false"></div>
             </div>
           </section>
+          <p id="modelFeedback" class="model-feedback" role="status" aria-live="polite"></p>
           <section class="settings-section" aria-labelledby="dictationModelsTitle">
             <h2 id="dictationModelsTitle">Dictation</h2>
             <p class="settings-section-help" id="dictationProvider"></p>
@@ -293,611 +209,593 @@
           </section>
           <section class="settings-section" aria-labelledby="polishModelsTitle">
             <h2 id="polishModelsTitle">Text polish</h2>
-            <p class="settings-section-help" id="polishProvider"></p>
             <div class="settings-card" id="polishModelsCard">
               <div class="row">
                 <div class="row-text">
-                  <div class="row-label">Cleanup</div>
-                  <div class="row-help">Turn polish off, or send cleanup to the cloud.</div>
+                  <div class="row-label">Polish</div>
+                  <div class="row-help" id="polishProvider"></div>
                 </div>
                 <div class="row-control" id="polishProviderActions"></div>
               </div>
               <div id="polishModels"></div>
             </div>
-            <p class="section-note">With local dictation, polish cleans up live previews, then makes a final pass before copying. Remote dictation receives the final pass when its transcript arrives. Cleanup models load as you dictate and unload after five minutes idle. Memory figures are estimates. Very long dictations keep the complete original text when they exceed the cleanup limit.</p>
           </section>
         </section>
 
         <!-- ════ SETTINGS (driven by settings.ts) ════ -->
-        <section class="screen" id="screen-settings"><div class="settings-workspace"><nav class="settings-navigation" aria-label="Settings categories"><button type="button" class="settings-nav-item ds-list-row" data-settings-category="general" aria-controls="settings-general" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>General</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="audio" aria-controls="settings-audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg><span>Audio</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="transcription" aria-controls="settings-transcription"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M12 6v14M8 20h8"/></svg><span>Transcription</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="polish" aria-controls="settings-polish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 20 11-11 3 3L7 23M16 2v4M20 6h3M5 3v6M2 6h6"/></svg><span>Text polish</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="keybindings" aria-controls="settings-keybindings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h1m3 0h1m3 0h1M7 16h10"/></svg><span>Keybindings</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="appearance" aria-controls="settings-appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18"/></svg><span>Appearance</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="updates" aria-controls="settings-updates" id="updatesNavItem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3M4.5 12a7.5 7.5 0 0 1 12.8-5.3"/><path d="M17.5 3.5v3.3h-3.3M6.5 20.5v-3.3h3.3"/></svg><span>Updates</span><span class="ds-badge-count ds-badge-count--accent settings-nav-badge" id="updatesNavBadge" aria-hidden="true" hidden>1</span></button></nav><div class="settings-content"><form class="settings-form" id="settingsForm"><section class="settings-page" data-settings-page="general" id="settings-general" aria-label="General"><section class="settings-section" aria-labelledby="overlayTitle"><h2 id="overlayTitle">Overlay</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="alwaysOnTop">Keep pill on top</label>
-                  </div>
-                  <div class="row-control">
-                    <input id="alwaysOnTop" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="feedbackTitle"><h2 id="feedbackTitle">Feedback</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="interactionSounds">Interaction sounds</label>
-                    <div class="row-help">A soft chime when recording starts and stops.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="interactionSounds" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="notesTitle"><h2 id="notesTitle">Notes</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="noteRetentionMinutes">Auto-delete notes</label>
-                    <div class="row-help">Unpinned notes are removed after this long; pinned notes are kept.</div>
-                  </div>
-                  <div class="row-control">
-                    <select id="noteRetentionMinutes" class="setting-select w-sm">
-                      <option value="0">Never</option>
-                      <option value="15">After 15 minutes</option>
-                      <option value="60">After 1 hour</option>
-                      <option value="480">After 8 hours</option>
-                      <option value="1440">After 1 day</option>
-                      <option value="10080">After 1 week</option>
-                      <option value="43200">After 30 days</option>
-                    </select>
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="trainingDataTitle"><h2 id="trainingDataTitle">Training data</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="trainingCapture">Keep my dictations to improve models</label>
-                    <div class="row-help">Keeps each dictation's audio and text so you can export them to fine-tune speech or polish models.</div>
-                    <div class="row-help training-warning">Recordings may contain sensitive or patient information. They stay on this device and are never uploaded; only an export you make yourself leaves it.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="trainingCapture" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="trainingRetentionDays">Keep recordings</label>
-                  </div>
-                  <div class="row-control">
-                    <select id="trainingRetentionDays" class="setting-select w-sm">
-                      <option value="30">For 30 days</option>
-                      <option value="90">For 90 days</option>
-                      <option value="0">Until I delete them</option>
-                    </select>
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Kept dictations</div>
-                    <div class="row-help" id="trainingDataSummary" aria-live="polite">None yet.</div>
-                  </div>
-                  <div class="row-control">
-                    <button class="btn" id="trainingDataExport" type="button">Export…</button>
-                    <button class="btn btn-ghost" id="trainingDataDelete" type="button">Delete all</button>
-                  </div>
-                </div>
-</div></section></section>
-<section class="settings-page" data-settings-page="audio" id="settings-audio" aria-label="Audio" hidden><section class="settings-section" aria-labelledby="microphoneTitle"><h2 id="microphoneTitle">Microphone</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="audioDeviceSelect">Microphone</label>
-                  </div>
-                  <div class="row-control mic-control">
-                    <div class="mic-line">
-                      <button class="icon-btn" id="refreshDevices" type="button" aria-label="Refresh microphones" title="Refresh microphones">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12A8 8 0 0 1 17.7 6.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                          <path d="M20 5v5h-5M4 19v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                      </button>
-                      <select id="audioDeviceSelect" class="setting-select w-lg">
-                        <option value="">Default microphone</option>
-                      </select>
-                    </div>
-                    <div class="level" aria-hidden="true"><span id="inputMeter"></span></div>
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="inputGain">Input gain</label>
-                    <div class="row-help">Boosts a quiet microphone before transcription.</div>
-                  </div>
-                  <div class="row-control">
-                    <select id="inputGain" class="setting-select w-xs">
-                      <option value="1">1×</option>
-                      <option value="2">2×</option>
-                      <option value="3">3×</option>
-                      <option value="4">4×</option>
-                      <option value="6">6×</option>
-                    </select>
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="processingTitle"><h2 id="processingTitle">Processing</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="noiseSuppression">Noise suppression</label>
-                  </div>
-                  <div class="row-control">
-                    <input id="noiseSuppression" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="echoCancellation">Echo cancellation</label>
-                  </div>
-                  <div class="row-control">
-                    <input id="echoCancellation" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="audioRecordingTitle"><h2 id="audioRecordingTitle">Recording</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="maxRecordingSeconds">Max recording</label>
-                    <div class="row-help">Dictation stops automatically at this limit.</div>
-                  </div>
-                  <div class="row-control">
-                    <select id="maxRecordingSeconds" class="setting-select w-sm">
-                      <option value="30">30 seconds</option>
-                      <option value="60">1 minute</option>
-                      <option value="120">2 minutes</option>
-                      <option value="180">3 minutes</option>
-                      <option value="300">5 minutes</option>
-                      <option value="600">10 minutes</option>
-                    </select>
-                  </div>
-                </div><div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Voice accuracy test</div>
-                    <div class="row-help">Read a passage and compare what the transcriber heard.</div>
-                  </div>
-                  <div class="row-control">
-                    <button class="btn" data-open="voicetest" type="button">Run test</button>
-                  </div>
-                </div>
-</div></section></section>
-<section class="settings-page" data-settings-page="transcription" id="settings-transcription" aria-label="Transcription" hidden><section class="settings-section" aria-labelledby="serviceTitle"><h2 id="serviceTitle">Service</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label" id="locationLabel">Location</div>
-                    <div class="row-help">Choose where your audio is transcribed.</div>
-                  </div>
-                  <div class="row-control">
-                    <div class="seg" id="locationSeg" role="group" aria-labelledby="locationLabel">
-                      <button type="button" data-value="local" aria-pressed="true">Local</button>
-                      <button type="button" data-value="remote-host" aria-pressed="false">My host</button>
-                      <button type="button" data-value="cloud" aria-pressed="false">Fairspoken Cloud</button>
-                    </div>
-                  </div>
-                </div><div class="row" id="modelField">
-                  <div class="row-text">
-                    <label class="row-label" for="modelSelect">Model</label>
-                    <div class="row-help model-identity" id="speechModelIdentity"><span id="selectedSpeechModel">Parakeet TDT 0.6B v3</span></div>
-                  </div>
-                  <div class="row-control">
-                    <span class="meta num" id="modelSize">RAM ~2.5G</span>
-                    <select id="modelSelect" class="setting-select w-md">
-                      <option value="parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
-                      <option value="parakeet-ultra">Parakeet Ultra 0.6B</option>
-                      <option value="parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 · English</option>
-                    </select>
-                  </div>
-                </div><div class="model-state" id="modelDownload" data-state="idle" aria-live="polite">
-                  <span class="status num" id="modelDownloadStatus">Checking model…</span>
-                  <div class="progress"><span id="modelDownloadBar"></span></div>
-                  <button class="btn" id="modelPrepare" type="button">Download</button>
-                </div><div class="row"><div class="row-text"><div class="row-label">Model library</div><div class="row-help">Download and manage speech models.</div></div><div class="row-control"><button class="btn" type="button" data-route="models">Manage models</button></div></div><div id="remoteHostPanel" aria-live="polite" hidden>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-label">Find a host</div>
-                      <div class="row-help" id="tailnetStatus">Look for Fairspoken hosts on your Tailscale network.</div>
-                    </div>
-                    <div class="row-control">
-                      <button class="btn" id="tailnetScan" type="button">Find hosts on my tailnet</button>
-                    </div>
-                  </div>
-                  <div class="tailnet-hosts" id="tailnetHosts" role="list" aria-label="Hosts found" hidden></div>
-                  <div class="row">
-                    <div class="row-text">
-                      <label class="row-label" for="tailnetAddress">Add by name</label>
-                      <div class="row-help">A machine name, or name:port for a host on another port.</div>
-                    </div>
-                    <div class="row-control">
-                      <input id="tailnetAddress" class="setting-input mono w-md" type="text" placeholder="studio-mac" autocomplete="off" autocapitalize="off" spellcheck="false" />
-                      <button class="btn" id="tailnetProbe" type="button">Check</button>
-                    </div>
-                  </div>
-                  <div class="row" id="tailnetPairRow" hidden>
-                    <div class="row-text">
-                      <label class="row-label" for="tailnetPassword">Pairing password</label>
-                      <div class="row-help" id="tailnetPairHelp">Ask the host's operator for its pairing password.</div>
-                    </div>
-                    <div class="row-control">
-                      <input id="tailnetPassword" class="setting-input w-md" type="password" autocomplete="off" />
-                      <button class="btn btn-ghost" id="tailnetPairCancel" type="button">Cancel</button>
-                      <button class="btn btn-primary" id="tailnetPair" type="button">Connect</button>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <label class="row-label" for="remoteUrl">Host URL</label>
-                      <div class="row-help">The model is whatever the host operator configured.</div>
-                    </div>
-                    <div class="row-control">
-                      <input id="remoteUrl" class="setting-input mono w-lg" type="url" placeholder="https://host.example.com" />
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <label class="row-label" for="remoteAuthToken">Token</label>
-                    </div>
-                    <div class="row-control">
-                      <input id="remoteAuthToken" class="setting-input w-lg" type="password" autocomplete="off" />
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <label class="row-label" for="remoteTimeoutSeconds">Timeout</label>
-                    </div>
-                    <div class="row-control">
-                      <input id="remoteTimeoutSeconds" class="setting-input num w-xs" type="number" min="5" max="300" step="5" />
-                      <span class="meta">seconds</span>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="status-text" id="remoteStatus">Remote host not checked</div>
-                    </div>
-                    <div class="row-control">
-                      <button class="btn" id="remoteTest" type="button">Test connection</button>
-                    </div>
-                  </div>
-                </div><div id="cloudPanel" aria-live="polite" hidden>
-                  <div class="row">
-                    <div class="row-text">
-                      <label class="row-label" for="cloudAuthToken">Token</label>
-                      <div class="row-help">Enter your Fairspoken Cloud token.</div>
-                    </div>
-                    <div class="row-control">
-                      <input id="cloudAuthToken" class="setting-input w-lg" type="password" autocomplete="off" />
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-help">Audio is sent to Fairspoken Cloud for transcription.</div>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="status-text" id="cloudStatus">Allowance: shown after first dictation</div>
-                    </div>
-                    <div class="row-control">
-                      <button class="btn" id="cloudTest" type="button">Test connection</button>
-                    </div>
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="recognitionTitle"><h2 id="recognitionTitle">Recognition</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="langSelect">Language</label>
-                  </div>
-                  <div class="row-control">
-                    <select id="langSelect" class="setting-select w-md">
-                      <option value="auto">Auto-detect</option>
-                      <option value="en">English</option>
-                      <option value="es">Spanish</option>
-                      <option value="fr">French</option>
-                      <option value="de">German</option>
-                      <option value="it">Italian</option>
-                      <option value="pt">Portuguese</option>
-                      <option value="zh">Chinese</option>
-                      <option value="ja">Japanese</option>
-                    </select>
-                  </div>
-                </div>
-<div class="row" id="useGpuRow">
-                  <div class="row-text">
-                    <label class="row-label" for="useGpu">GPU acceleration</label>
-                    <div class="row-help">Runs the Whisper engine on the GPU (whisper builds only); turn off to force CPU.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="useGpu" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-<div class="row" id="superModeRow">
-                  <div class="row-text">
-                    <label class="row-label" for="superModeSelect">Super mode</label>
-                    <div class="row-help" id="superModeHelp">Also runs a Whisper model on the same audio and keeps Parakeet's text except where Whisper spells one of your dictionary terms. That is roughly twice the speech work and the Whisper model's memory on top of Parakeet's, so expect more battery drain. Auto runs it only on mains power. Install the Whisper model in Models first.</div>
-                  </div>
-                  <div class="row-control">
-                    <select id="superModeSelect" class="setting-select w-sm">
-                      <option value="off">Off</option>
-                      <option value="auto">Auto</option>
-                      <option value="on">On</option>
-                    </select>
-                  </div>
-                </div>
-<div class="row" id="superModeModelRow">
-                  <div class="row-text">
-                    <label class="row-label" for="superModeModelSelect">Super mode Whisper model</label>
-                    <div class="row-help">Extra memory while dictating: Tiny about 0.2 GB, Base about 0.3 GB, Small about 0.8 GB, Large v3 Turbo about 2 GB.</div>
-                  </div>
-                  <div class="row-control">
-                    <select id="superModeModelSelect" class="setting-select w-md">
-                      <option value="tiny">Whisper Tiny</option>
-                      <option value="base">Whisper Base</option>
-                      <option value="small">Whisper Small</option>
-                      <option value="large-v3-turbo">Whisper Large v3 Turbo</option>
-                    </select>
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="outputTitle"><h2 id="outputTitle">Output</h2><div class="settings-card">
-<div class="row" id="insertAtCursorRow">
-                  <div class="row-text">
-                    <label class="row-label" for="insertAtCursor">Insert at cursor</label>
-                    <div class="row-help">Paste the transcript into the focused app. Needs the macOS Accessibility permission.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="insertAtCursor" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-<div class="row" id="accessibilityInsertRow">
-                  <div class="row-text">
-                    <label class="row-label" for="accessibilityInsert">Insert without pasting</label>
-                    <div class="row-help">Write the transcript straight into native text fields through Accessibility instead of pressing ⌘V. Electron apps, terminals and web pages ignore it, so leave this off unless you only dictate into native Mac apps.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="accessibilityInsert" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-</div></section></section>
-<section class="settings-page" data-settings-page="polish" id="settings-polish" aria-label="Text polish" hidden><section class="settings-section" aria-labelledby="cleanupTitle"><h2 id="cleanupTitle">Cleanup</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="polishEnabled">AI polish</label>
-                    <div class="row-help" id="polishHelp">Cleans fillers and self-corrections after transcription. Sends your transcript text, the destination app's name and, when context awareness is on, up to 500 characters of text around your cursor (never audio) to Fairspoken Cloud. Nothing is stored.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="polishEnabled" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div><div class="row"><div class="row-text"><label class="row-label" for="polishProviderSelect">Provider</label><div class="row-help">Choose where your transcript is polished.</div></div><div class="row-control"><select id="polishProviderSelect" class="setting-select w-md"><option value="local">On this device</option><option value="cloud">Fairspoken Cloud</option></select></div></div><div class="row" id="polishLocalModelRow"><div class="row-text"><div class="row-label">Local model</div><div class="row-help"><span class="model-identity" id="polishModelIdentity"><span id="selectedPolishModel">Qwen3.5 0.8B</span></span></div></div><div class="row-control"><button class="btn" type="button" data-route="models">Manage models</button></div></div><div id="polishCloudPanel" data-polish-cloud hidden><div class="row"><div class="row-text"><label class="row-label" for="polishCloudAuthToken">Cloud token</label><div class="row-help">Uses the same token as cloud dictation. Your speech model can stay local.</div></div><div class="row-control"><input id="polishCloudAuthToken" class="setting-input w-lg" type="password" autocomplete="off" /></div></div></div>
-</div></section><section id="polishTonesPanel" hidden class="settings-section" aria-labelledby="writing-styleTitle"><h2 id="writing-styleTitle">Writing style</h2><div class="settings-card">
+        <section class="screen" id="screen-settings"><div class="settings-workspace"><nav class="settings-navigation" aria-label="Settings categories"><button type="button" class="settings-nav-item ds-list-row" data-settings-category="general" aria-controls="settings-general" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>General</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="audio" aria-controls="settings-audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg><span>Audio</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="transcription" aria-controls="settings-transcription"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M12 6v14M8 20h8"/></svg><span>Transcription</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="polish" aria-controls="settings-polish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 20 11-11 3 3L7 23M16 2v4M20 6h3M5 3v6M2 6h6"/></svg><span>Text polish</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="keybindings" aria-controls="settings-keybindings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h1m3 0h1m3 0h1M7 16h10"/></svg><span>Keybindings</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="appearance" aria-controls="settings-appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18"/></svg><span>Appearance</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="updates" aria-controls="settings-updates" id="updatesNavItem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3M4.5 12a7.5 7.5 0 0 1 12.8-5.3"/><path d="M17.5 3.5v3.3h-3.3M6.5 20.5v-3.3h3.3"/></svg><span>Updates</span><span class="ds-badge-count ds-badge-count--accent settings-nav-badge" id="updatesNavBadge" aria-hidden="true" hidden>1</span></button></nav><div class="settings-content"><form class="settings-form" id="settingsForm">
 
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-label" id="polishToneMessagingLabel">Messaging tone</div>
-                      <div class="row-help">Slack, iMessage, WhatsApp, Discord…</div>
-                    </div>
-                    <div class="row-control">
-                      <div class="seg" id="polishToneMessaging" role="group" aria-labelledby="polishToneMessagingLabel">
-                        <button type="button" data-value="default" aria-pressed="true">Default</button>
-                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
-                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
-                        <button type="button" data-value="off" aria-pressed="false">Off</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-label" id="polishToneEmailLabel">Email tone</div>
-                      <div class="row-help">Mail, Outlook, Superhuman…</div>
-                    </div>
-                    <div class="row-control">
-                      <div class="seg" id="polishToneEmail" role="group" aria-labelledby="polishToneEmailLabel">
-                        <button type="button" data-value="default" aria-pressed="true">Default</button>
-                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
-                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
-                        <button type="button" data-value="off" aria-pressed="false">Off</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-label" id="polishToneDocsLabel">Documents tone</div>
-                      <div class="row-help">Pages, Word, Notes, Obsidian, Notion…</div>
-                    </div>
-                    <div class="row-control">
-                      <div class="seg" id="polishToneDocs" role="group" aria-labelledby="polishToneDocsLabel">
-                        <button type="button" data-value="default" aria-pressed="true">Default</button>
-                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
-                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
-                        <button type="button" data-value="off" aria-pressed="false">Off</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-label" id="polishToneCodeLabel">Code editors tone</div>
-                      <div class="row-help">VS Code, Cursor, JetBrains, Zed, Xcode… Terminals never get polish.</div>
-                    </div>
-                    <div class="row-control">
-                      <div class="seg" id="polishToneCode" role="group" aria-labelledby="polishToneCodeLabel">
-                        <button type="button" data-value="default" aria-pressed="true">Default</button>
-                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
-                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
-                        <button type="button" data-value="off" aria-pressed="false">Off</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="row">
-                    <div class="row-text">
-                      <div class="row-label" id="polishToneOtherLabel">Everything else</div>
-                      <div class="row-help">Unrecognized apps and websites. A website with a known format (Gmail, Slack, Google Docs…) uses that format's row.</div>
-                    </div>
-                    <div class="row-control">
-                      <div class="seg" id="polishToneOther" role="group" aria-labelledby="polishToneOtherLabel">
-                        <button type="button" data-value="default" aria-pressed="true">Default</button>
-                        <button type="button" data-value="casual" aria-pressed="false">Casual</button>
-                        <button type="button" data-value="formal" aria-pressed="false">Formal</button>
-                        <button type="button" data-value="off" aria-pressed="false">Off</button>
-                      </div>
-                    </div>
-                  </div>
-
-</div></section>
-<section id="polishFormatPanel" hidden class="settings-section" aria-labelledby="formatTitle"><h2 id="formatTitle">Formatting</h2>
-<p class="settings-section-help">Polish lays out what you say for where you say it: greeting and paragraphs in email, short lines in chat, lists in notes. It only moves your words and never adds a greeting or sign-off you did not say.</p>
-<div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="formatAiDetection">Detect format with AI for unknown apps</label>
-                    <div class="row-help" id="formatAiDetectionHelp">When no built-in rule knows a website or app, ask the polish model once which format fits.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="formatAiDetection" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-<form class="row" id="formatMappingAdd">
-                  <div class="row-text">
-                    <label class="row-label" for="formatMappingKey">Set a format</label>
-                    <div class="row-help">A website such as example.com, or an app as app: and its bundle id.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="formatMappingKey" class="setting-input w-md" type="text" placeholder="example.com" autocomplete="off" />
-                    <select id="formatMappingFormat" class="setting-select w-sm" aria-label="Format"></select>
-                    <button class="btn" type="submit">Set</button>
-                  </div>
-                </form>
-</div>
-<div class="settings-card" id="formatMappingRows" aria-label="Sites and apps with a format"></div>
+<!-- ── General ── -->
+<section class="settings-page" data-settings-page="general" id="settings-general" aria-label="General">
+  <section class="settings-section" aria-label="General">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="alwaysOnTop">Keep pill on top</label></div>
+        <div class="row-control"><input id="alwaysOnTop" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="interactionSounds">Start and stop sounds</label></div>
+        <div class="row-control"><input id="interactionSounds" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="noteRetentionMinutes">Delete notes</label>
+          <div class="row-help">Pinned notes are kept.</div>
+        </div>
+        <div class="row-control">
+          <select id="noteRetentionMinutes" class="setting-select w-sm">
+            <option value="0">Never</option>
+            <option value="15">After 15 minutes</option>
+            <option value="60">After 1 hour</option>
+            <option value="480">After 8 hours</option>
+            <option value="1440">After 1 day</option>
+            <option value="10080">After 1 week</option>
+            <option value="43200">After 30 days</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </section>
+  <details class="settings-section settings-disclosure" aria-labelledby="trainingDataTitle">
+    <summary><h2 id="trainingDataTitle">Training data</h2></summary>
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="trainingCapture">Keep dictations for training</label>
+          <div class="row-help training-warning">Audio and text stay on this device and may hold sensitive information.</div>
+        </div>
+        <div class="row-control"><input id="trainingCapture" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="trainingRetentionDays">Keep recordings</label></div>
+        <div class="row-control">
+          <select id="trainingRetentionDays" class="setting-select w-sm">
+            <option value="30">For 30 days</option>
+            <option value="90">For 90 days</option>
+            <option value="0">Until I delete them</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label">Kept dictations</div>
+          <div class="row-help" id="trainingDataSummary" aria-live="polite">None yet.</div>
+        </div>
+        <div class="row-control">
+          <button class="btn btn-ghost" id="trainingDataDelete" type="button">Delete all</button>
+          <button class="btn" id="trainingDataExport" type="button">Export…</button>
+        </div>
+      </div>
+    </div>
+  </details>
 </section>
-<section class="settings-section" aria-labelledby="contextTitle"><h2 id="contextTitle">Context</h2><div class="settings-card">
-<div class="row" id="contextAwarenessRow">
-                  <div class="row-text">
-                    <label class="row-label" for="contextAwareness">Context awareness</label>
-                    <div class="row-help" id="contextAwarenessHelp">Reads text near your cursor and on the active window (via Accessibility) to improve name/term accuracy. Read locally; sent to Fairspoken Cloud only as part of AI polish. Never reads password fields.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="contextAwareness" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="dictionaryTitle"><h2 id="dictionaryTitle">Dictionary</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="postProcess">Clean up text</label>
-                    <div class="row-help">Apply your dictionary corrections and snippets.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="postProcess" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div><div class="row"><div class="row-text"><div class="row-label">Words and snippets</div><div class="row-help">Manage vocabulary, corrections, and snippets.</div></div><div class="row-control"><button class="btn" type="button" data-route="dictionary">Open dictionary</button></div></div>
-</div></section>
-<section class="settings-section" id="polishDeveloperPanel" aria-labelledby="polishDeveloperTitle"><h2 id="polishDeveloperTitle">Developer</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="polishLocalModelPath">Use a local polish model file</label>
-                    <div class="row-help">An absolute path to a .gguf file, such as one trained with training/polish. Replaces the selected local model while set. Leave empty to turn off.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="polishLocalModelPath" class="setting-input mono w-lg" type="text" placeholder="/path/to/model.gguf" autocomplete="off" spellcheck="false" />
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="polishLocalModelPrompt">Prompt for that file</label>
-                    <div class="row-help">Tagged for models trained on the spelling, format and tone tags; Instructed for general instruct models; SpeakoFlow for SpeakoFlow Mini builds.</div>
-                  </div>
-                  <div class="row-control">
-                    <select id="polishLocalModelPrompt" class="setting-select w-md"><option value="tagged">Tagged</option><option value="instructed">Instructed</option><option value="speakoflow">SpeakoFlow</option></select>
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <label class="row-label" for="polishLocalAdapters">LoRA adapter files</label>
-                    <div class="row-help">Absolute .gguf paths, comma separated. Each loads only if its manifest says it was trained for the model in use; otherwise polish runs without it.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="polishLocalAdapters" class="setting-input mono w-lg" type="text" placeholder="/path/to/adapter.lora.gguf" autocomplete="off" spellcheck="false" />
-                  </div>
-                </div>
-</div></section></section>
-<section class="settings-page" data-settings-page="keybindings" id="settings-keybindings" aria-label="Keybindings" hidden><section class="settings-section" aria-labelledby="recordingTitle"><h2 id="recordingTitle">Recording</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label" id="recordingModeLabel">Recording mode</div>
-                    <div class="row-help">Toggle starts and stops; push to talk records while held.</div>
-                  </div>
-                  <div class="row-control">
-                    <div class="seg" id="recordingModeSeg" role="group" aria-labelledby="recordingModeLabel">
-                      <button type="button" data-value="toggle" aria-pressed="true">Toggle</button>
-                      <button type="button" data-value="push-to-talk" aria-pressed="false">Push to talk</button>
-                    </div>
-                  </div>
-                </div>
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Recording shortcut</div>
-                  </div>
-                  <div class="row-control">
-                    <button class="shortcut" id="recordingShortcutChip" type="button" data-label="Recording" aria-label="Recording shortcut">
-                      <span class="keys" aria-hidden="true"></span>
-                      <span class="capture-hint">Press shortcut · esc cancels</span>
-                    </button>
-                  </div>
-                </div>
-<div class="row" id="fnPushToTalkRow">
-                  <div class="row-text">
-                    <label class="row-label" for="fnPushToTalk">Hold Fn to talk</label>
-                    <div class="row-help">Hold the Fn/Globe key to record, release to transcribe. Needs the macOS Input Monitoring permission.</div>
-                  </div>
-                  <div class="row-control">
-                    <input id="fnPushToTalk" class="switch" type="checkbox" role="switch" />
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="copied-messagesTitle"><h2 id="copied-messagesTitle">Copied messages</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Copied messages</div>
-                    <div class="row-help">Show the stack of recent transcripts.</div>
-                  </div>
-                  <div class="row-control">
-                    <button class="shortcut" id="transcriptStackShortcutChip" type="button" data-label="Copied messages" aria-label="Copied messages shortcut">
-                      <span class="keys" aria-hidden="true"></span>
-                      <span class="capture-hint">Press shortcut · esc cancels</span>
-                    </button>
-                  </div>
-                </div>
-</div></section><div class="section-note" id="shortcutStatus" aria-live="polite">Shortcuts work globally while Fairspoken is running.</div></section>
-<section class="settings-page" data-settings-page="appearance" id="settings-appearance" aria-label="Appearance" hidden><section class="settings-section" aria-labelledby="colorSchemeTitle"><h2 id="colorSchemeTitle">Color scheme</h2><div id="appearanceChoices" class="appearance-choices" role="group" aria-label="Color scheme"><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="system" type="button" aria-pressed="true"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="light"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span><span class="appearance-preview-pane" data-mode="dark"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">System</span></button><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="light" type="button" aria-pressed="false"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="light"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">Light</span></button><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="dark" type="button" aria-pressed="false"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="dark"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">Dark</span></button></div><p class="section-note" id="appearanceStatus" role="status">Follows your system appearance.</p></section></section>
-<section class="settings-page" data-settings-page="updates" id="settings-updates" aria-label="Updates" hidden><section class="settings-section" aria-labelledby="versionTitle"><h2 id="versionTitle">Version</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label">Fairspoken <span id="appVersion" class="num"></span> <span class="update-channel-chip" id="appChannel"></span></div>
-                    <div class="row-help" id="updateStatus" role="status" aria-live="polite">Checks automatically every few hours.</div>
-                    <div class="update-progress" id="updateProgress" hidden><span></span></div>
-                    <div class="row-help" id="updateLastChecked"></div>
-                  </div>
-                  <div class="row-control">
-                    <button id="updateAction" class="btn" type="button">Check for updates</button>
-                  </div>
-                </div>
-</div></section>
-<section class="settings-section" aria-labelledby="channelTitle"><h2 id="channelTitle">Channel</h2><div class="settings-card">
-<div class="row">
-                  <div class="row-text">
-                    <div class="row-label" id="updateChannelLabel">Update channel</div>
-                    <div class="row-help channel-help"><span><strong>Stable</strong> · <span id="stableHelp"></span></span><span><strong>Nightly</strong> · <span id="nightlyHelp"></span></span></div>
-                  </div>
-                  <div class="row-control">
-                    <div class="seg" id="updateChannelSeg" role="group" aria-labelledby="updateChannelLabel">
-                      <button type="button" data-value="stable" aria-pressed="true">Stable</button>
-                      <button type="button" data-value="nightly" aria-pressed="false">Nightly</button>
-                    </div>
-                  </div>
-                </div>
-<p class="section-note" id="updateStableNote" hidden></p>
-</div></section></section></form></div></div></section>
+
+<!-- ── Audio ── -->
+<section class="settings-page" data-settings-page="audio" id="settings-audio" aria-label="Audio" hidden>
+  <section class="settings-section" aria-label="Microphone">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="audioDeviceSelect">Microphone</label></div>
+        <div class="row-control mic-control">
+          <div class="mic-line">
+            <button class="icon-btn" id="refreshDevices" type="button" aria-label="Refresh microphones" title="Refresh microphones">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12A8 8 0 0 1 17.7 6.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="M20 5v5h-5M4 19v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <select id="audioDeviceSelect" class="setting-select w-lg">
+              <option value="">Default microphone</option>
+            </select>
+          </div>
+          <div class="level" aria-hidden="true"><span id="inputMeter"></span></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text"><div class="row-label">Accuracy test</div></div>
+        <div class="row-control"><button class="btn" data-open="voicetest" type="button">Run</button></div>
+      </div>
+    </div>
+  </section>
+  <details class="settings-section settings-disclosure" aria-labelledby="audioAdvancedTitle">
+    <summary><h2 id="audioAdvancedTitle">Advanced</h2></summary>
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="inputGain">Input gain</label></div>
+        <div class="row-control">
+          <select id="inputGain" class="setting-select w-xs">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="3">3×</option>
+            <option value="4">4×</option>
+            <option value="6">6×</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="noiseSuppression">Noise suppression</label></div>
+        <div class="row-control"><input id="noiseSuppression" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="echoCancellation">Echo cancellation</label></div>
+        <div class="row-control"><input id="echoCancellation" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="maxRecordingSeconds">Stop recording after</label></div>
+        <div class="row-control">
+          <select id="maxRecordingSeconds" class="setting-select w-sm">
+            <option value="30">30 seconds</option>
+            <option value="60">1 minute</option>
+            <option value="120">2 minutes</option>
+            <option value="180">3 minutes</option>
+            <option value="300">5 minutes</option>
+            <option value="600">10 minutes</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- ── Transcription ── -->
+<section class="settings-page" data-settings-page="transcription" id="settings-transcription" aria-label="Transcription" hidden>
+  <section class="settings-section" aria-label="Service">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text"><div class="row-label" id="locationLabel">Transcribe on</div></div>
+        <div class="row-control">
+          <div class="seg" id="locationSeg" role="group" aria-labelledby="locationLabel">
+            <button type="button" data-value="local" aria-pressed="true">This device</button>
+            <button type="button" data-value="remote-host" aria-pressed="false">My host</button>
+            <button type="button" data-value="cloud" aria-pressed="false">Cloud</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" id="modelField">
+        <div class="row-text">
+          <label class="row-label" for="modelSelect">Model</label>
+          <div class="row-help model-identity" id="speechModelIdentity"><span id="selectedSpeechModel">NVIDIA</span><span class="meta num" id="modelSize">RAM ~2.5G</span></div>
+        </div>
+        <div class="row-control">
+          <select id="modelSelect" class="setting-select w-md">
+            <option value="parakeet-tdt-0.6b-v3">Parakeet TDT 0.6B v3</option>
+            <option value="parakeet-ultra">Parakeet Ultra 0.6B</option>
+            <option value="parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 · English</option>
+          </select>
+          <button class="btn btn-ghost" type="button" data-route="models">Manage</button>
+        </div>
+      </div>
+      <div class="model-state" id="modelDownload" data-state="idle" aria-live="polite">
+        <span class="status num" id="modelDownloadStatus">Checking model…</span>
+        <div class="progress"><span id="modelDownloadBar"></span></div>
+        <button class="btn" id="modelPrepare" type="button">Download</button>
+      </div>
+
+      <!-- My host: scan → pick → password. Typing an address is the fallback. -->
+      <div id="remoteHostPanel" class="host-panel" aria-live="polite" hidden>
+        <div class="row host-status">
+          <div class="row-text">
+            <div class="row-label">Host</div>
+            <div class="row-help status-text" id="remoteStatus">Not connected</div>
+          </div>
+          <div class="row-control">
+            <button class="btn" id="remoteTest" type="button">Test</button>
+          </div>
+        </div>
+        <div class="row host-finder">
+          <div class="row-text">
+            <div class="row-label">Hosts on your tailnet</div>
+            <div class="row-help" id="tailnetStatus" role="status"></div>
+          </div>
+          <div class="row-control">
+            <button class="btn" id="tailnetScan" type="button">Scan</button>
+          </div>
+        </div>
+        <div class="tailnet-hosts" id="tailnetHosts" role="list" aria-label="Hosts found" hidden></div>
+        <div class="row pair-row" id="tailnetPairRow" hidden>
+          <div class="row-text">
+            <label class="row-label" for="tailnetPassword">Password</label>
+            <div class="row-help" id="tailnetPairHelp"></div>
+          </div>
+          <div class="row-control">
+            <input id="tailnetPassword" class="setting-input w-md" type="password" autocomplete="off" placeholder="Pairing password" />
+            <button class="btn btn-ghost" id="tailnetPairCancel" type="button">Cancel</button>
+            <button class="btn btn-primary" id="tailnetPair" type="button">Connect</button>
+          </div>
+        </div>
+        <details class="row-disclosure" id="remoteManual">
+          <summary>Enter address manually</summary>
+          <div class="row">
+            <div class="row-text"><label class="row-label" for="tailnetAddress">Machine name</label></div>
+            <div class="row-control">
+              <input id="tailnetAddress" class="setting-input mono w-md" type="text" placeholder="studio-mac or name:port" autocomplete="off" autocapitalize="off" spellcheck="false" />
+              <button class="btn" id="tailnetProbe" type="button">Check</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text"><label class="row-label" for="remoteUrl">Host URL</label></div>
+            <div class="row-control">
+              <input id="remoteUrl" class="setting-input mono w-lg" type="url" placeholder="https://host.example.com" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text"><label class="row-label" for="remoteAuthToken">Token</label></div>
+            <div class="row-control">
+              <input id="remoteAuthToken" class="setting-input mono w-lg" type="password" autocomplete="off" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-text"><label class="row-label" for="remoteTimeoutSeconds">Timeout</label></div>
+            <div class="row-control">
+              <input id="remoteTimeoutSeconds" class="setting-input num w-xs" type="number" min="5" max="300" step="5" />
+              <span class="meta">seconds</span>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div id="cloudPanel" aria-live="polite" hidden>
+        <div class="row">
+          <div class="row-text">
+            <label class="row-label" for="cloudAuthToken">Token</label>
+            <div class="row-help">Audio is sent to Fairspoken Cloud.</div>
+          </div>
+          <div class="row-control">
+            <input id="cloudAuthToken" class="setting-input mono w-lg" type="password" autocomplete="off" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="row-text"><div class="row-help status-text" id="cloudStatus">Allowance: shown after first dictation</div></div>
+          <div class="row-control"><button class="btn" id="cloudTest" type="button">Test</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="settings-section" aria-label="Recognition and output">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="langSelect">Language</label></div>
+        <div class="row-control">
+          <select id="langSelect" class="setting-select w-md">
+            <option value="auto">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" id="insertAtCursorRow">
+        <div class="row-text">
+          <label class="row-label" for="insertAtCursor">Insert at cursor</label>
+          <div class="row-help">Needs the Accessibility permission.</div>
+        </div>
+        <div class="row-control"><input id="insertAtCursor" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+    </div>
+  </section>
+
+  <details class="settings-section settings-disclosure" aria-labelledby="transcriptionAdvancedTitle">
+    <summary><h2 id="transcriptionAdvancedTitle">Advanced</h2></summary>
+    <div class="settings-card">
+      <div class="row" id="superModeRow">
+        <div class="row-text">
+          <label class="row-label" for="superModeSelect">Super mode</label>
+          <div class="row-help" id="superModeHelp">Adds Whisper for your dictionary terms. More memory and battery; Auto runs on mains power only.</div>
+        </div>
+        <div class="row-control">
+          <select id="superModeSelect" class="setting-select w-sm">
+            <option value="off">Off</option>
+            <option value="auto">Auto</option>
+            <option value="on">On</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" id="superModeModelRow">
+        <div class="row-text"><label class="row-label" for="superModeModelSelect">Super mode model</label></div>
+        <div class="row-control">
+          <select id="superModeModelSelect" class="setting-select w-md">
+            <option value="tiny">Whisper Tiny · 0.2 GB</option>
+            <option value="base">Whisper Base · 0.3 GB</option>
+            <option value="small">Whisper Small · 0.8 GB</option>
+            <option value="large-v3-turbo">Whisper Large v3 Turbo · 2 GB</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" id="useGpuRow">
+        <div class="row-text"><label class="row-label" for="useGpu">GPU acceleration</label></div>
+        <div class="row-control"><input id="useGpu" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row" id="accessibilityInsertRow">
+        <div class="row-text">
+          <label class="row-label" for="accessibilityInsert">Insert without pasting</label>
+          <div class="row-help">Native Mac apps only; Electron apps, terminals and web pages ignore it.</div>
+        </div>
+        <div class="row-control"><input id="accessibilityInsert" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- ── Text polish ── -->
+<section class="settings-page" data-settings-page="polish" id="settings-polish" aria-label="Text polish" hidden>
+  <section class="settings-section" aria-label="Cleanup">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="polishEnabled">AI polish</label>
+          <div class="row-help" id="polishHelp"></div>
+        </div>
+        <div class="row-control"><input id="polishEnabled" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="polishProviderSelect">Runs on</label></div>
+        <div class="row-control">
+          <select id="polishProviderSelect" class="setting-select w-md"><option value="local">This device</option><option value="cloud">Fairspoken Cloud</option></select>
+        </div>
+      </div>
+      <div class="row" id="polishLocalModelRow">
+        <div class="row-text">
+          <div class="row-label">Model</div>
+          <div class="row-help"><span class="model-identity" id="polishModelIdentity"><span id="selectedPolishModel">Qwen3.5 0.8B</span></span></div>
+        </div>
+        <div class="row-control"><button class="btn btn-ghost" type="button" data-route="models">Manage</button></div>
+      </div>
+      <div id="polishCloudPanel" data-polish-cloud hidden>
+        <div class="row">
+          <div class="row-text">
+            <label class="row-label" for="polishCloudAuthToken">Cloud token</label>
+            <div class="row-help">Same token as cloud dictation.</div>
+          </div>
+          <div class="row-control"><input id="polishCloudAuthToken" class="setting-input mono w-lg" type="password" autocomplete="off" /></div>
+        </div>
+      </div>
+      <div class="row" id="contextAwarenessRow">
+        <div class="row-text">
+          <label class="row-label" for="contextAwareness">Context awareness</label>
+          <div class="row-help" id="contextAwarenessHelp"></div>
+        </div>
+        <div class="row-control"><input id="contextAwareness" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="postProcess">Apply dictionary</label></div>
+        <div class="row-control">
+          <button class="btn btn-ghost" type="button" data-route="dictionary">Open</button>
+          <input id="postProcess" class="switch" type="checkbox" role="switch" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <details id="polishTonesPanel" hidden class="settings-section settings-disclosure" aria-labelledby="writing-styleTitle">
+    <summary><h2 id="writing-styleTitle">Tone per app</h2></summary>
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label" id="polishToneMessagingLabel">Messaging</div>
+          <div class="row-help">Slack, iMessage, WhatsApp</div>
+        </div>
+        <div class="row-control">
+          <div class="seg" id="polishToneMessaging" role="group" aria-labelledby="polishToneMessagingLabel">
+            <button type="button" data-value="default" aria-pressed="true">Default</button>
+            <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+            <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+            <button type="button" data-value="off" aria-pressed="false">Off</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label" id="polishToneEmailLabel">Email</div>
+          <div class="row-help">Mail, Outlook, Superhuman</div>
+        </div>
+        <div class="row-control">
+          <div class="seg" id="polishToneEmail" role="group" aria-labelledby="polishToneEmailLabel">
+            <button type="button" data-value="default" aria-pressed="true">Default</button>
+            <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+            <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+            <button type="button" data-value="off" aria-pressed="false">Off</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label" id="polishToneDocsLabel">Documents</div>
+          <div class="row-help">Pages, Word, Notion, Obsidian</div>
+        </div>
+        <div class="row-control">
+          <div class="seg" id="polishToneDocs" role="group" aria-labelledby="polishToneDocsLabel">
+            <button type="button" data-value="default" aria-pressed="true">Default</button>
+            <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+            <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+            <button type="button" data-value="off" aria-pressed="false">Off</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label" id="polishToneCodeLabel">Code editors</div>
+          <div class="row-help">VS Code, Cursor, Xcode. Terminals are never polished.</div>
+        </div>
+        <div class="row-control">
+          <div class="seg" id="polishToneCode" role="group" aria-labelledby="polishToneCodeLabel">
+            <button type="button" data-value="default" aria-pressed="true">Default</button>
+            <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+            <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+            <button type="button" data-value="off" aria-pressed="false">Off</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label" id="polishToneOtherLabel">Everything else</div>
+        </div>
+        <div class="row-control">
+          <div class="seg" id="polishToneOther" role="group" aria-labelledby="polishToneOtherLabel">
+            <button type="button" data-value="default" aria-pressed="true">Default</button>
+            <button type="button" data-value="casual" aria-pressed="false">Casual</button>
+            <button type="button" data-value="formal" aria-pressed="false">Formal</button>
+            <button type="button" data-value="off" aria-pressed="false">Off</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <details id="polishFormatPanel" hidden class="settings-section settings-disclosure" aria-labelledby="formatTitle">
+    <summary><h2 id="formatTitle">Formatting</h2></summary>
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="formatAiDetection">Detect format for unknown apps</label>
+          <div class="row-help" id="formatAiDetectionHelp"></div>
+        </div>
+        <div class="row-control"><input id="formatAiDetection" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <!-- Not a <form>: it sits inside #settingsForm, and nested forms are dropped by the parser. -->
+      <div class="row" id="formatMappingAdd" role="group" aria-label="Set a format">
+        <div class="row-text"><label class="row-label" for="formatMappingKey">Set a format</label></div>
+        <div class="row-control">
+          <input id="formatMappingKey" class="setting-input w-md" type="text" placeholder="example.com or app:bundle.id" autocomplete="off" />
+          <select id="formatMappingFormat" class="setting-select w-sm" aria-label="Format"></select>
+          <button class="btn" id="formatMappingSet" type="button">Set</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card" id="formatMappingRows" aria-label="Sites and apps with a format"></div>
+  </details>
+
+  <details class="settings-section settings-disclosure" id="polishDeveloperPanel" aria-labelledby="polishDeveloperTitle">
+    <summary><h2 id="polishDeveloperTitle">Developer</h2></summary>
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="polishLocalModelPath">Model file</label>
+          <div class="row-help">A .gguf path. Replaces the selected model while set.</div>
+        </div>
+        <div class="row-control"><input id="polishLocalModelPath" class="setting-input mono w-lg" type="text" placeholder="/path/to/model.gguf" autocomplete="off" spellcheck="false" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><label class="row-label" for="polishLocalModelPrompt">Prompt style</label></div>
+        <div class="row-control">
+          <select id="polishLocalModelPrompt" class="setting-select w-md"><option value="tagged">Tagged</option><option value="instructed">Instructed</option><option value="speakoflow">SpeakoFlow</option></select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <label class="row-label" for="polishLocalAdapters">LoRA adapters</label>
+          <div class="row-help">Comma-separated .gguf paths; each loads only for its own base model.</div>
+        </div>
+        <div class="row-control"><input id="polishLocalAdapters" class="setting-input mono w-lg" type="text" placeholder="/path/to/adapter.lora.gguf" autocomplete="off" spellcheck="false" /></div>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- ── Keybindings ── -->
+<section class="settings-page" data-settings-page="keybindings" id="settings-keybindings" aria-label="Keybindings" hidden>
+  <section class="settings-section" aria-label="Shortcuts">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text"><div class="row-label">Record</div></div>
+        <div class="row-control">
+          <button class="shortcut" id="recordingShortcutChip" type="button" data-label="Recording" aria-label="Recording shortcut">
+            <span class="keys" aria-hidden="true"></span>
+            <span class="capture-hint">Press keys · esc cancels</span>
+          </button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text"><div class="row-label" id="recordingModeLabel">Mode</div></div>
+        <div class="row-control">
+          <div class="seg" id="recordingModeSeg" role="group" aria-labelledby="recordingModeLabel">
+            <button type="button" data-value="toggle" aria-pressed="true">Toggle</button>
+            <button type="button" data-value="push-to-talk" aria-pressed="false">Push to talk</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" id="fnPushToTalkRow">
+        <div class="row-text">
+          <label class="row-label" for="fnPushToTalk">Hold Fn to talk</label>
+          <div class="row-help">Needs the Input Monitoring permission.</div>
+        </div>
+        <div class="row-control"><input id="fnPushToTalk" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row">
+        <div class="row-text"><div class="row-label">Show copied messages</div></div>
+        <div class="row-control">
+          <button class="shortcut" id="transcriptStackShortcutChip" type="button" data-label="Copied messages" aria-label="Copied messages shortcut">
+            <span class="keys" aria-hidden="true"></span>
+            <span class="capture-hint">Press keys · esc cancels</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+  <div class="section-note" id="shortcutStatus" aria-live="polite"></div>
+</section>
+
+<!-- ── Appearance ── -->
+<section class="settings-page" data-settings-page="appearance" id="settings-appearance" aria-label="Appearance" hidden><section class="settings-section" aria-label="Color scheme"><div id="appearanceChoices" class="appearance-choices" role="group" aria-label="Color scheme"><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="system" type="button" aria-pressed="true"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="light"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span><span class="appearance-preview-pane" data-mode="dark"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">System</span></button><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="light" type="button" aria-pressed="false"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="light"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">Light</span></button><button class="appearance-card ds-card-button ds-card-button--bordered" data-appearance="dark" type="button" aria-pressed="false"><span class="appearance-preview" aria-hidden="true"><span class="appearance-preview-pane" data-mode="dark"><span class="preview-rail"><i></i><i></i><i></i></span><span class="preview-main"><i></i><i></i><i></i><span class="preview-control"></span></span></span></span><span class="appearance-label">Dark</span></button></div><p class="sr-only" id="appearanceStatus" role="status">Follows your system appearance.</p></section></section>
+
+<!-- ── Updates ── -->
+<section class="settings-page" data-settings-page="updates" id="settings-updates" aria-label="Updates" hidden>
+  <section class="settings-section" aria-label="Updates">
+    <div class="settings-card">
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label">Fairspoken <span id="appVersion" class="num"></span> <span class="update-channel-chip" id="appChannel"></span></div>
+          <div class="row-help" id="updateStatus" role="status" aria-live="polite"></div>
+          <div class="update-progress" id="updateProgress" hidden><span></span></div>
+          <div class="row-help" id="updateLastChecked"></div>
+        </div>
+        <div class="row-control">
+          <button id="updateAction" class="btn" type="button">Check for updates</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-label" id="updateChannelLabel">Channel</div>
+          <div class="row-help channel-help"><span><strong>Stable</strong> · <span id="stableHelp"></span></span><span><strong>Nightly</strong> · <span id="nightlyHelp"></span></span></div>
+        </div>
+        <div class="row-control">
+          <div class="seg" id="updateChannelSeg" role="group" aria-labelledby="updateChannelLabel">
+            <button type="button" data-value="stable" aria-pressed="true">Stable</button>
+            <button type="button" data-value="nightly" aria-pressed="false">Nightly</button>
+          </div>
+        </div>
+      </div>
+      <p class="section-note" id="updateStableNote" hidden></p>
+    </div>
+  </section>
+</section>
+
+</form></div></div></section>
 
         <!-- ════ SPEED TEST (type-vs-speak, driven by speedTest.ts) ════
              A sub-route of Home, launched from the Home screen rather than the
@@ -907,9 +805,8 @@
         </section>
 
         <!-- ════ VOICE ACCURACY TEST (read-aloud diagnostic, driven by voiceAccuracyTest.ts) ════
-             A sub-route of Home like the speed test, launched from the Home screen
-             and from Settings → Capture rather than the sidebar nav. The controller
-             renders all states into #voiceTest. -->
+             A sub-route of Home like the speed test, launched from Home and
+             Settings → Audio rather than the sidebar nav. -->
         <section class="screen" id="screen-voicetest">
           <div class="st" id="voiceTest"></div>
         </section>

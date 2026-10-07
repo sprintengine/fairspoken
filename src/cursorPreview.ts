@@ -2,8 +2,6 @@ import "./appearance";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { diffPreview } from "./previewDiff";
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/500.css";
 import "./cursorPreview.css";
 
 type Snapshot = {

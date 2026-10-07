@@ -30,7 +30,7 @@ function required<T extends HTMLElement>(id: string): T {
 }
 
 const rows = required<HTMLElement>("formatMappingRows");
-const addForm = required<HTMLFormElement>("formatMappingAdd");
+const setButton = required<HTMLButtonElement>("formatMappingSet");
 const keyInput = required<HTMLInputElement>("formatMappingKey");
 const formatSelect = required<HTMLSelectElement>("formatMappingFormat");
 
@@ -55,7 +55,7 @@ function keyLabel(key: string): string {
 
 function render(mappings: LearnedFormat[]): void {
   if (mappings.length === 0) {
-    rows.innerHTML = '<p class="dict-rows-empty">No sites or apps yet. Formats learned for unknown apps, and the ones you set, appear here.</p>';
+    rows.innerHTML = '<p class="dict-rows-empty">No sites or apps yet.</p>';
     return;
   }
   rows.replaceChildren(
@@ -99,16 +99,23 @@ export function refreshFormatMappings(): void {
 }
 
 formatOptions(formatSelect, "document");
-addForm.addEventListener("submit", (event) => {
-  event.preventDefault();
+// The add row lives inside the settings <form>, where a nested <form> would be
+// dropped by the HTML parser, so it is a plain group with its own Enter key.
+function addMapping(): void {
   const key = keyInput.value.trim();
-  if (!key) return;
+  if (!key) { keyInput.focus(); return; }
   void invoke<LearnedFormat[]>("set_format_mapping", { key, format: formatSelect.value })
     .then((mappings) => {
       keyInput.value = "";
       render(mappings);
     })
     .catch(report);
+}
+setButton.addEventListener("click", addMapping);
+keyInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  addMapping();
 });
 
 refreshFormatMappings();
