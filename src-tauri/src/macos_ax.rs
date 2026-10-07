@@ -272,6 +272,142 @@ pub fn harvest_screen_context() -> Option<(Vec<String>, Vec<String>)> {
     Some((texts, terms))
 }
 
+/// Longest window title or field label kept for the format decision.
+const FOCUS_TEXT_CHARS: usize = 200;
+/// How far up from the focused element to look for the page's web area.
+const WEB_AREA_ANCESTORS: usize = 40;
+/// Elements searched for a web area when focus is outside the page (the
+/// address bar, a toolbar).
+const WEB_AREA_SEARCH_NODES: usize = 120;
+
+fn capped(text: String) -> Option<String> {
+    let text: String = text.trim().chars().take(FOCUS_TEXT_CHARS).collect();
+    (!text.is_empty()).then_some(text)
+}
+
+impl AxElement {
+    fn short_string(&self, name: &str) -> Option<String> {
+        self.string_attribute(name).and_then(capped)
+    }
+
+    fn parent(&self) -> Option<AxElement> {
+        self.copy_attribute("AXParent").map(AxElement)
+    }
+
+    /// A URL attribute, which AX may hand over as a CFURL or a string.
+    fn url_attribute(&self, name: &str) -> Option<String> {
+        use core_foundation::url::CFURL;
+        let value = self.copy_attribute(name)?;
+        if let Some(url) = value.downcast::<CFURL>() {
+            return Some(url.get_string().to_string());
+        }
+        value.downcast::<CFString>().map(|s| s.to_string())
+    }
+}
+
+/// The page URL of a browser window, sanitized to scheme, host and path:
+/// the web area holding the focused element, else the window's document,
+/// else the first web area in a small search of the window.
+fn browser_url(focused: Option<&AxElement>, window: Option<&AxElement>) -> Option<String> {
+    use crate::format_context::sanitize_url;
+    let web_area_url = |element: &AxElement| {
+        (element.role().as_deref() == Some("AXWebArea"))
+            .then(|| element.url_attribute("AXURL"))
+            .flatten()
+            .and_then(|url| sanitize_url(&url))
+    };
+    if let Some(focused) = focused {
+        let mut node = Some(AxElement(focused.0.clone()));
+        for _ in 0..WEB_AREA_ANCESTORS {
+            let Some(current) = node else { break };
+            if let Some(url) = web_area_url(&current) {
+                return Some(url);
+            }
+            node = current.parent();
+        }
+    }
+    let window = window?;
+    if let Some(url) = window.url_attribute("AXDocument").and_then(|url| sanitize_url(&url)) {
+        return Some(url);
+    }
+    let mut queue = std::collections::VecDeque::from([AxElement(window.0.clone())]);
+    let mut visited = 0;
+    while let Some(node) = queue.pop_front() {
+        visited += 1;
+        if visited > WEB_AREA_SEARCH_NODES {
+            break;
+        }
+        if let Some(url) = web_area_url(&node) {
+            return Some(url);
+        }
+        if node.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+            continue;
+        }
+        queue.extend(node.children());
+    }
+    None
+}
+
+/// The format decision's read at recording start: the app's name, the
+/// focused window's title, the focused field's role and labels (never its
+/// value) and, in a browser, the page URL cut to scheme, host and path.
+/// Session-only; never persisted. `None` in a password manager.
+pub fn focus_context() -> Option<crate::format_context::FocusContext> {
+    use crate::format_context::{is_browser, FieldInfo, FocusContext};
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let app = workspace.frontmostApplication()?;
+    let bundle_id = app.bundleIdentifier()?.to_string();
+    if is_password_manager(&bundle_id) {
+        return None;
+    }
+    let app_name = app
+        .localizedName()
+        .map(|name| name.to_string())
+        .unwrap_or_default();
+    let application = application_element(app.processIdentifier())?;
+    unsafe { AXUIElementSetMessagingTimeout(application.element_ref(), 0.1) };
+    let window = application
+        .copy_attribute("AXFocusedWindow")
+        .map(AxElement);
+    let window_title = window.as_ref().and_then(|w| w.short_string("AXTitle"));
+    let focused = application
+        .copy_attribute("AXFocusedUIElement")
+        .map(AxElement);
+    let field = match &focused {
+        Some(focused) => {
+            let role = focused.role();
+            if role.as_deref() == Some(SECURE_FIELD_ROLE) {
+                FieldInfo {
+                    role,
+                    ..FieldInfo::default()
+                }
+            } else {
+                FieldInfo {
+                    role,
+                    subrole: focused.short_string("AXSubrole"),
+                    role_description: focused.short_string("AXRoleDescription"),
+                    placeholder: focused.short_string("AXPlaceholderValue"),
+                    description: focused.short_string("AXDescription"),
+                    help: focused.short_string("AXHelp"),
+                }
+            }
+        }
+        None => FieldInfo::default(),
+    };
+    let url = if is_browser(&bundle_id) {
+        browser_url(focused.as_ref(), window.as_ref())
+    } else {
+        None
+    };
+    Some(FocusContext {
+        bundle_id,
+        app_name,
+        window_title,
+        field,
+        url,
+    })
+}
+
 /// Raw focused-element facts for the Phase-0 spike command.
 pub struct FocusedElementDebug {
     pub bundle_id: String,

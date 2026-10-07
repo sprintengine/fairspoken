@@ -158,6 +158,12 @@ pub struct Settings {
     /// the user deletes them.
     #[serde(default = "default_training_retention_days")]
     pub training_retention_days: u16,
+    /// "Detect format with AI for unknown apps": when no rule knows the
+    /// destination, ask the polish provider once per site or app which
+    /// format it wants (`format_classifier`). Sends the app name, window
+    /// title, site host and field labels to that provider.
+    #[serde(default)]
+    pub format_ai_detection: bool,
 }
 
 /// Who wrote a dictionary entry. Learned entries come from the edit watcher
@@ -257,6 +263,7 @@ impl Default for Settings {
             learn_from_edits: default_learn_from_edits(),
             training_capture: false,
             training_retention_days: default_training_retention_days(),
+            format_ai_detection: false,
         }
     }
 }

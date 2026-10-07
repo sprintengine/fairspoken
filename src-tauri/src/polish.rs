@@ -5,6 +5,7 @@
 //! and the pipeline continues exactly as if polish were off.
 
 use crate::app_categories::{categorize, AppCategory};
+use crate::polish_input::Format;
 use crate::settings::{cloud_url, Settings, CLOUD_UNAVAILABLE};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
@@ -21,7 +22,7 @@ const POLISH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Resolve the polish tone for a category from the user's `polish_tones`
 /// setting; missing key = "default".
-fn tone_for_category(settings: &Settings, category: AppCategory) -> String {
+pub fn tone_for_category(settings: &Settings, category: AppCategory) -> String {
     settings
         .polish_tones
         .get(category.id())
@@ -29,12 +30,31 @@ fn tone_for_category(settings: &Settings, category: AppCategory) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
+/// Which `polish_tones` row applies. A recognised app keeps its own category;
+/// a browser or unknown app (`Other`) takes the category of the format decided
+/// for it, so a Gmail tab uses the Email tone and Slack in a browser the
+/// Messaging tone.
+pub fn tone_category(app: AppCategory, format: Format) -> AppCategory {
+    if app != AppCategory::Other {
+        return app;
+    }
+    match format {
+        Format::Email => AppCategory::Email,
+        Format::Chat => AppCategory::Messaging,
+        Format::Document | Format::Notes => AppCategory::Docs,
+        Format::Code => AppCategory::Code,
+        Format::Plain => AppCategory::Other,
+    }
+}
+
 /// The app the transcript will be pasted into (platform-neutral mirror of
-/// `macos_input::FrontmostApp`).
+/// `macos_input::FrontmostApp`), with the layout decided for it at recording
+/// start (`format_context`).
 #[derive(Clone, Debug)]
 pub struct PolishTargetApp {
     pub bundle_id: String,
     pub name: String,
+    pub format: Format,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +78,11 @@ struct PolishRequest<'a> {
     surrounding_text: Option<&'a str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     vocabulary: Vec<String>,
+    /// The `<format>` label of the local contract (docs/polish-input.md),
+    /// omitted when `plain`. Optional for the Worker: one that predates it
+    /// ignores the field and polishes exactly as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -141,7 +166,8 @@ fn maybe_polish_impl(
     if category == AppCategory::Terminal {
         return PolishDecision::Skipped("terminal app frontmost");
     }
-    let tone = tone_for_category(settings, category);
+    let format = target_app.map(|app| app.format).unwrap_or_default();
+    let tone = tone_for_category(settings, tone_category(category, format));
     if tone == "off" {
         return PolishDecision::Skipped("polish is off for this app type");
     }
@@ -237,6 +263,10 @@ fn polish_transcript(
             raw_transcript,
             &settings.vocabulary_hints,
         ),
+        format: target_app
+            .map(|app| app.format)
+            .filter(|format| *format != Format::Plain)
+            .map(Format::id),
     };
 
     if let Some(span) = span {
@@ -281,6 +311,7 @@ mod tests {
         PolishTargetApp {
             bundle_id: bundle_id.to_string(),
             name: "App".to_string(),
+            format: Format::Plain,
         }
     }
 
@@ -297,6 +328,7 @@ mod tests {
             }),
             surrounding_text: Some("earlier text"),
             vocabulary: vec!["Tauri".to_string()],
+            format: Some("email"),
         };
 
         let json = serde_json::to_value(&request).expect("serialize");
@@ -308,6 +340,7 @@ mod tests {
         assert_eq!(json["appContext"]["tone"], "default");
         assert_eq!(json["surroundingText"], "earlier text");
         assert_eq!(json["vocabulary"][0], "Tauri");
+        assert_eq!(json["format"], "email");
     }
 
     #[test]
@@ -318,6 +351,7 @@ mod tests {
             app_context: None,
             surrounding_text: None,
             vocabulary: Vec::new(),
+            format: None,
         };
 
         let json = serde_json::to_value(&request).expect("serialize");
@@ -437,5 +471,44 @@ mod tests {
             "casual"
         );
         assert_eq!(tone_for_category(&settings, AppCategory::Email), "default");
+    }
+
+    #[test]
+    fn a_browser_takes_the_tone_of_its_decided_format() {
+        assert_eq!(
+            tone_category(AppCategory::Other, Format::Email),
+            AppCategory::Email
+        );
+        assert_eq!(
+            tone_category(AppCategory::Other, Format::Chat),
+            AppCategory::Messaging
+        );
+        assert_eq!(
+            tone_category(AppCategory::Other, Format::Notes),
+            AppCategory::Docs
+        );
+        assert_eq!(
+            tone_category(AppCategory::Other, Format::Plain),
+            AppCategory::Other
+        );
+        // A recognised app keeps its own row whatever the format.
+        assert_eq!(
+            tone_category(AppCategory::Messaging, Format::Email),
+            AppCategory::Messaging
+        );
+
+        // Email tone "off" now covers a Gmail tab too.
+        let mut settings = polish_settings();
+        settings
+            .polish_tones
+            .insert("email".to_string(), "off".to_string());
+        let gmail = PolishTargetApp {
+            format: Format::Email,
+            ..app("com.google.Chrome")
+        };
+        assert!(matches!(
+            maybe_polish("um hello", &settings, Some(&gmail), None),
+            PolishDecision::Skipped("polish is off for this app type")
+        ));
     }
 }

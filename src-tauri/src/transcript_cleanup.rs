@@ -463,10 +463,26 @@ fn ends_unfinished(raw: &str) -> bool {
 fn continues_sentence(lead_in: &str) -> bool {
     let trimmed =
         lead_in.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '”' | '\'' | ')'));
+    // An email greeting laid out on its own line ends with a comma, but what
+    // follows it opens a new paragraph.
+    if trimmed.lines().last().is_some_and(is_salutation_line) {
+        return false;
+    }
     trimmed
         .chars()
         .last()
         .is_some_and(|c| !is_sentence_end(c) && c != ':')
+}
+
+/// A greeting or sign-off line that a format layout set on its own ("Hi
+/// Mary,", "Thanks,", "Best regards,"): a short capitalised line ending in a
+/// comma. Plain cleanup never produces one, because it never breaks a line
+/// after a comma.
+pub fn is_salutation_line(line: &str) -> bool {
+    let line = line.trim();
+    line.ends_with(',')
+        && line.split_whitespace().count() <= 4
+        && line.chars().next().is_some_and(char::is_uppercase)
 }
 
 /// Undoes what a model does to the edges of a fragment: the capital on a tail
@@ -681,5 +697,28 @@ mod tests {
         assert!(!misheard_as("board", "committee"));
         assert!(!misheard_as("dog", "cat"));
         assert!(!misheard_as("", "anything"));
+    }
+
+    #[test]
+    fn a_greeting_line_lead_in_opens_a_new_sentence() {
+        // An email greeting ends with a comma, but the paragraph after it keeps
+        // its capital.
+        assert_eq!(
+            repair_fragment_edges("thanks for the slides", "Thanks for the slides.", "Hi Mary,", true),
+            "Thanks for the slides."
+        );
+        // A comma mid-sentence still continues it.
+        assert_eq!(
+            repair_fragment_edges(
+                "thanks for the slides",
+                "Thanks for the slides.",
+                "So I wanted to say,",
+                true
+            ),
+            "thanks for the slides."
+        );
+        assert!(is_salutation_line("Best regards,"));
+        assert!(!is_salutation_line("Hi Mary."));
+        assert!(!is_salutation_line("so we went there and then,"));
     }
 }

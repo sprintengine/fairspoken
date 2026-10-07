@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
+import "./formatMappings";
 
 // Parakeet is the default engine; the whisper.cpp ids are only meaningful when
 // the backend was built with the `whisper` Cargo feature.
@@ -60,6 +61,7 @@ interface Settings {
   trainingCapture: boolean;
   /** 30, 90, or 0 for "until deleted". */
   trainingRetentionDays: number;
+  formatAiDetection: boolean;
 }
 
 interface ModelStatus {
@@ -129,6 +131,7 @@ const DEFAULTS: Settings = {
   contextAwareness: false,
   trainingCapture: false,
   trainingRetentionDays: 30,
+  formatAiDetection: false,
 };
 
 const refreshBtn = required<HTMLButtonElement>("refreshDevices");
@@ -194,6 +197,9 @@ const polishHelp = required<HTMLElement>("polishHelp");
 const polishTonesPanel = required<HTMLElement>("polishTonesPanel");
 const contextAwareness = required<HTMLInputElement>("contextAwareness");
 const contextAwarenessRow = required<HTMLElement>("contextAwarenessRow");
+const polishFormatPanel = required<HTMLElement>("polishFormatPanel");
+const formatAiDetection = required<HTMLInputElement>("formatAiDetection");
+const formatAiDetectionHelp = required<HTMLElement>("formatAiDetectionHelp");
 // Category ids match the polish endpoint contract and the Rust setting keys.
 const POLISH_TONE_CATEGORIES = ["messaging", "email", "docs", "code", "other"] as const;
 const polishToneSegs: Record<string, SegControl> = {
@@ -359,6 +365,7 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
     trainingRetentionDays: [0, 30, 90].includes(Number(settings.trainingRetentionDays))
       ? Number(settings.trainingRetentionDays)
       : DEFAULTS.trainingRetentionDays,
+    formatAiDetection: settings.formatAiDetection ?? DEFAULTS.formatAiDetection,
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -426,6 +433,7 @@ function applyToForm(settings: Settings): void {
   useGpu.checked = settings.useGpu;
   polishEnabled.checked = settings.polishEnabled;
   contextAwareness.checked = settings.contextAwareness;
+  formatAiDetection.checked = settings.formatAiDetection;
   for (const category of POLISH_TONE_CATEGORIES) {
     polishToneSegs[category].set(settings.polishTones[category] ?? "default");
   }
@@ -449,6 +457,13 @@ function updatePolishUi(settings: Settings): void {
   polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local || !cloudAvailable);
   document.getElementById("polishLocalModelRow")?.toggleAttribute("hidden", !local);
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
+  // The format decision reads the focused app through macOS Accessibility.
+  polishFormatPanel.hidden = polishTonesPanel.hidden || !isMacOS();
+  formatAiDetectionHelp.textContent = "When no built-in rule knows a website or app, ask "
+    + (local ? "the local polish model" : "Fairspoken Cloud")
+    + " once which format fits, from the app name, window title, site address and field label"
+    + (local ? " (all on this device)" : ", which are sent to Fairspoken Cloud")
+    + ". Only the site or app and its format are saved, in the list below.";
   contextAwarenessHelp.textContent = "On macOS, reads vocabulary from the focused window at recording start and limited text before the caret for final cleanup. No screenshots or continuous screen reading. "
     + (local ? "Cleanup context stays on this device." : "When cloud cleanup runs, this context is sent with the transcript to Fairspoken Cloud.");
 }
@@ -497,6 +512,7 @@ function readFromForm(): Settings {
     polishEnabled: polishEnabled.checked,
     polishProvider: polishProviderSelect.value === "local" ? "local" : "cloud",
     contextAwareness: contextAwareness.checked,
+    formatAiDetection: formatAiDetection.checked,
     polishTones: Object.fromEntries(
       POLISH_TONE_CATEGORIES.map((category) => [category, polishToneSegs[category].get()]),
     ),
@@ -1185,6 +1201,7 @@ for (const category of POLISH_TONE_CATEGORIES) {
   polishToneSegs[category].onChange(() => void persistSettings().catch(reportAsyncError));
 }
 contextAwareness.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+formatAiDetection.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {

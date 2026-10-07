@@ -1,3 +1,4 @@
+use crate::format_context::FormatDecision;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +25,11 @@ pub struct TranscriptHistoryItem {
     /// Absent on dictations recorded before timings existed.
     #[serde(default)]
     pub timings: Option<DictationTimings>,
+    /// The polish format used and who decided it (rule, llm, user or
+    /// default), for inspection. Absent when polish was off and on older
+    /// dictations. Holds labels only, never a title or URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<FormatDecision>,
 }
 
 /// Where the wait between releasing the key and seeing text went.
@@ -50,6 +56,7 @@ pub struct NewTranscriptHistoryItem {
     pub polished: bool,
     pub raw_text: Option<String>,
     pub timings: Option<DictationTimings>,
+    pub format: Option<FormatDecision>,
 }
 
 pub struct TranscriptHistoryService {
@@ -95,6 +102,7 @@ impl TranscriptHistoryService {
             polished: item.polished,
             raw_text: item.raw_text.filter(|raw| !raw.trim().is_empty()),
             timings: item.timings,
+            format: item.format,
         };
         self.items.insert(0, stored.clone());
         self.items.truncate(MAX_TRANSCRIPTS);
@@ -220,6 +228,7 @@ mod tests {
             polished: false,
             raw_text: None,
             timings: None,
+            format: None,
         }
     }
 

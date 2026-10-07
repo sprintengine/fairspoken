@@ -698,7 +698,7 @@
                   <div class="row">
                     <div class="row-text">
                       <div class="row-label" id="polishToneOtherLabel">Everything else</div>
-                      <div class="row-help">Browsers and unrecognized apps.</div>
+                      <div class="row-help">Unrecognized apps and websites. A website with a known format (Gmail, Slack, Google Docs…) uses that format's row.</div>
                     </div>
                     <div class="row-control">
                       <div class="seg" id="polishToneOther" role="group" aria-labelledby="polishToneOtherLabel">
@@ -709,8 +709,34 @@
                       </div>
                     </div>
                   </div>
-                
+
 </div></section>
+<section id="polishFormatPanel" hidden class="settings-section" aria-labelledby="formatTitle"><h2 id="formatTitle">Formatting</h2>
+<p class="settings-section-help">Polish lays out what you say for where you say it: greeting and paragraphs in email, short lines in chat, lists in notes. It only moves your words and never adds a greeting or sign-off you did not say.</p>
+<div class="settings-card">
+<div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="formatAiDetection">Detect format with AI for unknown apps</label>
+                    <div class="row-help" id="formatAiDetectionHelp">When no built-in rule knows a website or app, ask the polish model once which format fits.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="formatAiDetection" class="switch" type="checkbox" role="switch" />
+                  </div>
+                </div>
+<form class="row" id="formatMappingAdd">
+                  <div class="row-text">
+                    <label class="row-label" for="formatMappingKey">Set a format</label>
+                    <div class="row-help">A website such as example.com, or an app as app: and its bundle id.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="formatMappingKey" class="setting-input w-md" type="text" placeholder="example.com" autocomplete="off" />
+                    <select id="formatMappingFormat" class="setting-select w-sm" aria-label="Format"></select>
+                    <button class="btn" type="submit">Set</button>
+                  </div>
+                </form>
+</div>
+<div class="settings-card" id="formatMappingRows" aria-label="Sites and apps with a format"></div>
+</section>
 <section class="settings-section" aria-labelledby="contextTitle"><h2 id="contextTitle">Context</h2><div class="settings-card">
 <div class="row" id="contextAwarenessRow">
                   <div class="row-text">

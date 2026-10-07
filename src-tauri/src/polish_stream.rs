@@ -312,7 +312,12 @@ fn context_tail(sealed: &str) -> String {
     }
 }
 
+/// Joins two passes with a space, except where a format layout set a line on
+/// its own at the seam: a greeting that ended the earlier pass ("Hi Mary,"),
+/// or a sign-off block that opens the later one ("Thanks,\nSam"). Flattening
+/// those with a space would undo the email layout the model was asked for.
 fn join(previous: &str, next: &str) -> String {
+    use crate::transcript_cleanup::is_salutation_line;
     let previous = previous.trim_end();
     let next = next.trim();
     if previous.is_empty() {
@@ -321,7 +326,13 @@ fn join(previous: &str, next: &str) -> String {
     if next.is_empty() {
         return previous.to_string();
     }
-    format!("{previous} {next}")
+    let greeting_ends_previous = previous.lines().last().is_some_and(is_salutation_line);
+    let sign_off_opens_next = next.contains('\n') && next.lines().next().is_some_and(is_salutation_line);
+    if greeting_ends_previous || sign_off_opens_next {
+        format!("{previous}\n\n{next}")
+    } else {
+        format!("{previous} {next}")
+    }
 }
 
 #[cfg(test)]
@@ -576,6 +587,38 @@ mod tests {
         let finish = stream.finish_job(11, &long).expect("commit");
         assert_eq!(finish.raw, "and tell sam");
         assert_eq!(stream.composed(), long[..frozen].trim());
+    }
+
+    #[test]
+    fn an_email_layout_survives_the_seams_between_passes() {
+        // A greeting sealed on its own keeps its line.
+        assert_eq!(
+            join("Hi Mary,", "Thanks for the slides."),
+            "Hi Mary,\n\nThanks for the slides."
+        );
+        // A sign-off block that opens a later pass keeps its lines.
+        assert_eq!(
+            join("Can we move the call to Thursday?", "Thanks,\nSam"),
+            "Can we move the call to Thursday?\n\nThanks,\nSam"
+        );
+        // Plain cleanup never produces either, and is joined as before.
+        assert_eq!(join("Hi Mary.", "Thanks for the slides."), "Hi Mary. Thanks for the slides.");
+        assert_eq!(
+            join("We went there, and then,", "we left."),
+            "We went there, and then, we left."
+        );
+        assert_eq!(join("Okay.", "Thanks, Sam."), "Okay. Thanks, Sam.");
+
+        let mut stream = PolishStream::default();
+        stream.begin(12);
+        let raw = "Hi Mary. Thanks for the slides.";
+        let job = stream.next_job(12, raw, "Hi Mary.".len()).expect("greeting seal");
+        assert!(job.seal);
+        assert!(stream.apply(12, &job, "Hi Mary,"));
+        let job = stream.next_job(12, raw, 0).expect("tail");
+        assert_eq!(job.context, "Hi Mary,");
+        assert!(stream.apply(12, &job, "Thanks for the slides."));
+        assert_eq!(stream.composed(), "Hi Mary,\n\nThanks for the slides.");
     }
 
     #[test]

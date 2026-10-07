@@ -12,6 +12,9 @@ mod cursor_preview;
 mod edit_diff;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod edit_watch;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod format_classifier;
+mod format_context;
 mod host;
 mod hugging_face;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -29,6 +32,7 @@ mod models;
 mod note_debug;
 mod notes;
 mod polish;
+mod polish_input;
 mod polish_stream;
 mod post_processing;
 mod preview;
@@ -119,6 +123,10 @@ struct AppServices {
     /// (context awareness Phase B). Set at recording start, read at finish,
     /// never persisted.
     session_vocabulary: Mutex<Vec<String>>,
+    /// The current recording's format decision (`format_context`), and the
+    /// learned and user-set site/app mappings it reads.
+    format_session: Mutex<Option<Arc<format_context::FormatSession>>>,
+    format_memory: Arc<Mutex<format_context::FormatMemory>>,
     transcript_shelf_positioned: AtomicBool,
     #[cfg(target_os = "macos")]
     fn_push_to_talk_enabled: Arc<AtomicBool>,
@@ -1194,6 +1202,22 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
     // audio capture became active, clear that stale worker before the next attempt.
     cancel_transcription_for_location(&services, settings.transcription_location)?;
     invalidate_previews(&services);
+    // Decide the polish format (docs/polish-input.md) on a background thread
+    // while the user speaks; the previous recording's session ends here.
+    let format_session = format_context::begin_recording(
+        &app,
+        &settings,
+        services.format_memory.clone(),
+        trace.clone(),
+    );
+    if let Some(previous) = services
+        .format_session
+        .lock()
+        .map_err(|e| e.to_string())?
+        .replace(format_session)
+    {
+        previous.stop();
+    }
     let cursor_session = services.preview_generation.load(Ordering::SeqCst);
     // Remote transcription streams no previews, so bind the polish stream here
     // rather than in the forwarder: the commit path must never mistake a
@@ -1463,6 +1487,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     let mut cursor_guard = CursorSessionGuard::new(app, cursor_session);
 
     let trace = services.debug_trace.lock().ok().and_then(|mut t| t.take());
+    let format_decision = format_context::end_recording(&services.format_session);
     let settings = services
         .settings
         .lock()
@@ -1506,11 +1531,16 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     // failure.
     #[cfg(target_os = "macos")]
     let frontmost_app = macos_input::frontmost_app().map(|app| polish::PolishTargetApp {
+        format: format_decision.for_target(&app.bundle_id).format,
         bundle_id: app.bundle_id,
         name: app.name,
     });
     #[cfg(not(target_os = "macos"))]
     let frontmost_app: Option<polish::PolishTargetApp> = None;
+    let format_record = settings.polish_enabled.then(|| match &frontmost_app {
+        Some(app) => format_decision.for_target(&app.bundle_id),
+        None => format_decision.clone(),
+    });
 
     // Context awareness Phases A/C: one budgeted read of the focused
     // element's caret situation, used for the polish surrounding text and
@@ -1692,6 +1722,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
                 polish_ms,
                 total_ms: released_at.elapsed().as_millis() as u64,
             }),
+            format: format_record,
         })?;
 
     #[cfg(target_os = "macos")]
@@ -2407,6 +2438,7 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
         .map(|s| s.session_id)
         .unwrap_or(0);
     hide_cursor_session(&app, cursor_session);
+    format_context::end_recording(&services.format_session);
     services.local_models.unload();
     if let Some(handle) = services
         .local_transcription_cancel
@@ -2654,18 +2686,30 @@ fn start_transcript_preview_forwarder(
         let trace = trace.clone();
         thread::spawn(move || {
             #[cfg(target_os = "macos")]
-            let target = macos_input::frontmost_app().map(|a| polish::PolishTargetApp {
+            let mut target = macos_input::frontmost_app().map(|a| polish::PolishTargetApp {
                 bundle_id: a.bundle_id,
                 name: a.name,
+                format: polish_input::Format::Plain,
             });
             #[cfg(not(target_os = "macos"))]
-            let target: Option<polish::PolishTargetApp> = None;
+            let mut target: Option<polish::PolishTargetApp> = None;
             if settings.polish_provider == settings::PolishProvider::Local {
                 // Load cleanup weights alongside capture and ASR initialization.
                 let _ = app
                     .state::<AppServices>()
                     .local_models
                     .warm(&settings.polish_model, &preview_cancel);
+            }
+            // Every pass of a dictation uses one format, so the first waits
+            // for a classifier still answering (only ever for a site or app
+            // seen for the first time); the runtime is free for it meanwhile.
+            if let Some(session) =
+                format_context::current_session(&app.state::<AppServices>().format_session)
+            {
+                let decision = session.wait_settled(format_context::FIRST_PASS_WAIT);
+                if let Some(target) = target.as_mut() {
+                    target.format = decision.for_target(&target.bundle_id).format;
+                }
             }
             loop {
                 let services = app.state::<AppServices>();
@@ -2909,6 +2953,8 @@ pub fn run() {
             remote_transcription: Mutex::new(None),
             polish_stream: Mutex::new(polish_stream::PolishStream::default()),
             session_vocabulary: Mutex::new(Vec::new()),
+            format_session: Mutex::new(None),
+            format_memory: Arc::new(Mutex::new(format_context::FormatMemory::default())),
             transcript_shelf_positioned: AtomicBool::new(false),
             #[cfg(target_os = "macos")]
             fn_push_to_talk_enabled: Arc::new(AtomicBool::new(false)),
@@ -2943,6 +2989,9 @@ pub fn run() {
             set_cursor_preview_claimed,
             copy_cursor_preview_text,
             get_note_debug_status,
+            format_context::get_format_mappings,
+            format_context::set_format_mapping,
+            format_context::remove_format_mapping,
             set_note_debug_capture,
             get_note_metadata,
             get_local_model_catalog,

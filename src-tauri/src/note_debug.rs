@@ -102,7 +102,7 @@ impl Trace {
         state.metadata.clone()
     }
     pub fn span(&self, phase: &str, raw: &str, target: Option<&PolishTargetApp>) -> Span {
-        let id = self.event("polish-start", json!({"phase":phase,"input":raw,"targetApp":target.map(|a|json!({"name":a.name,"bundleId":a.bundle_id}))}));
+        let id = self.event("polish-start", json!({"phase":phase,"input":raw,"targetApp":target.map(|a|json!({"name":a.name,"bundleId":a.bundle_id,"format":a.format}))}));
         Span {
             trace: self.clone(),
             id,

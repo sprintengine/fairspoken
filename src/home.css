@@ -419,6 +419,10 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .dict-suggestion-text { min-width: 0; }
 .dict-suggestion-reason { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
 .training-warning { color: var(--warning); }
+.dict-row.format-mapping-row { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.format-mapping-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.format-mapping-source { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
+#polishFormatPanel > .settings-card + .settings-card { margin-top: var(--sem-space-md); }
 
 /* ── Activity ────────────────────────────────────────────── */
 #activityList > .activity-row,
