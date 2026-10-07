@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.view.ContextThemeWrapper
@@ -53,6 +54,7 @@ class DockWindow(context: Context, private val app: FairspokenApp) {
     private var holding = false
     private var messageJob: Job? = null
     private var blurListener: ((Boolean) -> Unit)? = null
+    private var blurOn = false
 
     init {
         window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
@@ -163,7 +165,7 @@ class DockWindow(context: Context, private val app: FairspokenApp) {
             InsertService.Result.NoField -> {
                 window.context.getSystemService(ClipboardManager::class.java)
                     .setPrimaryClip(ClipData.newPlainText("Fairspoken", text))
-                "Copied · paste it"
+                "Copied"
             }
         }
         root.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
@@ -185,11 +187,21 @@ class DockWindow(context: Context, private val app: FairspokenApp) {
         if (!app.dictation.isBusy) ownsSession.value = false
     }
 
+    /** Crystal glass behind the bubble: silver in light mode, smoked in dark. */
     private fun applyGlass(blur: Boolean) {
+        blurOn = blur
+        val dark = (root.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val fill = when {
+            dark && blur -> 0xB81B1F24.toInt()
+            dark -> 0xF21B1F24.toInt()
+            blur -> 0xA6F4F6F8.toInt()
+            else -> 0xF2EDEFF2.toInt()
+        }
         window.setBackgroundDrawable(
             GradientDrawable().apply {
                 cornerRadius = dp(28).toFloat()
-                setColor(if (blur) 0x99F2F5F4.toInt() else 0xF2EEF2F0.toInt())
+                setColor(fill)
             },
         )
         if (Build.VERSION.SDK_INT >= 31) window.setBackgroundBlurRadius(if (blur) dp(22) else 0)
@@ -237,6 +249,12 @@ class DockWindow(context: Context, private val app: FairspokenApp) {
         }
 
         override fun onInterceptTouchEvent(ev: MotionEvent) = true
+
+        /** Light and dark follow the system, so the glass is redone when it flips. */
+        override fun onConfigurationChanged(newConfig: Configuration?) {
+            super.onConfigurationChanged(newConfig)
+            applyGlass(blurOn)
+        }
 
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(ev: MotionEvent): Boolean {

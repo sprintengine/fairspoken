@@ -10,12 +10,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -28,41 +24,49 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.unit.dp
 import ie.fairspoken.mobile.FairspokenApp
 import ie.fairspoken.mobile.core.DictationState
-import ie.fairspoken.mobile.ui.Glyph
-import ie.fairspoken.mobile.ui.Ink
+import ie.fairspoken.mobile.ui.Crystal
+import ie.fairspoken.mobile.ui.CrystalColors
+import ie.fairspoken.mobile.ui.CrystalTheme
+import ie.fairspoken.mobile.ui.Elapsed
+import ie.fairspoken.mobile.ui.Spinner
 import ie.fairspoken.mobile.ui.Type
 import ie.fairspoken.mobile.ui.checkGlyph
 import ie.fairspoken.mobile.ui.micGlyph
-import kotlinx.coroutines.delay
 
 /**
  * What the dock shows. The frosted capsule itself is the window's blurred
  * background; this draws the sheen and the content on top.
  */
 @Composable
-fun DockContent(app: FairspokenApp, dock: DockWindow) {
+fun DockContent(app: FairspokenApp, dock: DockWindow) = CrystalTheme {
+    val c = Crystal.colors
     val owns by dock.ownsSession.collectAsState()
     val dictation by app.dictation.state.collectAsState()
     val state = if (owns) dictation else DictationState.Idle
     val note = dock.message.value
 
     Row(
-        Modifier.height(56.dp).sheen(),
+        Modifier.height(56.dp).sheen(c),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         when {
             note != null -> {
                 Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
                     Canvas(Modifier.size(24.dp)) {
-                        if (note.ok) checkGlyph(Ink.ok) else micGlyph(Ink.warn)
+                        if (note.ok) checkGlyph(c.ok) else micGlyph(c.error)
                     }
                 }
-                BasicText(note.text, style = Type.label, maxLines = 1, modifier = Modifier.padding(end = 20.dp))
+                BasicText(
+                    note.text,
+                    style = Type.label.copy(color = if (note.ok) c.ink else c.error),
+                    maxLines = 1,
+                    modifier = Modifier.padding(end = 20.dp),
+                )
             }
             state is DictationState.Listening -> {
                 Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
                     Canvas(Modifier.size(34.dp)) {
-                        drawCircle(Ink.record)
+                        drawCircle(c.live)
                         val s = size.minDimension * 0.34f
                         drawRoundRect(
                             Color.White,
@@ -72,30 +76,30 @@ fun DockContent(app: FairspokenApp, dock: DockWindow) {
                         )
                     }
                 }
-                Waveform(dock.levels)
+                Waveform(dock.levels, c.ink)
                 Spacer(Modifier.width(10.dp))
                 Elapsed(state.startedAt)
                 Spacer(Modifier.width(18.dp))
             }
             state is DictationState.Transcribing -> Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                Glyph(state, Modifier.size(24.dp))
+                Spinner(c.accent, Modifier.size(24.dp))
             }
             else -> Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.size(26.dp)) { micGlyph(Ink.primary) }
+                Canvas(Modifier.size(26.dp)) { micGlyph(c.ink) }
             }
         }
     }
 }
 
 @Composable
-private fun Waveform(levels: List<Float>) {
+private fun Waveform(levels: List<Float>, ink: Color) {
     Canvas(Modifier.width(78.dp).height(28.dp)) {
         val gap = size.width / levels.size
         val bar = gap * 0.55f
         levels.forEachIndexed { i, level ->
             val h = (size.height * (0.12f + level * 0.88f)).coerceAtMost(size.height)
             drawRoundRect(
-                Ink.primary.copy(alpha = 0.45f + level * 0.55f),
+                ink.copy(alpha = 0.40f + level * 0.60f),
                 topLeft = Offset(i * gap + (gap - bar) / 2, (size.height - h) / 2),
                 size = Size(bar, h),
                 cornerRadius = CornerRadius(bar / 2),
@@ -104,34 +108,19 @@ private fun Waveform(levels: List<Float>) {
     }
 }
 
-@Composable
-private fun Elapsed(startedAt: Long) {
-    var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
-    LaunchedEffect(startedAt) {
-        while (true) {
-            now = android.os.SystemClock.elapsedRealtime()
-            delay(250)
-        }
-    }
-    val seconds = ((now - startedAt) / 1000).coerceAtLeast(0)
-    BasicText(
-        "%d:%02d".format(seconds / 60, seconds % 60),
-        style = Type.label.copy(fontFeatureSettings = "tnum"),
-    )
-}
-
 /** A thin specular rim and top light, the "liquid" catch on the glass. */
-private fun Modifier.sheen(): Modifier = drawWithContent {
+private fun Modifier.sheen(c: CrystalColors): Modifier = drawWithContent {
     val r = CornerRadius(size.height / 2)
+    val light = if (c.dark) 0.10f else 0.55f
     drawRoundRect(
-        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.55f), Color.Transparent, Color.White.copy(alpha = 0.18f))),
+        Brush.verticalGradient(listOf(Color.White.copy(alpha = light), Color.Transparent, Color.White.copy(alpha = light * 0.3f))),
         cornerRadius = r,
     )
-    // A faint graphite edge keeps the bubble visible over white pages.
-    drawRoundRect(Ink.primary.copy(alpha = 0.14f), cornerRadius = r, style = Stroke(0.8.dp.toPx()))
+    // A faint edge keeps the bubble visible over pages of its own colour.
+    drawRoundRect(if (c.dark) Color.White.copy(alpha = 0.14f) else c.ink.copy(alpha = 0.12f), cornerRadius = r, style = Stroke(0.8.dp.toPx()))
     drawRoundRect(
         Brush.linearGradient(
-            listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.06f), Color.White.copy(alpha = 0.30f)),
+            listOf(c.edge, Color.White.copy(alpha = 0.04f), c.edge.copy(alpha = c.edge.alpha * 0.4f)),
             start = Offset.Zero,
             end = Offset(size.width, size.height),
         ),

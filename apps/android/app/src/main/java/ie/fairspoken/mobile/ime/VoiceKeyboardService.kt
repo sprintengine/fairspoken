@@ -7,6 +7,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -42,6 +43,13 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
         window.window?.decorView?.let { root ->
             root.setViewTreeLifecycleOwner(this)
             root.setViewTreeSavedStateRegistryOwner(this)
+        }
+        // The panel's crystal backdrop runs under the navigation bar, as in the app.
+        window.window?.let { w ->
+            WindowCompat.setDecorFitsSystemWindows(w, false)
+            w.isNavigationBarContrastEnforced = false
+            @Suppress("DEPRECATION")
+            w.navigationBarColor = android.graphics.Color.TRANSPARENT
         }
         return ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
