@@ -118,6 +118,16 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
 
     public var pairingEnabled: Bool { !pairingPassword.isEmpty }
 
+    /// True for one specific non-loopback address (`100.101.102.103`): the host then also
+    /// listens on `127.0.0.1` so this Mac's own apps keep working. Loopback and the wildcard
+    /// addresses already cover this Mac.
+    public static func needsLoopbackCompanion(_ bindAddress: String) -> Bool {
+        let address = bindAddress.trimmingCharacters(in: .whitespaces)
+        if ["0.0.0.0", "::", "*", "localhost", "::1"].contains(address) { return false }
+        if address.hasPrefix("127.") { return false }
+        return true
+    }
+
     /// Host and client names as shown: trimmed, without control characters, at most 64
     /// characters; nil when nothing is left (Rust `resolve_host_name`, `PairRequest::client_name`).
     public static func cleanName(_ raw: String, maxLength: Int = 64) -> String? {

@@ -110,6 +110,18 @@ peer with `Online: true` (skipping phones and TVs: `OS` `iOS`, `android`,
 3. `http://<first IPv4 in TailscaleIPs>:48173/v1/hello`, for a host bound to
    `0.0.0.0` or its Tailscale address on the default port.
 
+Clients also probe `http://127.0.0.1:<port>/v1/hello` for hosts on the same
+computer, on the default port and (on macOS) on the port in Fairspoken
+Server's `host-config.json`. These come first in the list and are probed even
+when Tailscale isn't installed or running. When the same host (same name and
+port) answers both on loopback and on this computer's Tailscale address, only
+the loopback entry is listed, so a client on the host's own computer saves
+`127.0.0.1`.
+
+A host bound to one specific non-loopback address (its Tailscale IP) also
+listens on `127.0.0.1` at the same port, best effort, so apps on its own
+computer can reach it whichever address they saved.
+
 A peer that answers with `service: "fairspoken-host"` is listed once, at the
 first URL in that order that answered. Without the CLI, or for a
 non-default port, the user can type a machine name or `name:port`, which the
