@@ -1,0 +1,11 @@
+# Conversion venv: llama.cpp b10930's converters and the merge scripts.
+# Separate from requirements.txt because llama.cpp pins transformers 4.x and
+# mlx-lm needs 5.x. Also install llama.cpp's own gguf-py from the b10930
+# source: pip install <llama.cpp-b10930>/gguf-py
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.11.0
+transformers==4.57.6
+numpy==2.4.6
+sentencepiece==0.2.2
+protobuf==4.25.9
+safetensors==0.8.0

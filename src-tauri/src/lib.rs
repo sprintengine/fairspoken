@@ -33,6 +33,7 @@ mod note_debug;
 mod notes;
 mod phonetic_index;
 mod polish;
+mod polish_adapters;
 mod polish_input;
 mod polish_stream;
 mod post_processing;
@@ -315,14 +316,14 @@ fn save_settings_inner(
     }
 
     if settings.polish_enabled && settings.polish_provider == settings::PolishProvider::Local {
-        local_models::spec(&settings.polish_model)?;
-        if !services.local_models.installed(&settings.polish_model) {
-            return Err("Download the selected polish model first".into());
-        }
+        services.local_models.served(&settings)?;
     }
     if !settings.polish_enabled
         || settings.polish_provider != current_settings.polish_provider
         || settings.polish_model != current_settings.polish_model
+        || settings.polish_local_model_path != current_settings.polish_local_model_path
+        || settings.polish_local_model_prompt != current_settings.polish_local_model_prompt
+        || settings.polish_local_adapters != current_settings.polish_local_adapters
     {
         services.local_models.unload();
     }
@@ -2707,7 +2708,7 @@ fn start_transcript_preview_forwarder(
                 let _ = app
                     .state::<AppServices>()
                     .local_models
-                    .warm(&settings.polish_model, &preview_cancel);
+                    .warm(&settings, &preview_cancel);
             }
             // Every pass of a dictation uses one format, so the first waits
             // for a classifier still answering (only ever for a site or app

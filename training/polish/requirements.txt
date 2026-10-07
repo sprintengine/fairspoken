@@ -1,0 +1,11 @@
+# Training venv (Apple Silicon): data generation, MLX LoRA training, eval.
+# Python 3.12-3.14. Install with: pip install -r requirements.txt
+mlx==0.32.3
+mlx-metal==0.32.3
+mlx-lm==0.32.0
+transformers==5.19.0
+huggingface_hub==1.33.0
+safetensors==0.8.0
+numpy==2.5.3
+PyYAML==6.0.3
+Jinja2==3.1.6

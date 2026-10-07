@@ -1,0 +1,38 @@
+# Base retrain: teach the tagged contract to SpeakoFlow Mini's merged weights.
+# Relative paths resolve against the work directory run.sh switches to
+# ($FAIRSPOKEN_TRAIN, default /Volumes/workdrive/fairspoken-train).
+model: models/speakoflow-mini-hf
+train: true
+fine_tune_type: lora
+data: data/base
+adapter_path: adapters/base
+seed: 7
+# The last 8 of 24 decoder layers, and only the projections llama.cpp stores
+# verbatim (full-attention q/k/v/o and the MLP). The linear-attention
+# projections are reordered and fused on GGUF export, which is where Qwen3.5
+# LoRA conversion breaks, so they stay frozen (as they did for SpeakoFlow).
+num_layers: 8
+lora_parameters:
+  keys: ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj",
+         "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]
+  rank: 16
+  scale: 2.0
+  dropout: 0.05
+# Memory-safe on a 16 GB Mac: batch 1 at 512 tokens keeps the 248k-entry
+# vocabulary's logits small (batch 4 at 1,024 tokens reached 14 GB). train.py
+# also caps MLX at --max-memory-gb (default 6) and aborts above it.
+batch_size: 1
+grad_accumulation_steps: 4
+iters: 6000
+learning_rate: 1.0e-4
+lr_schedule:
+  name: cosine_decay
+  warmup: 100
+  arguments: [1.0e-4, 6000, 1.0e-6]
+mask_prompt: true
+grad_checkpoint: true
+max_seq_length: 512
+steps_per_report: 25
+steps_per_eval: 250
+val_batches: 50
+save_every: 250

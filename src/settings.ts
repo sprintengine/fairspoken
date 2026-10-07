@@ -57,12 +57,17 @@ interface Settings {
   polishProvider: "local" | "cloud";
   polishModel: string;
   polishTones: Record<string, string>;
+  polishLocalModelPath: string;
+  polishLocalModelPrompt: LocalPolishPrompt;
+  polishLocalAdapters: string[];
   contextAwareness: boolean;
   trainingCapture: boolean;
   /** 30, 90, or 0 for "until deleted". */
   trainingRetentionDays: number;
   formatAiDetection: boolean;
 }
+
+type LocalPolishPrompt = "tagged" | "instructed" | "speakoflow";
 
 interface ModelStatus {
   model: SttModel;
@@ -128,6 +133,9 @@ const DEFAULTS: Settings = {
   polishProvider: "cloud",
   polishModel: "speakoflow-mini",
   polishTones: {},
+  polishLocalModelPath: "",
+  polishLocalModelPrompt: "tagged",
+  polishLocalAdapters: [],
   contextAwareness: false,
   trainingCapture: false,
   trainingRetentionDays: 30,
@@ -196,6 +204,9 @@ const polishEnabled = required<HTMLInputElement>("polishEnabled");
 const polishHelp = required<HTMLElement>("polishHelp");
 const polishTonesPanel = required<HTMLElement>("polishTonesPanel");
 const contextAwareness = required<HTMLInputElement>("contextAwareness");
+const polishLocalModelPath = required<HTMLInputElement>("polishLocalModelPath");
+const polishLocalModelPrompt = required<HTMLSelectElement>("polishLocalModelPrompt");
+const polishLocalAdapters = required<HTMLInputElement>("polishLocalAdapters");
 const contextAwarenessRow = required<HTMLElement>("contextAwarenessRow");
 const polishFormatPanel = required<HTMLElement>("polishFormatPanel");
 const formatAiDetection = required<HTMLInputElement>("formatAiDetection");
@@ -366,6 +377,11 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
       ? Number(settings.trainingRetentionDays)
       : DEFAULTS.trainingRetentionDays,
     formatAiDetection: settings.formatAiDetection ?? DEFAULTS.formatAiDetection,
+    polishLocalModelPath: (settings.polishLocalModelPath ?? "").trim(),
+    polishLocalModelPrompt: settings.polishLocalModelPrompt === "instructed" || settings.polishLocalModelPrompt === "speakoflow"
+      ? settings.polishLocalModelPrompt
+      : "tagged",
+    polishLocalAdapters: splitPaths((settings.polishLocalAdapters ?? []).join(",")),
     vocabularyHints: normalizeVocabularyHints(settings.vocabularyHints ?? DEFAULTS.vocabularyHints),
     transcriptCorrections: normalizeTranscriptCorrections(settings.transcriptCorrections ?? DEFAULTS.transcriptCorrections),
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULTS.recordingShortcut, DEFAULTS.recordingShortcut),
@@ -404,7 +420,11 @@ function applyToForm(settings: Settings): void {
   const speechName = document.getElementById("selectedSpeechModel");
   if (speechName) speechName.textContent = `${settings.model === "parakeet-ultra" ? "Moondream" : settings.model.startsWith("parakeet") ? "NVIDIA" : "OpenAI"} · ${modelSelect.selectedOptions[0]?.textContent ?? settings.model}`;
   const polishName = document.getElementById("selectedPolishModel");
-  if (polishName) polishName.textContent = POLISH_MODEL_NAMES[settings.polishModel] ?? settings.polishModel;
+  if (polishName) {
+    polishName.textContent = settings.polishLocalModelPath
+      ? `Local file · ${settings.polishLocalModelPath.split(/[\\/]/).pop()}`
+      : POLISH_MODEL_NAMES[settings.polishModel] ?? settings.polishModel;
+  }
   updateModelSize(settings.model);
   remoteUrl.value = settings.remoteUrl;
   remoteAuthToken.value = settings.remoteAuthToken;
@@ -434,6 +454,9 @@ function applyToForm(settings: Settings): void {
   polishEnabled.checked = settings.polishEnabled;
   contextAwareness.checked = settings.contextAwareness;
   formatAiDetection.checked = settings.formatAiDetection;
+  polishLocalModelPath.value = settings.polishLocalModelPath;
+  polishLocalModelPrompt.value = settings.polishLocalModelPrompt;
+  polishLocalAdapters.value = settings.polishLocalAdapters.join(", ");
   for (const category of POLISH_TONE_CATEGORIES) {
     polishToneSegs[category].set(settings.polishTones[category] ?? "default");
   }
@@ -456,6 +479,7 @@ function updatePolishUi(settings: Settings): void {
     : "Add your Fairspoken Cloud token below to enable cloud cleanup.";
   polishCloudAuthToken.closest<HTMLElement>("[data-polish-cloud]")?.toggleAttribute("hidden", local || !cloudAvailable);
   document.getElementById("polishLocalModelRow")?.toggleAttribute("hidden", !local);
+  document.getElementById("polishDeveloperPanel")?.toggleAttribute("hidden", !local);
   polishTonesPanel.hidden = !hasToken || !settings.polishEnabled;
   // The format decision reads the focused app through macOS Accessibility.
   polishFormatPanel.hidden = polishTonesPanel.hidden || !isMacOS();
@@ -513,10 +537,18 @@ function readFromForm(): Settings {
     polishProvider: polishProviderSelect.value === "local" ? "local" : "cloud",
     contextAwareness: contextAwareness.checked,
     formatAiDetection: formatAiDetection.checked,
+    polishLocalModelPath: polishLocalModelPath.value.trim(),
+    polishLocalModelPrompt: polishLocalModelPrompt.value as LocalPolishPrompt,
+    polishLocalAdapters: splitPaths(polishLocalAdapters.value),
     polishTones: Object.fromEntries(
       POLISH_TONE_CATEGORIES.map((category) => [category, polishToneSegs[category].get()]),
     ),
   });
+}
+
+function splitPaths(value: string): string[] {
+  const paths = value.split(",").map((path) => path.trim()).filter(Boolean);
+  return [...new Set(paths)];
 }
 
 function normalizeVocabularyHints(hints: string[] = []): string[] {
@@ -1202,6 +1234,9 @@ for (const category of POLISH_TONE_CATEGORIES) {
 }
 contextAwareness.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 formatAiDetection.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+for (const field of [polishLocalModelPath, polishLocalModelPrompt, polishLocalAdapters]) {
+  field.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
+}
 remoteTimeoutSeconds.addEventListener("change", () => void persistSettings().catch(reportAsyncError));
 
 audioDeviceSelect.addEventListener("change", () => {

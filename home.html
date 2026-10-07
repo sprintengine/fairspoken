@@ -764,6 +764,35 @@
                     <input id="postProcess" class="switch" type="checkbox" role="switch" />
                   </div>
                 </div><div class="row"><div class="row-text"><div class="row-label">Words and snippets</div><div class="row-help">Manage vocabulary, corrections, and snippets.</div></div><div class="row-control"><button class="btn" type="button" data-route="dictionary">Open dictionary</button></div></div>
+</div></section>
+<section class="settings-section" id="polishDeveloperPanel" aria-labelledby="polishDeveloperTitle"><h2 id="polishDeveloperTitle">Developer</h2><div class="settings-card">
+<div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="polishLocalModelPath">Use a local polish model file</label>
+                    <div class="row-help">An absolute path to a .gguf file, such as one trained with training/polish. Replaces the selected local model while set. Leave empty to turn off.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="polishLocalModelPath" class="setting-input mono w-lg" type="text" placeholder="/path/to/model.gguf" autocomplete="off" spellcheck="false" />
+                  </div>
+                </div>
+<div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="polishLocalModelPrompt">Prompt for that file</label>
+                    <div class="row-help">Tagged for models trained on the spelling, format and tone tags; Instructed for general instruct models; SpeakoFlow for SpeakoFlow Mini builds.</div>
+                  </div>
+                  <div class="row-control">
+                    <select id="polishLocalModelPrompt" class="setting-select w-md"><option value="tagged">Tagged</option><option value="instructed">Instructed</option><option value="speakoflow">SpeakoFlow</option></select>
+                  </div>
+                </div>
+<div class="row">
+                  <div class="row-text">
+                    <label class="row-label" for="polishLocalAdapters">LoRA adapter files</label>
+                    <div class="row-help">Absolute .gguf paths, comma separated. Each loads only if its manifest says it was trained for the model in use; otherwise polish runs without it.</div>
+                  </div>
+                  <div class="row-control">
+                    <input id="polishLocalAdapters" class="setting-input mono w-lg" type="text" placeholder="/path/to/adapter.lora.gguf" autocomplete="off" spellcheck="false" />
+                  </div>
+                </div>
 </div></section></section>
 <section class="settings-page" data-settings-page="keybindings" id="settings-keybindings" aria-label="Keybindings" hidden><section class="settings-section" aria-labelledby="recordingTitle"><h2 id="recordingTitle">Recording</h2><div class="settings-card">
 <div class="row">

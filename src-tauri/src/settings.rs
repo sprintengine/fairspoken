@@ -53,6 +53,20 @@ pub enum PolishProvider {
     Cloud,
 }
 
+/// The prompt a developer-chosen local polish model file is served with
+/// (`polish_local_model_path`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalPolishPrompt {
+    /// Trained on the tagged contract (training/polish).
+    #[default]
+    Tagged,
+    /// A general instruct model: the benchmarked rules and examples.
+    Instructed,
+    /// SpeakoFlow Mini's own system prompt and the bare transcript.
+    Speakoflow,
+}
+
 fn default_polish_model() -> String {
     "speakoflow-mini".to_string()
 }
@@ -139,6 +153,18 @@ pub struct Settings {
     /// off and have no entry.
     #[serde(default)]
     pub polish_tones: HashMap<String, String>,
+    /// Developer option: polish with this local GGUF file instead of the
+    /// selected catalog model, so a locally trained model can be tried
+    /// without publishing it. Empty = off.
+    #[serde(default)]
+    pub polish_local_model_path: String,
+    #[serde(default)]
+    pub polish_local_model_prompt: LocalPolishPrompt,
+    /// Developer option: LoRA adapter files (absolute `.gguf` paths, each
+    /// with its manifest) applied to every local polish pass. They load only
+    /// when trained for the model being served; see `polish_adapters`.
+    #[serde(default)]
+    pub polish_local_adapters: Vec<String>,
     /// Context awareness: read text near the cursor and on the active window
     /// via Accessibility to improve name/term accuracy (never password
     /// fields, never password managers, never persisted). Off-device only as
@@ -264,6 +290,9 @@ impl Default for Settings {
             polish_provider: PolishProvider::Cloud,
             polish_model: default_polish_model(),
             polish_tones: HashMap::new(),
+            polish_local_model_path: String::new(),
+            polish_local_model_prompt: LocalPolishPrompt::Tagged,
+            polish_local_adapters: Vec::new(),
             context_awareness: false,
             learned_vocabulary_hints: Vec::new(),
             learn_from_edits: default_learn_from_edits(),
@@ -419,6 +448,16 @@ fn normalize(settings: Settings) -> Settings {
             settings.training_retention_days,
         ),
         enabled_packs: normalize_enabled_packs(settings.enabled_packs),
+        polish_local_model_path: settings.polish_local_model_path.trim().to_string(),
+        polish_local_adapters: {
+            let mut paths: Vec<String> = Vec::new();
+            for path in settings.polish_local_adapters.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+                if !paths.iter().any(|p| p == path) {
+                    paths.push(path.to_string());
+                }
+            }
+            paths
+        },
         transcript_corrections: normalize_transcript_corrections(settings.transcript_corrections),
         snippets: normalize_snippets(settings.snippets),
         recording_shortcut: normalize_shortcut(
@@ -652,6 +691,29 @@ mod tests {
             serde_json::from_value(serde_json::to_value(local).unwrap()).unwrap();
         assert_eq!(restored.polish_provider, super::PolishProvider::Local);
         assert!(restored.cloud_auth_token.is_empty());
+    }
+
+    #[test]
+    fn developer_local_polish_model_defaults_off_and_normalizes() {
+        let restored: Settings = serde_json::from_value(serde_json::json!({
+            "language": "en", "audioDevice": "", "noiseSuppression": true, "echoCancellation": true,
+            "inputGain": 2, "postProcess": true, "alwaysOnTop": true, "maxRecordingSeconds": 120
+        }))
+        .unwrap();
+        assert!(restored.polish_local_model_path.is_empty());
+        assert_eq!(restored.polish_local_model_prompt, super::LocalPolishPrompt::Tagged);
+        assert!(restored.polish_local_adapters.is_empty());
+        let value = serde_json::to_value(Settings {
+            polish_local_model_path: "  /m/fairspoken-polish.gguf ".into(),
+            polish_local_model_prompt: super::LocalPolishPrompt::Speakoflow,
+            polish_local_adapters: vec![" /a/gp.gguf".into(), "".into(), "/a/gp.gguf".into()],
+            ..Settings::default()
+        })
+        .unwrap();
+        assert_eq!(value["polishLocalModelPrompt"], "speakoflow");
+        let normalized = super::normalize(serde_json::from_value(value).unwrap());
+        assert_eq!(normalized.polish_local_model_path, "/m/fairspoken-polish.gguf");
+        assert_eq!(normalized.polish_local_adapters, vec!["/a/gp.gguf".to_string()]);
     }
 
     #[test]
