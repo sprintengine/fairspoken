@@ -1,14 +1,14 @@
 /* Crystal: frosted silver glass on a cool, near-neutral backdrop, with a green
    client hint (design/crystal/README.md). This file only declares tokens. It
-   loads after the vendored design-system tokens and re-points their semantic
-   colours at the Crystal palette, so every existing component follows.
+   re-points the vendored design-system's semantic colours at the Crystal
+   palette, so every existing component follows.
 
-   Selectors are doubled (`:root:root`, `[data-mode][data-mode]`) so these win
-   over tokens.css and light-scope.css regardless of stylesheet order, while a
-   nested `[data-mode]` preview pane still resolves to its own mode. */
+   It wins over tokens.css and light-scope.css by order, not specificity:
+   theme.css imports all three, once per page, in that order. A nested
+   `[data-mode]` preview pane still resolves to its own mode. */
 
-:root:root,
-[data-mode="light"][data-mode] {
+:root,
+[data-mode="light"] {
   /* Spec neutrals */
   --crystal-page: #edeff2;
   --crystal-page-sheen: #ffffff;
@@ -67,7 +67,7 @@
   --sem-shadow-control-pressed: inset 0 1px 2px rgba(16, 24, 32, 0.1);
 }
 
-[data-mode="dark"][data-mode] {
+[data-mode="dark"] {
   --crystal-page: #0d0f12;
   --crystal-page-sheen: #1b1f24;
   --crystal-surface: rgba(255, 255, 255, 0.055);
@@ -119,13 +119,13 @@
 
 /* Reduced transparency: the same layout on solid fills. */
 @media (prefers-reduced-transparency: reduce) {
-  :root:root,
-  [data-mode="light"][data-mode] {
+  :root,
+  [data-mode="light"] {
     --crystal-surface: #f8f9fa;
     --crystal-surface-strong: #ffffff;
     --crystal-surface-overlay: #ffffff;
   }
-  [data-mode="dark"][data-mode] {
+  [data-mode="dark"] {
     --crystal-surface: #181b1f;
     --crystal-surface-strong: #20242a;
     --crystal-surface-overlay: #20242a;
@@ -134,8 +134,8 @@
 
 /* Mappings shared by both modes. They are declared on every mode scope so a
    nested preview pane resolves them against its own palette. */
-:root:root,
-[data-mode][data-mode] {
+:root,
+[data-mode] {
   --crystal-glass-filter: blur(24px) saturate(160%);
   --crystal-backdrop:
     radial-gradient(70% 60% at 0% 0%, var(--crystal-wash), transparent 70%),
@@ -183,6 +183,6 @@
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  :root:root,
-  [data-mode][data-mode] { --crystal-glass-filter: none; }
+  :root,
+  [data-mode] { --crystal-glass-filter: none; }
 }

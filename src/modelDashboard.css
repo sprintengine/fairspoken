@@ -1,4 +1,3 @@
-@import "./design-system/tokens.css";
 @import "./design-system/button.css";
 @import "./design-system/list-row.css";
 @import "./design-system/extension-icon.css";
@@ -15,7 +14,7 @@
   color: var(--sem-color-text-default);
 }
 .models-actions { display: flex; align-items: center; gap: var(--sem-space-sm); flex-wrap: wrap; }
-.model-feedback { margin: 0; padding: 0 var(--sem-space-xl) var(--sem-space-lg); color: var(--sem-color-text-muted); }
+.model-feedback { margin: 0; color: var(--sem-color-text-muted); }
 .model-feedback:empty { display: none; }
 .model-feedback[data-error="true"] { color: var(--sem-color-status-danger); }
 
@@ -24,7 +23,6 @@
 .model-row {
   cursor: default;
   margin: 0;
-  padding: var(--sem-space-xl);
   border-radius: 0;
   align-items: flex-start;
   flex-wrap: wrap;
@@ -39,7 +37,7 @@
 .model-row .ds-list-row-title { color: var(--sem-color-text-primary); font-weight: var(--sem-font-weight-medium); }
 .model-row .ds-list-row-supporting { display: block; white-space: normal; font-size: var(--sem-font-size-meta); }
 .model-status { display: block; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
-.model-row progress { display: block; width: 100%; accent-color: var(--sem-color-accent-primary); margin-top: var(--sem-space-xs); }
+.model-row progress { display: block; width: 100%; margin-top: var(--sem-space-xs); }
 .model-row progress[hidden] { display: none; }
 .model-row .ds-extension-icon { --ds-extension-icon-size: var(--sem-size-control-lg); }
 .model-row .ds-extension-icon-monogram { font-size: var(--sem-font-size-heading); }

@@ -1,7 +1,6 @@
-@import "./design-system/tokens.css";
+@import "./theme.css";
 @import "./design-system/popover.css";
 @import "./design-system/button.css";
-@import "./crystalTokens.css";
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 body { box-sizing: border-box; padding: var(--sem-space-xl); user-select: none; }
 @property --preview-glow-angle {

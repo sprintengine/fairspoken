@@ -1,8 +1,7 @@
 /* Transcript shelf window: the stack of copied messages above the pill.
    Crystal look (design/crystal/README.md): each clip is a frosted silver card
    that firms up when pointed at. Follows the app appearance (appearance.ts). */
-@import "./design-system/tokens.css";
-@import "./crystalTokens.css";
+@import "./theme.css";
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
