@@ -1317,6 +1317,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
                 .lock()
                 .map_err(|_| "Remote transcription service lock failed".to_string())?;
             if remote.is_some() {
+                drop(stream_sink);
                 session.cancel();
                 return Err("Remote transcription session already in progress".to_string());
             }

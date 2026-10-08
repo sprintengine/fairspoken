@@ -198,10 +198,13 @@ impl AudioService {
             .buffer
             .take()
             .ok_or_else(|| "Recording buffer is unavailable".to_string())?;
-        let pcm_i16 = buffer
-            .lock()
-            .map_err(|_| "Recording buffer lock failed".to_string())?
-            .clone();
+        // The stream is gone, so nothing writes to the buffer any more: move
+        // the samples out rather than copying minutes of audio.
+        let pcm_i16 = std::mem::take(
+            &mut *buffer
+                .lock()
+                .map_err(|_| "Recording buffer lock failed".to_string())?,
+        );
         let dropped_stream_frames = self
             .dropped_stream_frames
             .take()

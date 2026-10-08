@@ -12,6 +12,10 @@ use std::time::Duration;
 
 const STREAM_CONTENT_TYPE: &str = "application/vnd.fairspoken.pcm-stream";
 const STREAM_CHANNEL_DEPTH: usize = 12;
+/// The health check is a tiny GET: a host that cannot answer it this quickly
+/// is unreachable for dictation too, so "Test" should say so promptly.
+const HEALTH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,13 +159,9 @@ pub struct RemoteStreamingSession {
 
 pub fn test_remote_transcription_host(settings: &Settings) -> Result<RemoteHealth, String> {
     let target = resolve_remote_target(settings)?;
-    let timeout_seconds = u64::from(
-        settings
-            .remote_timeout_seconds
-            .saturating_add(settings.max_recording_seconds),
-    );
     let client = Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
+        .connect_timeout(HEALTH_CONNECT_TIMEOUT)
+        .timeout(HEALTH_TIMEOUT)
         .build()
         .map_err(|err| format!("Failed to create remote transcription client: {err}"))?;
     let url = target
@@ -246,11 +246,12 @@ impl RemoteStreamingSession {
         result
     }
 
+    /// Ends the audio stream and walks away from the worker. It may be
+    /// waiting on a host that will never answer (Wi-Fi gone), so joining it
+    /// could hang the caller, as `finish` also avoids.
     pub fn cancel(mut self) {
         drop(self.audio_tx);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        self.worker.take();
     }
 }
 
@@ -683,6 +684,26 @@ mod tests {
         };
 
         assert_eq!(remote_connect_timeout(&settings), Duration::from_secs(15));
+    }
+
+    #[test]
+    fn cancel_does_not_wait_for_a_worker_stuck_on_the_host() {
+        let (audio_tx, _audio_rx) = std::sync::mpsc::sync_channel(1);
+        let (_result_tx, result_rx) = std::sync::mpsc::channel();
+        let (_never_tx, never_rx) = std::sync::mpsc::channel::<()>();
+        // A worker blocked on a response that never comes.
+        let worker = std::thread::spawn(move || {
+            let _ = never_rx.recv();
+        });
+        let session = super::RemoteStreamingSession {
+            audio_tx,
+            result_rx,
+            worker: Some(worker),
+            finish_timeout: Duration::from_secs(60),
+        };
+        let started = std::time::Instant::now();
+        session.cancel();
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
