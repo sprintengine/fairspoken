@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "cursor-preview",
+  "description": "The dictation preview at the cursor: app commands and events only",
+  "windows": ["cursor-preview"],
+  "permissions": ["core:default"]
+}

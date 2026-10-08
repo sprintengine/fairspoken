@@ -3135,3 +3135,83 @@ mod shortcut_patch_tests {
         assert_eq!(patched.vocabulary_hints, ["Niamh"]);
     }
 }
+
+#[cfg(test)]
+mod capability_tests {
+    use serde_json::Value;
+
+    fn capabilities() -> Vec<Value> {
+        [
+            include_str!("../capabilities/pill.json"),
+            include_str!("../capabilities/home.json"),
+            include_str!("../capabilities/transcript-shelf.json"),
+            include_str!("../capabilities/cursor-preview.json"),
+        ]
+        .iter()
+        .map(|raw| serde_json::from_str(raw).unwrap())
+        .collect()
+    }
+
+    fn permission_ids(capability: &Value) -> Vec<String> {
+        capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().or(p["identifier"].as_str()).unwrap().to_string())
+            .collect()
+    }
+
+    /// Each window gets only the plugin APIs its own frontend calls; see the
+    /// capability descriptions for which code needs each one.
+    #[test]
+    fn every_window_has_one_capability_granting_only_what_it_uses() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(config["app"].get("withGlobalTauri").is_none());
+        let mut labels: Vec<String> = config["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["label"].as_str().unwrap().to_string())
+            .collect();
+        let capabilities = capabilities();
+        let mut covered: Vec<String> = capabilities
+            .iter()
+            .flat_map(|c| c["windows"].as_array().unwrap().iter())
+            .map(|w| w.as_str().unwrap().to_string())
+            .collect();
+        labels.sort();
+        covered.sort();
+        assert_eq!(covered, labels, "one capability per window");
+
+        for capability in &capabilities {
+            let window = capability["windows"][0].as_str().unwrap();
+            let mut extra: Vec<String> = permission_ids(capability)
+                .into_iter()
+                .filter(|id| id != "core:default")
+                .collect();
+            extra.sort();
+            let expected: &[&str] = match window {
+                "main" => &[
+                    "global-shortcut:allow-is-registered",
+                    "global-shortcut:allow-register",
+                    "global-shortcut:allow-unregister",
+                ],
+                "home" => &["core:window:allow-start-dragging", "opener:allow-open-url"],
+                "transcript-shelf" => &["core:window:allow-start-dragging"],
+                "cursor-preview" => &[],
+                other => panic!("unexpected window {other}"),
+            };
+            assert_eq!(extra, expected, "{window}");
+            assert!(permission_ids(capability).contains(&"core:default".to_string()));
+        }
+
+        let home = &capabilities[1];
+        let opener = home["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["identifier"] == "opener:allow-open-url")
+            .unwrap();
+        assert_eq!(opener["allow"], serde_json::json!([{ "url": "https://huggingface.co/*" }]));
+    }
+}
