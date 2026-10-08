@@ -381,7 +381,6 @@ mod tests {
     use crate::host::config::HostRuntimeConfig;
     #[cfg(feature = "whisper")]
     use crate::host::RunningJobInfo;
-    #[cfg(feature = "whisper")]
     use std::time::Instant;
 
     struct Stub;
