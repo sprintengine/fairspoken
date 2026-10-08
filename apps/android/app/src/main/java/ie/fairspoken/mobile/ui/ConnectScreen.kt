@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.Backdrop
 import ie.fairspoken.mobile.FairspokenApp
+import ie.fairspoken.mobile.core.HostException
 import ie.fairspoken.mobile.core.PairOutcome
 import ie.fairspoken.mobile.core.SavedHost
 import ie.fairspoken.mobile.core.TailnetStatus
@@ -69,7 +70,14 @@ fun ConnectScreen(
         busy = true
         error = null
         scope.launch {
-            val found = app.client.find(target, tailnet.domain)
+            val found = try {
+                app.client.find(target, tailnet.domain)
+            } catch (e: HostException) {
+                // Off the tailnet, the real fix is turning Tailscale on.
+                error = if (tailnet.connected) e.message else "Tailscale is off"
+                busy = false
+                return@launch
+            }
             error = when {
                 found == null -> if (tailnet.connected) "No Fairspoken host answered at $target" else "Tailscale is off"
                 found.hello.auth == "none" -> {

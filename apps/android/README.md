@@ -46,19 +46,27 @@ FAIRSPOKEN_HOST_ADDR=0.0.0.0:48173 FAIRSPOKEN_HOST_PAIRING_PASSWORD=<password> \
   src-tauri/target/release/transcription-host
 ```
 
+Then connect with the host's Tailscale name or `100.x` address. The app
+refuses plain HTTP to a LAN address (`192.168.…`), even though the host
+answers there: use the tailnet address, or put the host behind HTTPS.
+
 ## Notes and limits
 
 - **Finding hosts.** The Tailscale Android app does not share its peer list,
   so the phone can't scan the tailnet the way the desktop app does with
   `tailscale status --json`. You type the machine name once. The app expands
   it with the MagicDNS domain and probes the protocol's URLs in order.
-- **Plain HTTP** is allowed (`network_security_config.xml`) because tailnet
-  traffic is WireGuard-encrypted. Hosts behind `tailscale serve` HTTPS are
-  tried first.
+- **Plain HTTP** is allowed only to tailnet addresses (`100.64.0.0/10`,
+  `fd7a:115c:a1e0::/48`) and this device, because tailnet traffic is
+  WireGuard-encrypted. `HostClient` checks the address it actually connected
+  to before sending anything, since `network_security_config.xml` can't name
+  address ranges. Hosts behind `tailscale serve` HTTPS are tried first.
 - **The dock's microphone service** must be started from the Fairspoken
   screen. Android refuses to start microphone services from the background,
   so the service does not restart itself.
 - **Sideloaded apps** need *App info › ⋮ › Allow restricted settings* before
   Android 13+ lets you turn on the accessibility service.
-- The token is kept in private app preferences. Move it to the Android
-  Keystore before shipping.
+- The token is sealed with an AES-GCM key in the Android Keystore before it
+  goes into private app preferences, and those preferences are left out of
+  cloud backups and device transfers. Tokens saved by older builds are sealed
+  on first launch.

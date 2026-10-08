@@ -27,9 +27,15 @@ data class MobileSettings(
     val dockY: Int = Int.MIN_VALUE,
 )
 
-/** Hosts and settings, kept in private app preferences. */
+/**
+ * Hosts and settings, kept in private app preferences (left out of backups).
+ * Tokens are sealed with a Keystore key ([TokenVault]).
+ */
 class HostStore(context: Context) {
     private val prefs = context.getSharedPreferences("fairspoken", Context.MODE_PRIVATE)
+
+    /** Set while loading if a token was still stored in the clear. */
+    private var plaintextFound = false
 
     private val _hosts = MutableStateFlow(loadHosts())
     val hosts: StateFlow<List<SavedHost>> = _hosts.asStateFlow()
@@ -45,6 +51,11 @@ class HostStore(context: Context) {
 
     val active: SavedHost?
         get() = _activeHost.value
+
+    init {
+        // Tokens saved by earlier versions were plain text: seal them now.
+        if (plaintextFound) persistHosts()
+    }
 
     fun save(host: SavedHost) {
         _hosts.update { list -> list.filterNot { it.url == host.url } + host }
@@ -95,11 +106,12 @@ class HostStore(context: Context) {
             val array = JSONArray(raw)
             (0 until array.length()).map { i ->
                 val o = array.getJSONObject(i)
-                SavedHost(
-                    url = o.getString("url"),
-                    name = o.optString("name", o.getString("url")),
-                    token = if (o.isNull("token")) null else o.getString("token"),
-                )
+                val token = when {
+                    o.has("sealedToken") -> TokenVault.open(o.getString("sealedToken"))
+                    o.has("token") && !o.isNull("token") -> o.getString("token").also { plaintextFound = true }
+                    else -> null
+                }
+                SavedHost(url = o.getString("url"), name = o.optString("name", o.getString("url")), token = token)
             }
         }.getOrDefault(emptyList())
     }
@@ -107,12 +119,10 @@ class HostStore(context: Context) {
     private fun persistHosts() {
         val array = JSONArray()
         _hosts.value.forEach { host ->
-            array.put(
-                JSONObject()
-                    .put("url", host.url)
-                    .put("name", host.name)
-                    .put("token", host.token ?: JSONObject.NULL)
-            )
+            val entry = JSONObject().put("url", host.url).put("name", host.name)
+            // Never written in the clear: if the Keystore fails, the token is kept for this run only.
+            host.token?.let { token -> runCatching { TokenVault.seal(token) }.onSuccess { entry.put("sealedToken", it) } }
+            array.put(entry)
         }
         prefs.edit().putString("hosts", array.toString()).apply()
     }
