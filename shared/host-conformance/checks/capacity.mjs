@@ -25,6 +25,7 @@ export default [
       await ctx.waitForQuiet();
       await ctx.setConfig({ maxActiveStreams: 1 });
       const held = ctx.host.openStream();
+      let done;
       try {
         held.write(framesFor(tone(0.1), 16000)[0]);
         await poll(async () => (await ctx.stats()).activeStreams === 1, 10000, 'the held stream to show in activeStreams');
@@ -33,10 +34,11 @@ export default [
         check(res.status !== null, `second stream: no HTTP response (${res.error?.message})`);
         expectError(res, 429, 'second stream while maxActiveStreams (1) streams are open');
       } finally {
-        const [done] = await finish(ctx, [held]);
-        await ctx.setConfig({ maxActiveStreams: ctx.originalConfig.maxActiveStreams });
-        check(done.status !== null, `held stream got no response after it ended (${done.error?.message})`);
+        [done] = (await ctx.cleanup('end the held stream', () => finish(ctx, [held]))) ?? [];
+        await ctx.cleanup('restore maxActiveStreams', () => ctx.setConfig({ maxActiveStreams: ctx.originalConfig.maxActiveStreams }));
       }
+      ctx.assertCleanedUp();
+      check(done.status !== null, `held stream got no response after it ended (${done.error?.message})`);
     },
   },
   {
@@ -52,6 +54,7 @@ export default [
       await ctx.requireModel();
       const sub = await ctx.subscribe();
       const held = [];
+      let results;
       try {
         await ctx.setConfig({ maxActiveStreams: workers + queue + 2 });
         for (let i = 0; i < workers + queue; i += 1) {
@@ -105,12 +108,13 @@ export default [
           check(!sub.find((e) => e.type === 'job_started' && e.data.jobId === id, from), `rejected job ${id} was started anyway`);
         }
       } finally {
-        const results = await finish(ctx, held);
+        results = (await ctx.cleanup('end the held streams', () => finish(ctx, held))) ?? [];
         sub.close();
-        await ctx.setConfig({ maxActiveStreams: ctx.originalConfig.maxActiveStreams });
-        const bad = results.filter((r) => r.status !== 200);
-        check(bad.length === 0, () => `held streams did not all finish with 200: ${bad.map((r) => r.status ?? r.error?.message).join(', ')}`);
+        await ctx.cleanup('restore maxActiveStreams', () => ctx.setConfig({ maxActiveStreams: ctx.originalConfig.maxActiveStreams }));
       }
+      ctx.assertCleanedUp();
+      const bad = results.filter((r) => r.status !== 200);
+      check(bad.length === 0, () => `held streams did not all finish with 200: ${bad.map((r) => r.status ?? r.error?.message).join(', ')}`);
     },
   },
 ];

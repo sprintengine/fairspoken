@@ -38,6 +38,21 @@ SF_Q8_SHA=696769bb6911f51bc231b112926e934cf7bfc760e6cdfa24212907bc5ad41fc9
 # The runtime the app downloads (local_models.rs runtime_asset).
 RUNTIME_ASSET=llama-$LLAMA_TAG-bin-macos-arm64.tar.gz
 RUNTIME_SHA=0f3f18c106841b11fab65b039b2b7e05d83c74e3063b4de631b13c13ea4efc19
+# llama.cpp's source at the same tag (GitHub's tag archive), for the converters.
+LLAMA_SRC_SHA=d05ac4c8e2bf1ea5f7271d9d49d9186b65b7deafcb6e44d1fd9447eaa1c7b191
+# Qwen3.5-0.8B's side files at QWEN_REV (checked against the Hub's blob ids).
+QWEN_FILES="
+config.json b90b86f35c8e6925ef74ee04d0e758f0a845c83a42089ad82bbaa948de9b4204
+chat_template.jinja 273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80
+merges.txt a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d
+model.safetensors.index.json d8a08838a613b025eb7952ed9db11696213e57e76a375661ef5c12f9dd5dcf4e
+tokenizer.json 5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42
+tokenizer_config.json 49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c
+vocab.json ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003
+LICENSE bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a
+preprocessor_config.json 27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+video_preprocessor_config.json 7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13
+"
 
 tpy() { "$TRAIN_VENV/bin/python" -I "$@"; }
 cpy() { "$CONVERT_VENV/bin/python" -I "$@"; }
@@ -71,16 +86,16 @@ step_fetch() {
     "$d/speakoflow-q8/SpeakoFlow-Mini-0.8B-Q8_0.gguf" "$SF_Q8_SHA"
   fetch_one "https://huggingface.co/$QWEN_REPO/resolve/$QWEN_REV/model.safetensors-00001-of-00001.safetensors" \
     "$d/qwen3.5-0.8b-hf/model.safetensors-00001-of-00001.safetensors" "$QWEN_SHA"
-  for f in config.json chat_template.jinja merges.txt model.safetensors.index.json tokenizer.json \
-           tokenizer_config.json vocab.json LICENSE preprocessor_config.json video_preprocessor_config.json; do
-    [ -f "$d/qwen3.5-0.8b-hf/$f" ] || curl -fL --retry 3 -o "$d/qwen3.5-0.8b-hf/$f" \
-      "https://huggingface.co/$QWEN_REPO/resolve/$QWEN_REV/$f"
-  done
+  local f sha
+  while read -r f sha; do
+    [ -n "$f" ] || continue
+    fetch_one "https://huggingface.co/$QWEN_REPO/resolve/$QWEN_REV/$f" "$d/qwen3.5-0.8b-hf/$f" "$sha" </dev/null
+  done <<<"$QWEN_FILES"
   fetch_one "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_TAG/$RUNTIME_ASSET" \
     "$d/llama-$LLAMA_TAG-bin/$RUNTIME_ASSET" "$RUNTIME_SHA"
-  mkdir -p "$d/llama.cpp-src" "$W/runtime" "$W/llama.cpp"
-  [ -f "$d/llama.cpp-src/$LLAMA_TAG.tar.gz" ] || curl -fL --retry 3 -o "$d/llama.cpp-src/$LLAMA_TAG.tar.gz" \
-    "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$LLAMA_TAG.tar.gz"
+  mkdir -p "$W/runtime" "$W/llama.cpp"
+  fetch_one "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$LLAMA_TAG.tar.gz" \
+    "$d/llama.cpp-src/$LLAMA_TAG.tar.gz" "$LLAMA_SRC_SHA"
   [ -d "$RUNTIME" ] || tar -xzf "$d/llama-$LLAMA_TAG-bin/$RUNTIME_ASSET" -C "$W/runtime"
   [ -d "$LLAMA" ] || tar -xzf "$d/llama.cpp-src/$LLAMA_TAG.tar.gz" -C "$W/llama.cpp"
   "$CONVERT_VENV/bin/pip" install -q "$LLAMA/gguf-py"
@@ -135,35 +150,65 @@ step_export_pack() {
     --base "$W/export/fairspoken-polish-0.8b-Q8_0.gguf" --pack ie-general-practice
 }
 
+SERVER=
 serve() { # model [extra llama-server args...]; the app's own flags (local_models.rs)
   local model=$1; shift
-  (cd "$RUNTIME" && ./llama-server --model "$model" --host 127.0.0.1 --port "$PORT" --ctx-size 8192 --parallel 1 \
+  local log="$W/work/server-$(basename "$model").log"
+  if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    echo "a server already answers on port $PORT; stop it or set FAIRSPOKEN_EVAL_PORT" >&2
+    return 1
+  fi
+  mkdir -p "$W/work"
+  # exec, so $SERVER is llama-server itself and stop() reaches it.
+  (cd "$RUNTIME" && exec ./llama-server --model "$model" --host 127.0.0.1 --port "$PORT" --ctx-size 8192 --parallel 1 \
     --reasoning off --spec-type ngram-simple --spec-ngram-simple-size-n 2 --spec-ngram-simple-size-m 24 \
-    --no-webui "$@" >"$W/work/server-$(basename "$model").log" 2>&1) &
+    --no-webui "$@" >"$log" 2>&1) &
   SERVER=$!
-  for _ in $(seq 1 300); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && return 0; sleep 0.3; done
-  echo "llama-server did not start; see $W/work/server-$(basename "$model").log" >&2
+  trap stop EXIT
+  for _ in $(seq 1 300); do
+    kill -0 "$SERVER" 2>/dev/null || { echo "llama-server exited; see $log" >&2; return 1; }
+    curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && return 0
+    sleep 0.3
+  done
+  echo "llama-server did not start; see $log" >&2
   return 1
 }
-stop() { kill "$SERVER" 2>/dev/null || true; wait "$SERVER" 2>/dev/null || true; }
+stop() {
+  [ -n "$SERVER" ] || return 0
+  kill "$SERVER" 2>/dev/null || true
+  wait "$SERVER" 2>/dev/null || true
+  SERVER=
+}
 
 step_load_check() {
   # The merged model and the pack adapter load in the runtime the app uses,
   # the adapter starts disabled, and a request can switch it on.
   serve "$W/export/fairspoken-polish-0.8b-Q8_0.gguf" --lora "$W/export/ie-general-practice.lora.gguf" --lora-init-without-apply
-  trap stop EXIT
-  curl -sf "http://127.0.0.1:$PORT/lora-adapters"; echo
+  local url="http://127.0.0.1:$PORT" adapters off on
   local body='{"messages":[{"role":"user","content":"<format>notes</format>\n<transcript>start ramipril 5 milligrams once daily</transcript>\n\nOutput only the cleaned transcript."}],"temperature":0,"chat_template_kwargs":{"enable_thinking":false}'
-  curl -sf "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' -d "$body,\"lora\":[]}"; echo
-  curl -sf "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' -d "$body,\"lora\":[{\"id\":0,\"scale\":1.0}]}"; echo
-  stop; trap - EXIT
+  adapters=$(curl -sf "$url/lora-adapters")
+  off=$(curl -sf "$url/v1/chat/completions" -H 'Content-Type: application/json' -d "$body,\"lora\":[]}")
+  on=$(curl -sf "$url/v1/chat/completions" -H 'Content-Type: application/json' -d "$body,\"lora\":[{\"id\":0,\"scale\":1.0}]}")
+  stop
+  echo "$adapters"
+  tpy - "$adapters" "$off" "$on" <<'EOF'
+import json, sys
+adapters, off, on = (json.loads(a) for a in sys.argv[1:4])
+assert len(adapters) == 1 and adapters[0]["id"] == 0 and adapters[0]["path"].endswith("ie-general-practice.lora.gguf"), \
+    f"expected the one ie-general-practice adapter, got {adapters}"
+assert adapters[0]["scale"] == 0, f"the adapter should load disabled (scale 0), got {adapters[0]['scale']}"
+text = lambda r: r["choices"][0]["message"]["content"].strip()
+print(f"without the adapter: {text(off)!r}\nwith the adapter:    {text(on)!r}")
+assert text(off) != text(on), "switching the adapter on changed nothing"
+EOF
 }
 
 step_eval() {
   local out="$W/eval"
+  rm -rf "$out"  # --score reads every JSON here; never mix in an earlier run's
   mkdir -p "$out"
   tpy "$HERE/eval.py" --baseline "$W/data/base/test.jsonl" | tee "$out/baseline.md"
-  serve "$W/downloads/speakoflow-q8/SpeakoFlow-Mini-0.8B-Q8_0.gguf"; trap stop EXIT
+  serve "$W/downloads/speakoflow-q8/SpeakoFlow-Mini-0.8B-Q8_0.gguf"
   tpy "$HERE/eval.py" --port "$PORT" --variant speakoflow --name "SpeakoFlow Mini Q8_0 (raw prompt)" \
     --data "$W/data/base/test.jsonl" --json "$out/speakoflow.json"
   stop
@@ -182,7 +227,7 @@ step_eval() {
     --data "$W/data/ie-general-practice/test.jsonl" --json "$out/gp-adapter.json"
   tpy "$HERE/eval.py" --port "$PORT" --variant tagged --no-bench --lora 0 --name "tagged + adapter, general test" \
     --data "$W/data/base/test.jsonl" --json "$out/general-adapter.json"
-  stop; trap - EXIT
+  stop
   tpy "$HERE/eval.py" --score "$out"/*.json | tee "$out/table.md"
 }
 

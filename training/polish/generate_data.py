@@ -24,6 +24,7 @@ once they are in the tree (src/phrasePacks/*.json).
 No network, no paid APIs, no randomness outside `random.Random(seed)`.
 """
 import argparse
+import importlib.util
 import json
 import random
 import re
@@ -32,8 +33,12 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 import contract  # noqa: E402
+
+# eval.py scores these cases; they never become training rows.
+BENCH = HERE.parent.parent / "scripts" / "polish-bench.py"
 
 # ---------------------------------------------------------------------------
 # Vocabulary. (written form, [spoken variants an ASR might produce]).
@@ -390,9 +395,22 @@ def split_pool(items, key=lambda x: x if isinstance(x, str) else x[0], percent=2
     return train, test or train[:1]
 
 
+def _words(text):
+    return " ".join(re.findall(r"\{\w+\}|[\w']+", text.lower()))
+
+
+def in_prompt_examples(template):
+    """True when one of POLISH_EXAMPLES (always in train) is an instance of
+    `template`, ignoring case and punctuation; such a template cannot be held out."""
+    parts = [re.escape(p) for p in re.split(r"\{\w+\}", _words(template))]
+    pattern = re.compile(r"(?<![\w'])" + r".+?".join(parts) + r"(?![\w'])")
+    return any(pattern.search(_words(text)) for pair in POLISH_EXAMPLES for text in pair)
+
+
 def split_templates(templates):
     """Held-out templates, stratified so every behaviour (doses, UK spellings,
-    abbreviations, plain text) has templates in both splits."""
+    abbreviations, plain text) has templates in both splits. A template the
+    prompt's worked examples already show stays in train."""
     def stratum(t):
         for slot in ("{dose}", "{uk", "{abbr", "{drug", "{dev"):
             if slot in t:
@@ -401,14 +419,51 @@ def split_templates(templates):
     train, test = [], []
     for key in sorted({stratum(t) for t in templates}):
         group = [t for t in templates if stratum(t) == key]
-        tr, te = [t for t in group if not held_out(t)], [t for t in group if held_out(t)]
-        if not te and len(group) >= 2:
-            first = min(group, key=lambda t: zlib.crc32(t.encode()))
+        forced = {t for t in group if in_prompt_examples(t)}
+        tr = [t for t in group if t in forced or not held_out(t)]
+        te = [t for t in group if t not in forced and held_out(t)]
+        free = [t for t in tr if t not in forced]
+        if not te and len(free) >= 2:
+            first = min(free, key=lambda t: zlib.crc32(t.encode()))
             tr.remove(first)
             te.append(first)
         train += tr or te
-        test += te or tr
+        test += te or [t for t in tr if t not in forced] or tr
     return train, test
+
+
+def mentions(term, text):
+    """True when `term` appears in `text` as a whole word ("AF" is not in "after")."""
+    return re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text, re.I) is not None
+
+
+def norm(text):
+    """The bench's comparison form: lowercase letters and digits only."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def bench_raws():
+    """Normalised raw transcripts of scripts/polish-bench.py (CASES, HELD_OUT, FORMAT_CASES)."""
+    spec = importlib.util.spec_from_file_location("polish_bench", BENCH)
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    raws = [c[1] for c in bench.CASES] + [c[2] for c in bench.HELD_OUT] + [c[3] for c in bench.FORMAT_CASES]
+    return {norm(r) for r in raws}
+
+
+def row_raw(row):
+    raw = row.get("meta", {}).get("raw")
+    if raw is None:
+        user = next((m["content"] for m in row["messages"] if m["role"] == "user"), "")
+        m = re.search(r"<transcript>(.*?)</transcript>", user, re.S)
+        raw = m.group(1) if m else None
+    return raw
+
+
+def drop_bench_overlap(rows, raws):
+    """Without the rows whose raw transcript or target is a bench case: eval.py
+    scores the bench, so training on its cases would inflate the score."""
+    return [r for r in rows if norm(row_raw(r) or "") not in raws and norm(r["messages"][-1]["content"]) not in raws]
 
 
 def strip_punct(word):
@@ -983,7 +1038,7 @@ class Generator:
             d = r.choice(pool)
             if d not in distractors:
                 distractors.append(d)
-        distractors = [d for d in distractors if d.lower() not in target.lower() and d.lower() not in raw.lower()]
+        distractors = [d for d in distractors if not mentions(d, target) and not mentions(d, raw)]
         spelling = tagged + distractors
         r.shuffle(spelling)
         if not spelling and r.random() < 0.8:
@@ -1000,7 +1055,8 @@ class Generator:
 
 
 # The shipped prompt's worked examples (local_models.rs POLISH_EXAMPLES): the
-# behaviours "plain" must keep. Never the benchmark's held-out cases.
+# behaviours "plain" must keep. Never the benchmark's held-out cases. Always in
+# train, so split_templates keeps the templates they instantiate out of test.
 POLISH_EXAMPLES = [
     ("um so i think we should uh go with the second option you know", "So I think we should go with the second option."),
     ("let's meet on tuesday no wait wednesday at ten am", "Let's meet on Wednesday at ten AM."),
@@ -1097,9 +1153,14 @@ def main():
     fits = lambda row: sum(len(m["content"]) for m in row["messages"]) <= args.max_chars
     splits = {name: [r for r in rows if fits(r)] for name, rows in splits.items()}
     test_raws = {r["meta"]["raw"] for r in splits["test"]}
-    raw_of = lambda r: r.get("meta", {}).get("raw")
-    splits["train"] = [r for r in splits["train"] if raw_of(r) not in test_raws]
-    splits["valid"] = [r for r in splits["valid"] if raw_of(r) not in test_raws]
+    splits["train"] = [r for r in splits["train"] if row_raw(r) not in test_raws]
+    train_raws = {row_raw(r) for r in splits["train"]}
+    splits["valid"] = [r for r in splits["valid"] if row_raw(r) not in test_raws and row_raw(r) not in train_raws]
+    raws = bench_raws()
+    before = len(splits["train"]) + len(splits["valid"])
+    splits["train"] = drop_bench_overlap(splits["train"], raws)
+    splits["valid"] = drop_bench_overlap(splits["valid"], raws)
+    dropped_bench = before - len(splits["train"]) - len(splits["valid"])
     random.Random(args.seed).shuffle(splits["train"])
     for name, rows in splits.items():
         with open(out / f"{name}.jsonl", "w") as f:
@@ -1108,6 +1169,7 @@ def main():
                     row = {"messages": row["messages"]}
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     stats = {name: len(rows) for name, rows in splits.items()}
+    stats["dropped_bench_overlap"] = dropped_bench
     tests = splits["test"]
     stats["test_no_change"] = sum(r["meta"]["raw"] == r["meta"]["expected"] for r in tests)
     stats["test_by_format"] = {f: sum(r["meta"]["format"] == f for r in tests) for f in contract.FORMATS}

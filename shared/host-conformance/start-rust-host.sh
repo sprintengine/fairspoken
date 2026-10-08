@@ -36,6 +36,15 @@ pid=
 cleanup() {
   if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null || true
+    # Up to 10 s to shut down cleanly, then force it.
+    for _ in $(seq 1 100); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "transcription-host (pid $pid) did not exit within 10 s; killing it" >&2
+      kill -9 "$pid" 2>/dev/null || true
+    fi
     wait "$pid" 2>/dev/null || true
   fi
   rm -rf "$config_dir"

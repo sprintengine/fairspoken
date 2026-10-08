@@ -88,6 +88,7 @@ export default [
     description: 'over HTTP/1.1 each frame is its own chunk, and frames are flushed as they happen (snapshot and a new event each within 2 s)',
     async run(ctx) {
       const conn = await ctx.host.connectRaw();
+      let poked;
       try {
         const auth = ctx.token ? `Authorization: Bearer ${ctx.token}\r\n` : '';
         conn.write(`GET ${ctx.host.prefix}/v1/events HTTP/1.1\r\nHost: ${ctx.host.hostHeader}\r\n${auth}\r\n`);
@@ -108,7 +109,7 @@ export default [
           }, 2000, label);
         const first = await nextChunk('the snapshot chunk');
         check(/^event: snapshot\ndata: [^\n]*\n\n$/.test(first), `first chunk is not exactly the snapshot frame: ${JSON.stringify(first.slice(0, 60))}… (${first.length} bytes)`);
-        ctx.poke();
+        poked = ctx.poke();
         const chunks = [];
         for (let i = 0; i < 3; i += 1) {
           const chunk = await nextChunk(`event chunk ${i + 1} after a request that produces events`);
@@ -118,6 +119,8 @@ export default [
         check(chunks[0].startsWith('event: stream_started\n'), `first event chunk after a stream request is ${JSON.stringify(chunks[0].slice(0, 40))}, expected stream_started`);
       } finally {
         conn.close();
+        // The poke's own request must not outlive the check (it always resolves).
+        if (poked) await poked;
       }
     },
   },

@@ -111,8 +111,9 @@ export default [
         const audio = concat(tone(1), silence(10));
         expectError(await ctx.batch(wav16(audio, 16000)), 413, 'POST /v1/transcriptions with 11 s of audio (maxRecordingSeconds 10)');
       } finally {
-        await ctx.setConfig({ maxRecordingSeconds: ctx.originalConfig.maxRecordingSeconds });
+        await ctx.cleanup('restore maxRecordingSeconds', () => ctx.setConfig({ maxRecordingSeconds: ctx.originalConfig.maxRecordingSeconds }));
       }
+      ctx.assertCleanedUp();
     },
   },
 ];

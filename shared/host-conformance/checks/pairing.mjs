@@ -271,8 +271,9 @@ export default [
         eq((await ctx.setConfig({ pairingPassword: '123456' })).pairingEnabled, true, 'a six-digit number is a valid password');
         noteSecret(ctx, '123456');
       } finally {
-        await ctx.postConfig({ pairingPassword: original });
+        if (await ctx.cleanup('restore pairingPassword', () => ctx.setConfig({ pairingPassword: original }))) ctx.pairingDirty = false;
       }
+      ctx.assertCleanedUp();
       eq((await ctx.stats()).pairingEnabled, before.pairingEnabled, 'pairingEnabled after restoring');
     },
   },
