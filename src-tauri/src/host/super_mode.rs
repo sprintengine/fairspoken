@@ -367,7 +367,9 @@ pub(super) fn response_fields(
 mod tests {
     use super::*;
     use crate::host::config::HostRuntimeConfig;
+    #[cfg(feature = "whisper")]
     use crate::host::RunningJobInfo;
+    #[cfg(feature = "whisper")]
     use std::time::Instant;
 
     struct Stub;
@@ -405,6 +407,7 @@ mod tests {
         Arc::new(Stub)
     }
 
+    #[cfg(feature = "whisper")]
     fn busy(metrics: &mut HostMetrics, worker: usize) {
         metrics.start_job(
             worker,
