@@ -38,6 +38,7 @@ class InsertService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        handler.removeCallbacks(recheck)
         instance = null
         _connected.value = false
         _keyboardOpen.value = false

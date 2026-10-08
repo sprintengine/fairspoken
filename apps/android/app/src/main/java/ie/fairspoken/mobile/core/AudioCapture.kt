@@ -17,9 +17,14 @@ class AudioCapture(
     private val replay: java.io.File? = null,
     private val onFrame: (samples: ShortArray, count: Int) -> Unit,
     private val onLevel: (Float) -> Unit,
+    /** The microphone stopped delivering mid-recording (another app took it, the service died). */
+    private val onFailure: () -> Unit = {},
 ) {
     @Volatile private var running = false
-    private var thread: Thread? = null
+    private val lock = Any()
+    /** False while an audio thread runs; [stop]'s callback waits for it. */
+    private var exited = true
+    private var onStopped: (() -> Unit)? = null
 
     /** True once a frame with any signal arrived; all-zero audio means the OS muted us. */
     @Volatile var heardSignal = false
@@ -43,23 +48,39 @@ class AudioCapture(
             record.release()
             return false
         }
+        // Another app holding the microphone shows up here, not as an exception later.
+        val recording = runCatching { record.startRecording() }.isSuccess &&
+            record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+        if (!recording) {
+            runCatching { record.stop() }
+            record.release()
+            return false
+        }
         running = true
         heardSignal = false
-        thread = Thread({
+        synchronized(lock) { exited = false }
+        Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             val buffer = ShortArray(FRAME_SAMPLES)
+            var failed = false
             try {
-                record.startRecording()
                 while (running) {
                     val read = record.read(buffer, 0, buffer.size)
-                    if (read <= 0) continue
+                    // Negative is an error code (dead object, invalid operation): it won't recover.
+                    if (read < 0) {
+                        failed = true
+                        break
+                    }
+                    if (read == 0) continue
                     onFrame(buffer, read)
                     onLevel(level(buffer, read))
                 }
             } finally {
                 runCatching { record.stop() }
                 record.release()
+                exit()
             }
+            if (failed && running) onFailure()
         }, "fairspoken-mic").apply { start() }
         return true
     }
@@ -69,25 +90,45 @@ class AudioCapture(
         val pcm = java.nio.ByteBuffer.wrap(bytes, 44, bytes.size - 44).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
         running = true
         heardSignal = false
-        thread = Thread({
+        synchronized(lock) { exited = false }
+        Thread({
             val buffer = ShortArray(FRAME_SAMPLES)
-            while (running) {
-                val count = minOf(FRAME_SAMPLES, pcm.remaining())
-                pcm.get(buffer, 0, count)
-                buffer.fill(0, count, FRAME_SAMPLES)
-                onFrame(buffer, FRAME_SAMPLES)
-                onLevel(level(buffer, FRAME_SAMPLES))
-                Thread.sleep(100)
+            try {
+                while (running) {
+                    val count = minOf(FRAME_SAMPLES, pcm.remaining())
+                    pcm.get(buffer, 0, count)
+                    buffer.fill(0, count, FRAME_SAMPLES)
+                    onFrame(buffer, FRAME_SAMPLES)
+                    onLevel(level(buffer, FRAME_SAMPLES))
+                    Thread.sleep(100)
+                }
+            } finally {
+                exit()
             }
         }, "fairspoken-replay").apply { start() }
         return true
     }
 
-    /** Stops after the frame being read, so the tail of the last word is kept. */
-    fun stop() {
+    /**
+     * Stops after the frame being read, so the tail of the last word is kept.
+     * Doesn't wait: [then] runs on the audio thread once that frame has been
+     * handed to `onFrame`, or right away if the thread has already ended.
+     */
+    fun stop(then: () -> Unit = {}) {
         running = false
-        thread?.join(400)
-        thread = null
+        val runNow = synchronized(lock) {
+            if (!exited) onStopped = then
+            exited
+        }
+        if (runNow) then()
+    }
+
+    private fun exit() {
+        val then = synchronized(lock) {
+            exited = true
+            onStopped.also { onStopped = null }
+        }
+        then?.invoke()
     }
 
     private fun level(buffer: ShortArray, count: Int): Float {

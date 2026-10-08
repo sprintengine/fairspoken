@@ -59,6 +59,9 @@ import ie.fairspoken.mobile.ui.glass
 class KeyboardPanelState {
     /** The last transcript committed, while it can still be undone. */
     var lastInsert by mutableStateOf<String?>(null)
+
+    /** Why the last transcript wasn't committed, shown in place of the result. */
+    var notice by mutableStateOf<String?>(null)
 }
 
 @Composable
@@ -76,7 +79,8 @@ fun KeyboardPanel(
 ) = CrystalTheme {
     val c = Crystal.colors
     val state by app.dictation.state.collectAsState()
-    val level by app.dictation.level.collectAsState()
+    // Read only while drawing, so the level doesn't recompose the panel.
+    val level = app.dictation.level.collectAsState()
     val hosts by app.store.hosts.collectAsState()
     val backdrop = rememberLayerBackdrop()
     val haptics = LocalHapticFeedback.current
@@ -105,14 +109,14 @@ fun KeyboardPanel(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    is DictationState.Done -> Unit
+                    is DictationState.Done -> panel.notice?.let { BasicText(it, style = Type.body) }
                     DictationState.Idle -> BasicText(
                         if (hosts.isEmpty()) "Open Fairspoken to connect a host" else "Tap to speak",
                         style = Type.body,
                     )
                 }
             }
-            MicOrb(state, level, backdrop, 92.dp) {
+            MicOrb(state, { level.value }, backdrop, 92.dp) {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 onMic()
             }
@@ -147,12 +151,13 @@ private fun Key(
     val haptics = LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val shape = remember { Capsule() }
     Box(
         modifier
             .height(46.dp)
             .glass(
                 backdrop,
-                Capsule(),
+                shape,
                 fill = if (pressed) c.surfaceStrong else c.surface,
                 blurRadius = 8.dp,
                 refraction = 6.dp,

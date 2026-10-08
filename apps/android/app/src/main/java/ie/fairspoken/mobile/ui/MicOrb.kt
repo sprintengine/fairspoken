@@ -1,5 +1,6 @@
 package ie.fairspoken.mobile.ui
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
@@ -9,8 +10,11 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -26,16 +30,18 @@ import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.Backdrop
 import com.kyant.shapes.Capsule
 import ie.fairspoken.mobile.core.DictationState
+import kotlinx.coroutines.flow.collectLatest
 
 /**
  * The big glass microphone, the one primary control wherever it appears, so
  * it alone carries the accent tint. Listening turns it `live` red and it
- * breathes with your voice.
+ * breathes with your voice. [level] is read only while drawing, so the glow
+ * animates without recomposing.
  */
 @Composable
 fun MicOrb(
     state: DictationState,
-    level: Float,
+    level: () -> Float,
     backdrop: Backdrop,
     size: Dp,
     modifier: Modifier = Modifier,
@@ -43,11 +49,16 @@ fun MicOrb(
 ) {
     val c = Crystal.colors
     val listening = state is DictationState.Listening
-    val glow by animateFloatAsState(
-        if (listening) 0.3f + level * 0.7f else 0f,
-        spring(dampingRatio = 0.7f, stiffness = 380f),
-        label = "glow",
-    )
+    val currentLevel by rememberUpdatedState(level)
+    val glow = remember { Animatable(0f) }
+    LaunchedEffect(listening) {
+        val spec = spring<Float>(dampingRatio = 0.7f, stiffness = 380f)
+        if (listening) {
+            snapshotFlow { 0.3f + currentLevel() * 0.7f }.collectLatest { glow.animateTo(it, spec) }
+        } else {
+            glow.animateTo(0f, spec)
+        }
+    }
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.95f else 1f, spring(dampingRatio = 0.6f, stiffness = 600f), label = "press")
@@ -56,11 +67,9 @@ fun MicOrb(
         is DictationState.Transcribing -> "Transcribing"
         else -> "Start dictation"
     }
-    val tint = when {
-        listening -> c.live.copy(alpha = 0.10f + glow * 0.14f)
-        else -> c.accent.copy(alpha = if (c.dark) 0.14f else 0.10f)
-    }
+    val idleTint = c.accent.copy(alpha = if (c.dark) 0.14f else 0.10f)
     val ring = if (listening) c.live else c.accent
+    val shape = remember { Capsule() }
     Box(
         modifier
             .size(size)
@@ -69,19 +78,20 @@ fun MicOrb(
                 scaleY = scale
             }
             .drawBehind {
-                if (glow > 0f) {
-                    val radius = this.size.minDimension * (0.56f + glow * 0.30f)
+                val g = glow.value
+                if (g > 0f) {
+                    val radius = this.size.minDimension * (0.56f + g * 0.30f)
                     drawCircle(
-                        Brush.radialGradient(listOf(c.live.copy(alpha = 0.32f * glow), Color.Transparent), center, radius),
+                        Brush.radialGradient(listOf(c.live.copy(alpha = 0.32f * g), Color.Transparent), center, radius),
                         radius,
                     )
                 }
             }
             .glass(
                 backdrop,
-                Capsule(),
+                shape,
                 fill = c.surfaceStrong,
-                tint = tint,
+                tint = { if (listening) c.live.copy(alpha = 0.10f + glow.value * 0.14f) else idleTint },
                 blurRadius = 12.dp,
                 refraction = size * 0.16f,
             )

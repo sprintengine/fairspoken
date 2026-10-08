@@ -14,7 +14,7 @@ import java.nio.ByteOrder
  * so the whole path can be tested without speaking.
  */
 object DebugAudio {
-    private var buffer: ByteArrayOutputStream? = null
+    @Volatile private var buffer: ByteArrayOutputStream? = null
 
     class Tap(private val out: ByteArrayOutputStream) {
         fun write(samples: ShortArray, count: Int) {
@@ -36,6 +36,7 @@ object DebugAudio {
         return File(dir, "debug-input.wav").takeIf { it.exists() }
     }
 
+    /** Writes `last.wav`; file I/O, so call it off the main thread. */
     fun finish(context: Context) {
         val out = buffer ?: return
         buffer = null
