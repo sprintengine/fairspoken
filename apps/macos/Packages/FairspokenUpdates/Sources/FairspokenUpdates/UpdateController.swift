@@ -18,7 +18,7 @@ private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "ie.fairspok
 ///     └── error ◀──────┘
 ///
 /// Channel (contract §4): the saved `updateChannel`, else the build's own (`-nightly.` in
-/// CFBundleShortVersionString). Nightly allows the appcast's `nightly` items; stable allows only
+/// CFBundleShortVersionString), which is then saved. Nightly allows the appcast's `nightly` items; stable allows only
 /// the default channel. Changing it checks at once.
 @Observable
 public final class UpdateController: NSObject {
@@ -107,8 +107,8 @@ public final class UpdateController: NSObject {
 
     public init(configuration: Configuration) {
         self.configuration = configuration
-        channel = UpdateChannel.resolve(saved: configuration.defaults.string(forKey: UpdateChannel.defaultsKey),
-                                        version: configuration.version)
+        // Saved on first launch, so a nightly install stays nightly after taking a promoted stable.
+        channel = UpdateChannel.resolveAndRemember(in: configuration.defaults, version: configuration.version)
         super.init()
     }
 

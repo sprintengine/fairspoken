@@ -290,6 +290,53 @@ jobs:
       - name: Build both apps (Fairspoken and Fairspoken Server)
         run: apps/macos/scripts/build.sh
 
+  checks:
+    name: Workflows, packs and polish pipeline
+    # The cheap checks that need neither Rust nor the app's dependencies, so
+    # they report in a minute rather than waiting on a cargo build.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Every workflow here, release.yml included, is otherwise first parsed by
+      # GitHub when it runs: a typo in a release-only step surfaces mid-release.
+      # actionlint also runs shellcheck over every `run:` script (shellcheck is
+      # on the image). The tool version is pinned along with the action.
+      - name: Lint workflows (actionlint)
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          version: 1.7.12
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # The pack builders' key must match the app's normalisation
+      # (phonetic_index.rs); these are the Rust's own answers.
+      - name: Test pack builder helpers
+        run: node --test scripts/packs/*.test.mjs
+
+      # The software engineering pack is built from the list in its builder,
+      # offline and deterministically, so the committed JSON must be exactly
+      # what the builder writes: an edit to one without the other fails here.
+      # (The Irish general practice pack needs the HPRA's current XML and is
+      # not rebuilt.)
+      - name: Software engineering pack matches its builder
+        run: |
+          node scripts/packs/build-software-engineering.mjs
+          git diff --exit-code -- src-tauri/packs/software-engineering.json
+
+      # The polish training pipeline's pure-Python parts (prompt contract,
+      # data generator, dictation importer): stdlib only, on the image's
+      # Python. The adapter-math test needs torch and skips itself here.
+      - name: Test polish pipeline (pure Python)
+        run: python3 -I training/polish/test_pipeline.py
+
   licenses:
     name: Dependency licenses
     runs-on: ubuntu-latest

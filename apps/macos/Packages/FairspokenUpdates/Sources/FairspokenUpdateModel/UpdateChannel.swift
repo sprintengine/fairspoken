@@ -7,7 +7,8 @@ public enum UpdateChannel: String, CaseIterable, Identifiable, Sendable {
     case stable
     case nightly
 
-    /// The UserDefaults key the choice is saved under. Absent means "follow this build".
+    /// The UserDefaults key the choice is saved under. Absent only until the first launch, which
+    /// saves the build's own channel (`resolveAndRemember`).
     public static let defaultsKey = "updateChannel"
 
     public var id: String { rawValue }
@@ -41,6 +42,17 @@ public enum UpdateChannel: String, CaseIterable, Identifiable, Sendable {
     public static func resolve(saved: String?, version: String) -> UpdateChannel {
         if let saved, let channel = UpdateChannel(rawValue: saved) { return channel }
         return defaultChannel(forVersion: version)
+    }
+
+    /// `resolve`, and when nothing valid is saved yet, save what it resolved. An install that
+    /// never touched the picker must stay on the channel it started on: a nightly install takes
+    /// the promoted stable (stable items have no channel, so every install sees them), and if the
+    /// channel still followed the build, that stable would silently move it off nightly for good.
+    public static func resolveAndRemember(in defaults: UserDefaults, version: String) -> UpdateChannel {
+        let saved = defaults.string(forKey: defaultsKey)
+        let channel = resolve(saved: saved, version: version)
+        if saved != channel.rawValue { defaults.set(channel.rawValue, forKey: defaultsKey) }
+        return channel
     }
 
     /// What `SPUUpdaterDelegate.allowedChannels(for:)` answers. The default channel (stable

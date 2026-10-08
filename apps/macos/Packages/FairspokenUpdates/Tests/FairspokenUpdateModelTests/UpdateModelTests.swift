@@ -27,6 +27,25 @@ struct UpdateChannelTests {
         #expect(UpdateChannel.resolve(saved: "", version: "0.3.0") == .stable)
     }
 
+    @Test func firstLaunchSavesTheBuildsChannelSoAPromotedStableKeepsNightly() throws {
+        let suite = "UpdateChannelTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // A nightly install that never opened the picker.
+        #expect(UpdateChannel.resolveAndRemember(in: defaults, version: "0.5.0-nightly.20261005.4") == .nightly)
+        #expect(defaults.string(forKey: UpdateChannel.defaultsKey) == "nightly")
+        // It takes the promoted stable 0.5.0 and relaunches: still nightly.
+        #expect(UpdateChannel.resolveAndRemember(in: defaults, version: "0.5.0") == .nightly)
+
+        // A choice made in Settings is left alone; an unknown value is replaced by what runs.
+        defaults.set("stable", forKey: UpdateChannel.defaultsKey)
+        #expect(UpdateChannel.resolveAndRemember(in: defaults, version: "0.6.0-nightly.20261007.1") == .stable)
+        defaults.set("beta", forKey: UpdateChannel.defaultsKey)
+        #expect(UpdateChannel.resolveAndRemember(in: defaults, version: "0.5.0") == .stable)
+        #expect(defaults.string(forKey: UpdateChannel.defaultsKey) == "stable")
+    }
+
     @Test func sparkleChannels() {
         #expect(UpdateChannel.stable.sparkleChannels.isEmpty)
         #expect(UpdateChannel.nightly.sparkleChannels == ["nightly"])
