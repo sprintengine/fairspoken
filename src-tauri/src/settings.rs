@@ -1,7 +1,6 @@
 use crate::models::{SttModel, WhisperModel};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -51,6 +50,55 @@ fn default_super_mode_model() -> WhisperModel {
     WhisperModel::Small
 }
 
+/// Reads a setting, or `fallback` when the stored value is one this build
+/// does not recognise (an option added by a newer build, say), instead of
+/// failing the whole file.
+fn or_fallback<'de, D, T>(deserializer: D, fallback: impl FnOnce() -> T) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_else(|_| fallback()))
+}
+
+fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    or_fallback(deserializer, T::default)
+}
+
+/// A Whisper model this build does not know reads as the default pairing.
+fn super_mode_model_or_default<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<WhisperModel, D::Error> {
+    or_fallback(deserializer, default_super_mode_model)
+}
+
+/// An unrecognised polish provider reads as on-device rather than the Cloud
+/// default, so a transcript is never sent anywhere on a guess.
+fn unknown_polish_provider_is_local<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<PolishProvider, D::Error> {
+    or_fallback(deserializer, || PolishProvider::Local)
+}
+
+/// One malformed dictionary entry is dropped rather than failing the whole
+/// settings file, which would lose every other entry and the tokens with it.
+fn skip_invalid_entries<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect())
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordingShortcutMode {
@@ -85,10 +133,14 @@ fn default_polish_model() -> String {
     "speakoflow-mini".to_string()
 }
 
+/// Every field falls back to `Settings::default()` when absent, so a file
+/// written by an older build loads. Options this build does not recognise
+/// fall back per field (`or_fallback`) and a malformed dictionary entry is
+/// dropped alone, rather than failing the whole file.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Settings {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub transcription_location: TranscriptionLocation,
     #[serde(default)]
     pub model: SttModel,
@@ -116,9 +168,9 @@ pub struct Settings {
     /// the cap on `vocabulary_hints`.
     #[serde(default)]
     pub enabled_packs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "skip_invalid_entries")]
     pub transcript_corrections: Vec<TranscriptCorrection>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "skip_invalid_entries")]
     pub snippets: Vec<Snippet>,
     pub always_on_top: bool,
     #[serde(default = "default_interaction_sounds")]
@@ -134,7 +186,7 @@ pub struct Settings {
     pub use_gpu: bool,
     #[serde(default = "default_recording_shortcut")]
     pub recording_shortcut: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub recording_shortcut_mode: RecordingShortcutMode,
     #[serde(default = "default_transcript_stack_shortcut")]
     pub transcript_stack_shortcut: String,
@@ -156,7 +208,7 @@ pub struct Settings {
     /// back to the raw transcript.
     #[serde(default)]
     pub polish_enabled: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unknown_polish_provider_is_local")]
     pub polish_provider: PolishProvider,
     #[serde(default = "default_polish_model")]
     pub polish_model: String,
@@ -172,7 +224,7 @@ pub struct Settings {
     /// without publishing it. Empty = off.
     #[serde(default)]
     pub polish_local_model_path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub polish_local_model_prompt: LocalPolishPrompt,
     /// Developer option: LoRA adapter files (absolute `.gguf` paths, each
     /// with its manifest) applied to every local polish pass. They load only
@@ -212,10 +264,13 @@ pub struct Settings {
     /// Run a second engine (Whisper) on the same audio and merge the results.
     /// Locally `auto` means only on mains power; with a remote host the host
     /// decides by its own capacity.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub super_mode: SuperModeSetting,
     /// The Whisper model super mode pairs with Parakeet.
-    #[serde(default = "default_super_mode_model")]
+    #[serde(
+        default = "default_super_mode_model",
+        deserialize_with = "super_mode_model_or_default"
+    )]
     pub super_mode_model: WhisperModel,
 }
 
@@ -242,7 +297,7 @@ pub struct TranscriptCorrection {
     pub case_sensitive: bool,
     #[serde(default = "default_correction_whole_phrase")]
     pub whole_phrase: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub origin: EntryOrigin,
     /// Speech models (`Settings::speech_model_id`) the correction applies
     /// to; empty means every model. Learned mappings are scoped to the models
@@ -353,14 +408,18 @@ pub struct SettingsService {
 impl Default for SettingsService {
     fn default() -> Self {
         let path = default_settings_path();
-        let current = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Settings>(&raw).ok())
-            .map(normalize)
-            .unwrap_or_default();
-
+        let current = load(&path);
         Self { current, path }
     }
+}
+
+/// The stored settings, or the defaults when there are none. A file that
+/// cannot be read or parsed is moved aside first, so the next save cannot
+/// overwrite the tokens and dictionary it may still hold.
+fn load(path: &std::path::Path) -> Settings {
+    crate::app_dirs::read_json_or_back_up::<Settings>(path)
+        .map(normalize)
+        .unwrap_or_default()
 }
 
 impl SettingsService {
@@ -668,6 +727,7 @@ fn default_settings_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn failed_save_keeps_current_settings_and_previous_path() {
         let path = std::env::temp_dir().join(format!("settings-failure-{}", uuid::Uuid::new_v4()));
@@ -682,6 +742,100 @@ mod tests {
         std::fs::remove_dir(path).unwrap();
     }
 
+
+    #[test]
+    fn a_file_missing_fields_loads_the_rest_with_defaults() {
+        // Even fields every build has written so far may be absent.
+        let restored: Settings = serde_json::from_value(serde_json::json!({
+            "transcriptionLocation": "remote-host",
+            "remoteAuthToken": "host-token",
+            "vocabularyHints": ["Siobhán"]
+        }))
+        .unwrap();
+        assert_eq!(restored.transcription_location, TranscriptionLocation::RemoteHost);
+        assert_eq!(restored.remote_auth_token, "host-token");
+        assert_eq!(restored.vocabulary_hints, ["Siobhán"]);
+        let defaults = Settings::default();
+        assert_eq!(restored.language, defaults.language);
+        assert_eq!(restored.input_gain, defaults.input_gain);
+        assert_eq!(restored.max_recording_seconds, defaults.max_recording_seconds);
+        assert_eq!(restored.super_mode_model, WhisperModel::Small);
+    }
+
+    #[test]
+    fn values_from_a_newer_build_fall_back_per_field() {
+        let restored: Settings = serde_json::from_value(serde_json::json!({
+            "transcriptionLocation": "satellite",
+            "polishEnabled": true,
+            "polishProvider": "some-new-provider",
+            "polishLocalModelPrompt": "chatty",
+            "superMode": "turbo",
+            "superModeModel": "large-v9",
+            "recordingShortcutMode": "double-tap",
+            "model": "a-future-model",
+            "remoteAuthToken": "host-token",
+            "transcriptCorrections": [
+                {"from": "fair spoken", "to": "Fairspoken", "origin": "imported"},
+                {"from": 5, "to": ["not", "text"]},
+                {"from": "knee of", "to": "Niamh", "origin": "learned"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(restored.transcription_location, TranscriptionLocation::Local);
+        assert_eq!(restored.polish_provider, PolishProvider::Local);
+        assert_eq!(restored.polish_local_model_prompt, LocalPolishPrompt::Tagged);
+        assert_eq!(restored.super_mode, SuperModeSetting::Off);
+        assert_eq!(restored.super_mode_model, WhisperModel::Small);
+        assert_eq!(restored.recording_shortcut_mode, RecordingShortcutMode::Toggle);
+        assert_eq!(restored.model, SttModel::default());
+        assert_eq!(restored.remote_auth_token, "host-token");
+        assert!(restored.polish_enabled);
+        let corrections = &restored.transcript_corrections;
+        assert_eq!(corrections.len(), 2, "only the malformed entry is dropped");
+        assert_eq!(corrections[0].origin, EntryOrigin::Manual);
+        assert_eq!(corrections[1].origin, EntryOrigin::Learned);
+
+        // Known values still serialize exactly as before.
+        let json = serde_json::to_value(Settings {
+            polish_provider: PolishProvider::Local,
+            super_mode: SuperModeSetting::Auto,
+            recording_shortcut_mode: RecordingShortcutMode::PushToTalk,
+            ..Settings::default()
+        })
+        .unwrap();
+        assert_eq!(json["polishProvider"], "local");
+        assert_eq!(json["superMode"], "auto");
+        assert_eq!(json["superModeModel"], "small");
+        assert_eq!(json["recordingShortcutMode"], "push-to-talk");
+        assert_eq!(json["polishLocalModelPrompt"], "tagged");
+    }
+
+    #[test]
+    fn an_unparseable_file_is_backed_up_before_falling_back_to_defaults() {
+        let directory =
+            std::env::temp_dir().join(format!("fairspoken-settings-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        fs::write(&path, r#"{"remoteAuthToken": "host-token", "inputGain": "#).unwrap();
+
+        let loaded = load(&path);
+        assert_eq!(loaded.remote_auth_token, "");
+        assert!(!path.exists());
+        let backups: Vec<_> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].starts_with("settings.json.corrupt-"));
+        assert!(fs::read_to_string(directory.join(&backups[0]))
+            .unwrap()
+            .contains("host-token"));
+
+        // No file at all is simply a first launch.
+        assert_eq!(load(&path).input_gain, Settings::default().input_gain);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn old_settings_keep_cloud_polish_and_new_local_choice_round_trips() {

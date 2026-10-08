@@ -7,6 +7,7 @@ import { framesFor, makeSpeech } from './audio.mjs';
 export class Context {
   constructor({ url, token, pairingPassword, slow, transcriptCheck }) {
     this.host = new Host(url, token);
+    this.restoreHost = new Host(url, token); // still usable after a timed-out check aborts `host`
     this.token = token || null;
     this.pairingPassword = pairingPassword || null;
     this.pairingSecrets = []; // every pairing password the run used, for the leak checks
@@ -70,7 +71,12 @@ export class Context {
       useGpu: s.useGpu,
       workerModels: s.workers.map((w) => w.assignedModel),
     };
-    this.originalPairingPassword = s.pairingEnabled === false ? null : s.pairingEnabled === true && this.pairingPassword ? this.pairingPassword : undefined;
+    // A password the environment sets is not the run's to restore (edits answer 409).
+    this.originalPairingPassword =
+      s.pairingPasswordSource === 'env' ? undefined
+        : s.pairingEnabled === false ? null
+        : s.pairingEnabled === true && this.pairingPassword ? this.pairingPassword
+        : undefined;
   }
 
   /** POST /v1/config, marking the configuration as changed. */
@@ -91,7 +97,7 @@ export class Context {
     if (!this.configDirty || !this.originalConfig) return null;
     const body = { ...this.originalConfig };
     if (this.pairingDirty && this.originalPairingPassword !== undefined) body.pairingPassword = this.originalPairingPassword;
-    const res = await this.host.post('/v1/config', body);
+    const res = await this.restoreHost.post('/v1/config', body);
     if (res.status === 200) {
       this.configDirty = false;
       if ('pairingPassword' in body) this.pairingDirty = false;

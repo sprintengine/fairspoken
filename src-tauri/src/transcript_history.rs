@@ -1,6 +1,5 @@
 use crate::format_context::FormatDecision;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,9 +70,7 @@ pub struct TranscriptHistoryService {
 impl Default for TranscriptHistoryService {
     fn default() -> Self {
         let path = default_history_path();
-        let items = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Vec<TranscriptHistoryItem>>(&raw).ok())
+        let items = crate::app_dirs::read_json_or_back_up::<Vec<TranscriptHistoryItem>>(&path)
             .map(normalize_items)
             .unwrap_or_default();
 

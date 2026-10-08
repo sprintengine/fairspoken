@@ -12,6 +12,18 @@ export const STREAM_CONTENT_TYPE = 'application/vnd.fairspoken.pcm-stream';
 /** Every SSE connection this process holds open (see `openSubscriberCount`). */
 const openSubscribers = new Set();
 export const openSubscriberCount = () => openSubscribers.size;
+/** Stream uploads and raw connections still open, for `closeOpenConnections`. */
+const openUploads = new Set();
+const openRaw = new Set();
+
+/** Destroys every open subscriber, stream upload and raw connection (after a check timed out). */
+export function closeOpenConnections() {
+  const n = openSubscribers.size + openUploads.size + openRaw.size;
+  for (const sub of [...openSubscribers]) sub.close();
+  for (const up of [...openUploads]) up.abort();
+  for (const conn of [...openRaw]) conn.close();
+  return n;
+}
 
 function tryJson(text) {
   try {
@@ -30,6 +42,20 @@ export class Host {
     this.port = Number(url.port || 80);
     this.prefix = url.pathname.replace(/\/+$/, '');
     this.token = token || null;
+    this.aborted = null;
+  }
+
+  /**
+   * Refuses every later request, upload, subscription and raw connection on
+   * this Host with `reason`, so a check that outlived its timeout stops at its
+   * next call instead of running alongside the rest of the run.
+   */
+  abort(reason) {
+    this.aborted = new Error(reason);
+  }
+
+  refuseIfAborted() {
+    if (this.aborted) throw this.aborted;
   }
 
   /** True when the host is reached over loopback, so the suite's requests
@@ -66,6 +92,7 @@ export class Host {
 
   /** One request on a fresh connection. Resolves with the full response. */
   request(method, path, { headers = {}, body, auth = 'bearer', timeoutMs = 30000 } = {}) {
+    if (this.aborted) return Promise.reject(this.aborted);
     const resolved = this.resolve(path, auth, headers);
     return new Promise((resolve, reject) => {
       const payload = body === undefined ? undefined : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
@@ -115,11 +142,13 @@ export class Host {
 
   /** Starts a chunked upload to `/v1/transcriptions/stream`. */
   openStream({ headers = {}, auth = 'bearer', path = '/v1/transcriptions/stream', timeoutMs } = {}) {
+    this.refuseIfAborted();
     return new StreamUpload(this, { headers, auth, path, timeoutMs });
   }
 
   /** Opens `/v1/events`. Resolves once the response head arrives. */
   subscribe({ auth = 'bearer', headers = {}, path = '/v1/events' } = {}) {
+    if (this.aborted) return Promise.reject(this.aborted);
     const resolved = this.resolve(path, auth, headers);
     return new Promise((resolve, reject) => {
       const req = http.request(
@@ -138,6 +167,7 @@ export class Host {
 
   /** A raw TCP connection with a buffered reader. */
   connectRaw() {
+    if (this.aborted) return Promise.reject(this.aborted);
     return new Promise((resolve, reject) => {
       const socket = net.connect({ host: this.hostname, port: this.port }, () => resolve(new RawConnection(socket)));
       socket.once('error', reject);
@@ -170,9 +200,11 @@ export class StreamUpload {
       headers: { ...resolved.headers, 'Transfer-Encoding': 'chunked' },
       agent: false,
     });
+    openUploads.add(this);
     this.done = new Promise((resolve) => {
       this.settle = (result) => {
         clearTimeout(this.timer);
+        openUploads.delete(this);
         resolve(result);
       };
       this.req.on('response', (res) => {
@@ -243,6 +275,7 @@ export class StreamUpload {
   abort() {
     this.closed = true;
     this.req.destroy();
+    if (!this.responded) this.settle({ status: null, headers: {}, text: '', json: undefined, endedAt: this.endedAt, doneAt: performance.now(), error: new Error('upload aborted') });
   }
 }
 
@@ -399,12 +432,14 @@ export class RawConnection {
     this.buffer = Buffer.alloc(0);
     this.ended = false;
     this.waiters = new Set();
+    openRaw.add(this);
     socket.on('data', (chunk) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
       this.notify();
     });
     const finish = () => {
       this.ended = true;
+      openRaw.delete(this);
       this.notify();
     };
     socket.on('end', finish);
@@ -471,6 +506,7 @@ export class RawConnection {
   }
 
   close() {
+    openRaw.delete(this);
     this.socket.destroy();
   }
 }

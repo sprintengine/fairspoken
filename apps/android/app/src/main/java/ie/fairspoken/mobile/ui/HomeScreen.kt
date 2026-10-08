@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.kyant.backdrop.Backdrop
@@ -67,6 +69,7 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.shapes.Capsule
 import ie.fairspoken.mobile.FairspokenApp
 import ie.fairspoken.mobile.core.DictationState
+import ie.fairspoken.mobile.core.HostException
 import ie.fairspoken.mobile.core.SavedHost
 import ie.fairspoken.mobile.core.Tailnet
 import ie.fairspoken.mobile.core.TailnetStatus
@@ -103,7 +106,10 @@ private data class LastResult(val text: String, val audioSeconds: Double, val la
 /** How the host answered its last health check: null while checking. */
 typealias HostHealth = SnapshotStateMap<String, Result<Long>>
 
-fun Result<Long>.rejected() = exceptionOrNull()?.message?.startsWith("Token rejected") == true
+/** Owns dictations started from the app screen. */
+private object HomeSession
+
+fun Result<Long>.rejected() = (exceptionOrNull() as? HostException)?.rejected == true
 
 @Composable
 fun AppRoot(app: FairspokenApp, readiness: Readiness, refreshTick: Int, actions: HomeActions) {
@@ -130,6 +136,12 @@ fun AppRoot(app: FairspokenApp, readiness: Readiness, refreshTick: Int, actions:
                     delay(20_000)
                 }
             }
+        }
+
+        // Leaving the app ends its own dictation; a rotation doesn't.
+        val activity = LocalActivity.current
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+            if (activity?.isChangingConfigurations != true) app.dictation.cancel(HomeSession)
         }
 
         BackHandler(enabled = !firstRun && routes.size > 1) { pop() }
@@ -168,9 +180,7 @@ private fun HomeScreen(
     val state by app.dictation.state.collectAsState()
     // Read only while drawing, so the level doesn't recompose the screen.
     val level = app.dictation.level.collectAsState()
-    val hosts by app.store.hosts.collectAsState()
-    val activeUrl by app.store.activeUrl.collectAsState()
-    val active = hosts.firstOrNull { it.url == activeUrl } ?: hosts.firstOrNull()
+    val active by app.store.activeHost.collectAsState()
     var last by rememberSaveable { mutableStateOf<LastResult?>(null) }
     LaunchedEffect(state) {
         (state as? DictationState.Done)?.let { last = LastResult(it.text, it.stats.audioSeconds, it.stats.latencyMs) }
@@ -184,7 +194,7 @@ private fun HomeScreen(
             .padding(horizontal = 20.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (active != null) HostPill(active, health[active.url], tailnet, backdrop, onSettings)
+            active?.let { HostPill(it, health[it.url], tailnet, backdrop, onSettings) }
             Spacer(Modifier.weight(1f))
             GlassIconButton("Settings", backdrop, onClick = onSettings) { slidersGlyph(it) }
         }
@@ -193,10 +203,14 @@ private fun HomeScreen(
             val orb = minOf(184.dp, maxHeight * 0.62f, maxWidth * 0.56f)
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 MicOrb(state, { level.value }, backdrop, orb) {
-                    if (!readiness.mic) actions.requestMic() else app.dictation.toggle { }
+                    if (!readiness.mic) actions.requestMic() else app.dictation.toggle(HomeSession) { }
                 }
                 Spacer(Modifier.height(26.dp))
-                StatusLine(state, readiness.mic)
+                DictationStatus(
+                    state,
+                    idle = if (readiness.mic) "Tap to speak" else "Tap to allow the microphone",
+                    Modifier.height(24.dp).fillMaxWidth(0.9f),
+                )
             }
         }
 
@@ -248,10 +262,11 @@ private fun HostPill(host: SavedHost, health: Result<Long>?, tailnet: TailnetSta
     }
 }
 
+/** What the dictation is doing, in one line; the app and the voice keyboard share it. */
 @Composable
-private fun StatusLine(state: DictationState, micAllowed: Boolean) {
+fun DictationStatus(state: DictationState, idle: String, modifier: Modifier, done: String? = null) {
     val c = Crystal.colors
-    Box(Modifier.height(24.dp).fillMaxWidth(0.9f), contentAlignment = Alignment.Center) {
+    Box(modifier, contentAlignment = Alignment.Center) {
         when (state) {
             is DictationState.Listening -> Row(verticalAlignment = Alignment.CenterVertically) {
                 Dot(c.live)
@@ -267,8 +282,8 @@ private fun StatusLine(state: DictationState, micAllowed: Boolean) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            is DictationState.Done -> Unit
-            DictationState.Idle -> BasicText(if (micAllowed) "Tap to speak" else "Tap to allow the microphone", style = Type.body)
+            is DictationState.Done -> done?.let { BasicText(it, style = Type.body) }
+            DictationState.Idle -> BasicText(idle, style = Type.body)
         }
     }
 }

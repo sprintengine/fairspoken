@@ -22,10 +22,10 @@ class FairspokenApp : Application() {
         dictation = Dictation(this, store, client, scope)
     }
 
-    /** Opens a connection to the active host ahead of the first dictation. */
+    /** Opens a connection to the active host ahead of the first dictation, and learns its limits. */
     fun warmUp() {
         val host = store.active ?: return
-        scope.launch { client.ping(host) }
+        scope.launch { client.learnLimits(host) }
     }
 }
 

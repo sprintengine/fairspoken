@@ -14,6 +14,7 @@ import {
   type Channel,
   type UpdateStatus,
 } from "./updateModel";
+import { errorMessage } from "./errors";
 
 // The update UI in the home window: the sidebar button, the "available" toast,
 // the Settings rail and Updates badges, and Settings → Updates. The backend
@@ -119,7 +120,7 @@ function showToast(options: {
 
 // ── Actions ────────────────────────────────────────────────────────────
 function reportError(error: unknown): void {
-  showToast({ title: "Update failed", description: String(error instanceof Error ? error.message : error), autoDismissMs: 6000 });
+  showToast({ title: "Update failed", description: errorMessage(error), autoDismissMs: 6000 });
 }
 
 async function run(kind: ButtonAction): Promise<void> {
@@ -302,5 +303,5 @@ void listen<UpdateStatus>("update-status", (event) => {
   .catch(reportStatusError);
 
 function reportStatusError(error: unknown): void {
-  addEvent("warning", `Update status unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  addEvent("warning", `Update status unavailable: ${errorMessage(error)}`);
 }

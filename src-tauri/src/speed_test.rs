@@ -1,6 +1,5 @@
 use crate::settings::{Settings, TranscriptionLocation};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 
 /// The result of the speaking leg, produced by transcribing a real recording
@@ -97,10 +96,7 @@ pub fn capture_preview_mode(location: TranscriptionLocation) -> CapturePreviewMo
 impl Default for SpeedTestService {
     fn default() -> Self {
         let path = default_speed_test_path();
-        let data = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<SpeedTestData>(&raw).ok())
-            .unwrap_or_default();
+        let data = crate::app_dirs::read_json_or_back_up::<SpeedTestData>(&path).unwrap_or_default();
         Self { data, path }
     }
 }

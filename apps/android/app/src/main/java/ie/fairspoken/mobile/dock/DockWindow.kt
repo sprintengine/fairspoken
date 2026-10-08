@@ -150,7 +150,7 @@ class DockWindow(
     }
 
     fun dismiss() {
-        if (ownsSession.value && app.dictation.isBusy) app.dictation.cancel()
+        app.dictation.cancel(this)
         if (Build.VERSION.SDK_INT >= 31) blurListener?.let { windowManager.removeCrossWindowBlurEnabledListener(it) }
         dialog.dismiss()
         scope.cancel()
@@ -170,12 +170,12 @@ class DockWindow(
         levels.indices.forEach { levels[it] = 0f }
         ownsSession.value = true
         root.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        app.dictation.start(::deliver)
+        app.dictation.start(this, ::deliver)
     }
 
     private fun stop() {
         root.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        app.dictation.stop()
+        app.dictation.stop(this)
     }
 
     private fun deliver(text: String) {

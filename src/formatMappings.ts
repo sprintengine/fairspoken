@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
 
 // The polish formats (docs/polish-input.md) and the site/app mappings the
 // format decision reads: labels the classifier learned, and the user's own.
@@ -23,19 +25,13 @@ const FORMAT_LABELS: Record<Format, string> = {
   plain: "Plain",
 };
 
-function required<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node as T;
-}
-
 const rows = required<HTMLElement>("formatMappingRows");
 const setButton = required<HTMLButtonElement>("formatMappingSet");
 const keyInput = required<HTMLInputElement>("formatMappingKey");
 const formatSelect = required<HTMLSelectElement>("formatMappingFormat");
 
 function report(error: unknown): void {
-  addEvent("error", error instanceof Error ? error.message : String(error));
+  addEvent("error", errorMessage(error));
 }
 
 function formatOptions(select: HTMLSelectElement, selected: Format): void {

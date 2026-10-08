@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
+import { addEvent } from "./events";
 
 // The Dictionary screen owns the vocabulary, corrections, snippets and enabled
 // vocabulary packs. These still live in Settings on disk, but only this screen
@@ -86,14 +89,37 @@ let suggestions: LearnedSuggestion[] = [];
 let packs: PackSummary[] = [];
 let enabledPacks: string[] = [];
 
-function required<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node as T;
+// Learned entries the screen has already shown, keyed by learnedKey(). Anything
+// learned outside this set arrived while the user was typing.
+let knownLearned = new Set<string>();
+// The backend learned something while the user was typing in a row; reload
+// when focus leaves the rows, and fold it into any save before then.
+let reloadPending = false;
+// Saves run one at a time, in order; a reload waits for the queue.
+let saveChain: Promise<void> = Promise.resolve();
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+const SAVE_RETRY_MS = 3000;
+
+function learnedKey(entry: string | Correction): string {
+  return typeof entry === "string" ? `word:${entry}` : `fix:${entry.from}=>${entry.to}`;
 }
 
-async function persist(): Promise<void> {
+function typingInRows(): boolean {
+  return !!document.activeElement?.closest(".dict-row, #vocabAdd");
+}
+
+function persist(): Promise<void> {
+  clearTimeout(retryTimer);
+  saveChain = saveChain.then(() => save(false));
+  return saveChain;
+}
+
+// The backend refuses saves while another settings operation (a dictation)
+// holds the lock, so one failure is retried shortly; a second is reported and
+// the screen goes back to what is actually saved.
+async function save(retry: boolean): Promise<void> {
   try {
+    if (reloadPending) await mergeLearned();
     await invoke("save_dictionary", {
       update: {
         vocabularyHints: vocabulary,
@@ -105,8 +131,37 @@ async function persist(): Promise<void> {
       },
     });
   } catch (error) {
-    console.error("dictionary:", error instanceof Error ? error.message : String(error));
+    const message = errorMessage(error);
+    if (!retry) {
+      addEvent("warning", `Dictionary changes not saved yet (${message}); retrying.`);
+      retryTimer = setTimeout(() => { saveChain = saveChain.then(() => save(true)); }, SAVE_RETRY_MS);
+    } else {
+      addEvent("error", `Dictionary changes were not saved: ${message}`);
+      reloadWhenIdle();
+    }
   }
+}
+
+// Keep what the backend learned since the last load so a save from this screen
+// does not erase it. Entries the user removed were known, so stay removed.
+async function mergeLearned(): Promise<void> {
+  const saved = await invoke<DictionarySettings>("get_settings");
+  for (const word of saved.learnedVocabularyHints ?? []) {
+    if (knownLearned.has(learnedKey(word)) || !(saved.vocabularyHints ?? []).includes(word)) continue;
+    knownLearned.add(learnedKey(word));
+    if (!vocabulary.includes(word)) vocabulary.push(word);
+    if (!learnedVocabulary.includes(word)) learnedVocabulary.push(word);
+  }
+  for (const correction of saved.transcriptCorrections ?? []) {
+    if (correction.origin !== "learned" || knownLearned.has(learnedKey(correction))) continue;
+    knownLearned.add(learnedKey(correction));
+    if (!corrections.some((existing) => learnedKey(existing) === learnedKey(correction))) corrections.push(correction);
+  }
+}
+
+function reloadWhenIdle(): void {
+  if (typingInRows()) reloadPending = true;
+  else void saveChain.then(load);
 }
 
 // ── Vocabulary ──────────────────────────────────────────────
@@ -363,7 +418,7 @@ function packDetail(pack: PackSummary): HTMLElement {
         }),
       );
     } catch (error) {
-      console.error("dictionary:", error instanceof Error ? error.message : String(error));
+      console.error("dictionary:", errorMessage(error));
     }
   };
   search.addEventListener("input", () => void refresh());
@@ -434,7 +489,7 @@ async function decide(command: string, id: string): Promise<void> {
   try {
     await invoke(command, { id });
   } catch (error) {
-    console.error("dictionary:", error instanceof Error ? error.message : String(error));
+    console.error("dictionary:", errorMessage(error));
   }
   await load();
 }
@@ -442,6 +497,7 @@ async function decide(command: string, id: string): Promise<void> {
 learnFromEdits.addEventListener("change", () => void persist());
 
 async function load(): Promise<void> {
+  reloadPending = false;
   try {
     const [settings, learned] = await Promise.all([
       invoke<DictionarySettings>("get_settings"),
@@ -454,9 +510,13 @@ async function load(): Promise<void> {
     learnFromEdits.checked = settings.learnFromEdits ?? true;
     suggestions = learned;
     enabledPacks = settings.enabledPacks ?? [];
+    knownLearned = new Set([
+      ...learnedVocabulary.map(learnedKey),
+      ...corrections.filter((correction) => correction.origin === "learned").map(learnedKey),
+    ]);
     packs = await invoke<PackSummary[]>("list_vocabulary_packs");
   } catch (error) {
-    console.error("dictionary:", error instanceof Error ? error.message : String(error));
+    console.error("dictionary:", errorMessage(error));
   }
   renderChips();
   renderCorrections();
@@ -466,9 +526,13 @@ async function load(): Promise<void> {
 }
 
 // Learning edits the dictionary from the backend; show what it added unless
-// the user is typing in a row, which a re-render would interrupt.
-void listen("learned-updated", () => {
-  if (!document.activeElement?.closest(".dict-row, #vocabAdd")) void load();
+// the user is typing in a row, which a re-render would interrupt. Then it
+// shows as soon as focus leaves the rows (after any save that edit queued).
+void listen("learned-updated", reloadWhenIdle).catch((error) => console.error("dictionary:", errorMessage(error)));
+required("screen-dictionary").addEventListener("focusout", (event) => {
+  if (!reloadPending) return;
+  if ((event.relatedTarget as Element | null)?.closest(".dict-row, #vocabAdd")) return;
+  void saveChain.then(load);
 });
 
 void load();

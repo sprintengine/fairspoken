@@ -33,8 +33,9 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::Read;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -188,38 +189,43 @@ pub fn run_transcription_host() -> Result<(), String> {
                 let metrics = Arc::clone(&metrics);
                 let updater = Arc::clone(&updater);
                 let bind_addr = addr.clone();
-                thread::spawn(move || {
-                    for request in loopback.incoming_requests() {
-                        if let Err(err) = handle_request(
-                            request,
-                            Arc::clone(&runtime),
-                            Arc::clone(&metrics),
-                            &updater,
-                            &bind_addr,
-                        ) {
-                            eprintln!("Failed to handle transcription host request: {err}");
-                        }
-                    }
-                });
+                thread::spawn(move || serve(&loopback, &runtime, &metrics, &updater, &bind_addr));
             }
             Err(err) => eprintln!("Not also listening on {loopback_addr}: {err}"),
         }
     }
 
-    for request in server.incoming_requests() {
-        let response = handle_request(
-            request,
-            Arc::clone(&runtime),
-            Arc::clone(&metrics),
-            &updater,
-            &addr,
-        );
-        if let Err(err) = response {
-            eprintln!("Failed to handle transcription host request: {err}");
-        }
-    }
+    serve(&server, &runtime, &metrics, &updater, &addr);
 
     Ok(())
+}
+
+/// Answers one listener's requests until it closes. A request whose handler
+/// panics is logged (the default hook prints the panic) and the loop goes
+/// on: no single request may take the host down.
+fn serve(
+    server: &Server,
+    runtime: &Arc<HostRuntime>,
+    metrics: &Arc<Mutex<HostMetrics>>,
+    updater: &Arc<Updater>,
+    bind_addr: &str,
+) {
+    for request in server.incoming_requests() {
+        let handled = panic::catch_unwind(AssertUnwindSafe(|| {
+            handle_request(
+                request,
+                Arc::clone(runtime),
+                Arc::clone(metrics),
+                updater,
+                bind_addr,
+            )
+        }));
+        match handled {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => eprintln!("Failed to handle transcription host request: {err}"),
+            Err(_) => eprintln!("A transcription host request handler panicked; still serving"),
+        }
+    }
 }
 
 /// `127.0.0.1:<port>` when `addr` is one specific non-loopback address;
@@ -442,6 +448,17 @@ fn handle_batch_transcription(
 ) -> Result<(), String> {
     let client = client_ip(&request);
     runtime.record_client_request(client.as_deref());
+    // Admitted before the body is read: each upload in flight may buffer up
+    // to `max_batch_body_bytes`, so only as many as the workers and queue
+    // could ever take are let in.
+    let Some(_admission) = runtime.try_admit_batch() else {
+        runtime.record_rejection(client.as_deref());
+        return respond_error(
+            request,
+            StatusCode(429),
+            "Server is at batch upload capacity",
+        );
+    };
     let body = match read_limited_body(
         &mut request.as_reader(),
         max_batch_body_bytes(runtime.max_recording_seconds()),
@@ -456,6 +473,12 @@ fn handle_batch_transcription(
         Ok(settings) => settings,
         Err(err) => return respond_error(request, StatusCode(400), &err),
     };
+    if let Err((status, err)) = check_wav_header(&body, runtime.max_recording_seconds()) {
+        if status == StatusCode(413) {
+            runtime.record_rejection(client.as_deref());
+        }
+        return respond_error(request, status, &err);
+    }
     let recording = match decode_wav(&body) {
         Ok(recording) => recording,
         Err(err) => return respond_error(request, StatusCode(400), &err),
@@ -576,6 +599,15 @@ fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Resu
             Err((status, message)) => return respond_error(request, status, &message),
         };
 
+    // The env var wins on every start, so an edit here would be undone (or a
+    // cleared password silently come back) at the next restart.
+    if update.pairing_password.is_some() && runtime.live.auth().pairing_password_from_env {
+        return respond_error(
+            request,
+            StatusCode(409),
+            &format!("The pairing password is set by {PAIRING_PASSWORD_ENV} on the server; change or unset it there"),
+        );
+    }
     if let Err(message) = apply_config_update(&update, &runtime.live) {
         return respond_error(request, StatusCode(400), &message);
     }
@@ -823,6 +855,21 @@ struct HostRuntime {
     config_path: PathBuf,
     next_job_id: AtomicU64,
     pairing: Mutex<PairingLimiter>,
+    /// Batch uploads between admission and their answer, and how many may be
+    /// (every worker busy plus a full queue; more could only be turned away
+    /// after buffering their bodies).
+    batch_admissions: Arc<AtomicUsize>,
+    max_batch_admissions: usize,
+}
+
+/// A batch upload's place, held from before its body is read until it is
+/// answered.
+struct BatchAdmission(Arc<AtomicUsize>);
+
+impl Drop for BatchAdmission {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 struct TranscriptionJob {
@@ -922,7 +969,18 @@ impl HostRuntime {
             config_path,
             next_job_id: AtomicU64::new(1),
             pairing: Mutex::new(PairingLimiter::default()),
+            batch_admissions: Arc::new(AtomicUsize::new(0)),
+            max_batch_admissions: config.worker_count + config.queue_capacity,
         })
+    }
+
+    fn try_admit_batch(&self) -> Option<BatchAdmission> {
+        self.batch_admissions
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |admitted| {
+                (admitted < self.max_batch_admissions).then_some(admitted + 1)
+            })
+            .ok()
+            .map(|_| BatchAdmission(Arc::clone(&self.batch_admissions)))
     }
 
     fn max_recording_seconds(&self) -> u16 {
@@ -1176,6 +1234,11 @@ fn run_host_worker(
             }
         };
 
+        // Lent out while it waited on the queue (a borrower found it free):
+        // the borrower is using this worker's engine, so the job waits for
+        // the lease to end before it starts.
+        super_mode::wait_until_returned(&metrics, worker_index);
+
         let queue_wait = job.accepted_at.elapsed();
         // A live stream's length is only known once the client stops sending.
         let mut duration_seconds = match &job.audio {
@@ -1428,6 +1491,30 @@ fn read_json_body<T: DeserializeOwned>(
     serde_json::from_slice(&body).map_err(|err| (StatusCode(400), invalid(&body, err)))
 }
 
+/// Checks a WAV upload's header before it is decoded (which copies every
+/// sample): a sample rate the body limit wasn't sized for is `400`, and a
+/// header claiming more audio than the host takes is `413`. Malformed files
+/// are left to `decode_wav`, which reports them.
+fn check_wav_header(body: &[u8], max_recording_seconds: u16) -> Result<(), (StatusCode, String)> {
+    let Ok(reader) = hound::WavReader::new(std::io::Cursor::new(body)) else {
+        return Ok(());
+    };
+    let sample_rate = reader.spec().sample_rate;
+    if !(1..=MAX_STREAM_SAMPLE_RATE).contains(&sample_rate) {
+        return Err((
+            StatusCode(400),
+            format!("WAV sample rate must be 1 to {MAX_STREAM_SAMPLE_RATE} Hz"),
+        ));
+    }
+    if u64::from(reader.duration()) > u64::from(sample_rate) * u64::from(max_recording_seconds) {
+        return Err((
+            StatusCode(413),
+            format!("Recording exceeds host maximum of {max_recording_seconds} seconds"),
+        ));
+    }
+    Ok(())
+}
+
 fn max_batch_body_bytes(max_recording_seconds: u16) -> u64 {
     MAX_BATCH_WAV_HEADER_BYTES.saturating_add(
         MAX_BATCH_WAV_BYTES_PER_SECOND.saturating_mul(u64::from(max_recording_seconds)),
@@ -1443,6 +1530,28 @@ fn stream_recording_error_status(message: &str) -> StatusCode {
 }
 
 const STREAM_ABORTED: &str = "Stream upload aborted";
+
+/// How long a stream job waits for the client's next frame before giving
+/// up on it: a phone that drops off the network mid-dictation would
+/// otherwise hold its worker forever. Clients send frames continuously
+/// while recording, so a live stream is never quiet this long.
+const STREAM_IDLE: Duration = Duration::from_secs(30);
+
+/// The next input of a live stream: `None` once the upload has ended, and
+/// `Abort` when nothing arrived for `idle`.
+fn recv_stream_input(frames: &Receiver<StreamInput>, idle: Duration) -> Option<StreamInput> {
+    match frames.recv_timeout(idle) {
+        Ok(input) => Some(input),
+        Err(RecvTimeoutError::Timeout) => {
+            eprintln!(
+                "Stream upload sent nothing for {} s; dropping its job",
+                idle.as_secs()
+            );
+            Some(StreamInput::Abort)
+        }
+        Err(RecvTimeoutError::Disconnected) => None,
+    }
+}
 
 struct StreamedTranscript {
     text: String,
@@ -1469,7 +1578,7 @@ fn transcribe_stream(
         sample_rate: 16_000,
         dropped_stream_frames: 0,
     };
-    while let Ok(input) = frames.recv() {
+    while let Some(input) = recv_stream_input(&frames, STREAM_IDLE) {
         let frame = match input {
             StreamInput::Frame(frame) => frame,
             StreamInput::Abort => {
@@ -2265,6 +2374,7 @@ impl HostMetrics {
             max_recording_seconds: live.max_recording_seconds(),
             use_gpu: live.use_gpu(),
             pairing_enabled: live.pairing_enabled(),
+            pairing_password_source: live.auth().pairing_password_source(),
             model: live.model_summary(),
             models: inventory.models,
             model_download: self.model_download.clone(),
@@ -2380,6 +2490,9 @@ struct StatsSnapshot<'a> {
     /// Whether clients can pair with a password; the password itself is
     /// never reported.
     pairing_enabled: bool,
+    /// `env` (`FAIRSPOKEN_HOST_PAIRING_PASSWORD`, read-only here), `saved`
+    /// (the config file), or `null` with pairing off.
+    pairing_password_source: Option<&'static str>,
     /// The served model: one id when uniform across workers, else "mixed".
     model: String,
     /// Every model this build can serve, installed or not, with the workers
@@ -2484,6 +2597,8 @@ mod tests {
             )),
             next_job_id: AtomicU64::new(1),
             pairing: Mutex::new(super::PairingLimiter::default()),
+            batch_admissions: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_batch_admissions: config.worker_count + config.queue_capacity,
         }
     }
 
@@ -3654,6 +3769,232 @@ mod tests {
         assert!(parse("x-fairspoken-backend: nonsense\r\n").is_err());
         assert!(parse("x-multivoice-backend: nonsense\r\n").is_err());
         assert_eq!(parse("").unwrap().language, "en");
+    }
+
+    /// Serves `runtime` on a loopback port through the host's own accept
+    /// loop until the test process ends.
+    fn serve_test_host(runtime: Arc<HostRuntime>) -> std::net::SocketAddr {
+        let updater = test_updater(&runtime, "0.2.0", "http://127.0.0.1:9/");
+        let metrics = Arc::clone(&runtime.metrics);
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("ip address");
+        thread::spawn(move || super::serve(&server, &runtime, &metrics, &updater, "127.0.0.1:0"));
+        addr
+    }
+
+    /// Sends one raw request (asking for `Connection: close`) and returns the
+    /// answer's status code and body.
+    fn exchange(addr: std::net::SocketAddr, raw: &str) -> (u16, String) {
+        use std::io::{Read, Write};
+        let mut socket = std::net::TcpStream::connect(addr).expect("connect");
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        socket.write_all(raw.as_bytes()).expect("send request");
+        let mut response = String::new();
+        socket
+            .read_to_string(&mut response)
+            .expect("answer before the timeout");
+        let status = response
+            .split(' ')
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in {response:?}"));
+        let body = response
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or_default();
+        (status, body)
+    }
+
+    fn token_runtime(config_path: std::path::PathBuf, auth: super::HostAuth) -> Arc<HostRuntime> {
+        let runtime = updater_runtime(config_path);
+        runtime.live.set_auth(auth);
+        Arc::new(runtime)
+    }
+
+    #[test]
+    fn a_huge_content_length_never_takes_the_host_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = token_runtime(
+            dir.path().join("host-config.json"),
+            super::HostAuth {
+                token: Some("secret".to_string()),
+                ..Default::default()
+            },
+        );
+        let addr = serve_test_host(runtime);
+
+        // Each answer drops a request whose claimed body was never sent:
+        // usize::MAX used to panic on "capacity overflow", 2^62 to abort on
+        // the failed allocation, and a lazily allocated terabyte to block
+        // the accept loop draining a connection its client keeps open.
+        let mut open = Vec::new();
+        for claimed in [
+            "18446744073709551615",
+            "4611686018427387904",
+            "1000000000000",
+            "4294967296",
+        ] {
+            for (request, expected) in [
+                ("GET /v1/hello", 200),
+                ("POST /v1/config", 401),
+            ] {
+                use std::io::{Read, Write};
+                let mut socket = std::net::TcpStream::connect(addr).expect("connect");
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("timeout");
+                socket
+                    .write_all(
+                        format!("{request} HTTP/1.1\r\nHost: test\r\nConnection: close\r\nContent-Length: {claimed}\r\n\r\n")
+                            .as_bytes(),
+                    )
+                    .expect("send request");
+                let mut response = String::new();
+                socket
+                    .read_to_string(&mut response)
+                    .unwrap_or_else(|err| panic!("{request} with Content-Length {claimed}: {err}"));
+                assert!(
+                    response.starts_with(&format!("HTTP/1.1 {expected} ")),
+                    "{request} with Content-Length {claimed}: {response}"
+                );
+                open.push(socket);
+            }
+        }
+        let (status, _) = exchange(
+            addr,
+            "GET /v1/health HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200, "the host keeps serving");
+    }
+
+    #[test]
+    fn config_refuses_pairing_password_edits_while_the_env_sets_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (auth, _) = super::HostAuth::resolve(
+            Some("secret".to_string()),
+            None,
+            Some("env-password".to_string()),
+            None,
+        )
+        .unwrap();
+        let runtime = token_runtime(dir.path().join("host-config.json"), auth);
+        let addr = serve_test_host(Arc::clone(&runtime));
+        let post = |body: &str| {
+            exchange(
+                addr,
+                &format!(
+                    "POST /v1/config HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer secret\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+
+        for body in [
+            r#"{"pairingPassword":"another-one"}"#,
+            r#"{"pairingPassword":null}"#,
+            r#"{"maxActiveStreams":3,"pairingPassword":""}"#,
+        ] {
+            let (status, answer) = post(body);
+            assert_eq!(status, 409, "{body}: {answer}");
+            assert!(answer.contains("FAIRSPOKEN_HOST_PAIRING_PASSWORD"));
+            assert!(!answer.contains("env-password"));
+        }
+        // Nothing applied, nothing saved.
+        assert_eq!(
+            runtime.live.auth().pairing_password.as_deref(),
+            Some("env-password")
+        );
+        assert_eq!(runtime.live.max_active_streams(), 1);
+        assert!(!runtime.config_path.exists());
+
+        let (status, _) = post(r#"{"maxActiveStreams":3}"#);
+        assert_eq!(status, 200, "other fields still apply");
+        let (status, stats) = exchange(
+            addr,
+            "GET /v1/stats?token=secret HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200);
+        let stats: serde_json::Value = serde_json::from_str(&stats).expect("stats json");
+        assert_eq!(stats["pairingPasswordSource"], "env");
+        assert_eq!(stats["pairingEnabled"], true);
+        assert_eq!(stats["maxActiveStreams"], 3);
+    }
+
+    #[test]
+    fn a_quiet_stream_is_aborted_after_the_idle_timeout() {
+        use super::{recv_stream_input, StreamInput};
+        let idle = Duration::from_millis(20);
+        let (frames_tx, frames) = mpsc::channel();
+
+        assert!(matches!(
+            recv_stream_input(&frames, idle),
+            Some(StreamInput::Abort)
+        ));
+        frames_tx
+            .send(StreamInput::Frame(crate::audio::AudioFrame {
+                pcm_i16: vec![1, 2],
+                sample_rate: 16_000,
+            }))
+            .unwrap();
+        assert!(matches!(
+            recv_stream_input(&frames, idle),
+            Some(StreamInput::Frame(_))
+        ));
+        drop(frames_tx);
+        assert!(recv_stream_input(&frames, idle).is_none());
+    }
+
+    #[test]
+    fn batch_uploads_are_admitted_only_up_to_workers_plus_queue() {
+        let config = test_config();
+        let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
+        let (job_tx, _job_rx) = mpsc::sync_channel(1);
+        // One worker and a one-job queue: two uploads in flight at most.
+        let runtime = test_runtime(config, job_tx, metrics);
+
+        let first = runtime.try_admit_batch().expect("first upload");
+        let second = runtime.try_admit_batch().expect("second upload");
+        assert!(runtime.try_admit_batch().is_none());
+        drop(first);
+        let _third = runtime.try_admit_batch().expect("a freed place is reused");
+        assert!(runtime.try_admit_batch().is_none());
+        drop(second);
+        assert!(runtime.try_admit_batch().is_some());
+    }
+
+    #[test]
+    fn wav_header_checks_the_rate_and_claimed_length_before_decoding() {
+        use super::check_wav_header;
+        use tiny_http::StatusCode;
+        let wav = |sample_rate: u32, frames: usize| {
+            let mut bytes = Cursor::new(Vec::new());
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::new(&mut bytes, spec).unwrap();
+            for _ in 0..frames {
+                writer.write_sample(0_i16).unwrap();
+            }
+            writer.finalize().unwrap();
+            bytes.into_inner()
+        };
+
+        assert!(check_wav_header(&wav(16_000, 16_000 * 10), 10).is_ok());
+        assert!(check_wav_header(&wav(192_000, 10), 10).is_ok());
+        assert_eq!(
+            check_wav_header(&wav(384_000, 10), 10).unwrap_err().0,
+            StatusCode(400)
+        );
+        let (status, message) = check_wav_header(&wav(16_000, 16_000 * 10 + 1), 10).unwrap_err();
+        assert_eq!(status, StatusCode(413));
+        assert!(message.contains("exceeds host maximum of 10 seconds"));
+        // Not a WAV at all: decode_wav reports that.
+        assert!(check_wav_header(b"garbage", 10).is_ok());
     }
 
     fn test_updater(

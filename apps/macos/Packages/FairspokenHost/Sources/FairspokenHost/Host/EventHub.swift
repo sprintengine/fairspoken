@@ -150,11 +150,24 @@ public final class EventSubscription: Sendable {
         case closed
     }
 
+    /// The writer waiting in `next`. Whoever takes it out of `State.waiter` (under the lock)
+    /// resumes it, exactly once, and cancels its timer.
+    private struct Waiter {
+        var token: UInt64
+        var cont: CheckedContinuation<Next, Never>
+        var timer: Task<Void, Never>
+
+        func resume(returning next: Next) {
+            timer.cancel()
+            cont.resume(returning: next)
+        }
+    }
+
     private struct State {
         var frames: [String] = []
         var head = 0
         var closed = false
-        var waiter: (token: UInt64, cont: CheckedContinuation<Next, Never>)?
+        var waiter: Waiter?
         var nextToken: UInt64 = 0
         var buffered: Int { frames.count - head }
     }
@@ -162,19 +175,23 @@ public final class EventSubscription: Sendable {
     let id: UInt64
     private weak let hub: EventHub?
     private let state = Mutex(State())
+    private let timers = WaitTimers()
 
     init(id: UInt64, hub: EventHub) {
         self.id = id
         self.hub = hub
     }
 
+    /// Heartbeat timers not yet finished.
+    var pendingTimers: Int { timers.pending }
+
     /// False when the buffer was already full (the hub then drops this subscriber).
     func push(_ frame: String) -> Bool {
-        let (ok, resume) = state.withLock { s -> (Bool, CheckedContinuation<Next, Never>?) in
+        let (ok, resume) = state.withLock { s -> (Bool, Waiter?) in
             if s.closed { return (true, nil) }
             if let w = s.waiter {
                 s.waiter = nil
-                return (true, w.cont)
+                return (true, w)
             }
             guard s.buffered < EventHub.subscriberBuffer else { return (false, nil) }
             s.frames.append(frame)
@@ -185,10 +202,10 @@ public final class EventSubscription: Sendable {
     }
 
     func close() {
-        let waiter = state.withLock { s -> CheckedContinuation<Next, Never>? in
+        let waiter = state.withLock { s -> Waiter? in
             s.closed = true
             defer { s.waiter = nil }
-            return s.waiter?.cont
+            return s.waiter
         }
         waiter?.resume(returning: .closed)
     }
@@ -202,9 +219,7 @@ public final class EventSubscription: Sendable {
 
     /// The next frame, `.timeout` after `timeout` with nothing to send, or `.closed`.
     public func next(timeout: Duration) async -> Next {
-        let token: UInt64? = nil
-        _ = token
-        return await withCheckedContinuation { (cont: CheckedContinuation<Next, Never>) in
+        await withCheckedContinuation { (cont: CheckedContinuation<Next, Never>) in
             let immediate = state.withLock { s -> Next? in
                 if s.buffered > 0 {
                     let f = s.frames[s.head]
@@ -217,24 +232,22 @@ public final class EventSubscription: Sendable {
                 }
                 if s.closed { return .closed }
                 s.nextToken += 1
-                s.waiter = (s.nextToken, cont)
+                let token = s.nextToken
+                // Started under the lock, so it is stored before a push can take the waiter.
+                let timer = timers.start(after: timeout) { [weak self] in self?.expire(token) }
+                s.waiter = Waiter(token: token, cont: cont, timer: timer)
                 return nil
             }
-            if let immediate {
-                cont.resume(returning: immediate)
-                return
-            }
-            let waitToken = state.withLock { $0.nextToken }
-            Task { [weak self] in
-                try? await Task.sleep(for: timeout)
-                guard let self else { return }
-                let expired = self.state.withLock { s -> CheckedContinuation<Next, Never>? in
-                    guard let w = s.waiter, w.token == waitToken else { return nil }
-                    s.waiter = nil
-                    return w.cont
-                }
-                expired?.resume(returning: .timeout)
-            }
+            if let immediate { cont.resume(returning: immediate) }
         }
+    }
+
+    private func expire(_ token: UInt64) {
+        let expired = state.withLock { s -> Waiter? in
+            guard let w = s.waiter, w.token == token else { return nil }
+            s.waiter = nil
+            return w
+        }
+        expired?.resume(returning: .timeout)
     }
 }

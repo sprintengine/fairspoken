@@ -40,7 +40,7 @@ final class NWTransport: ByteStreamTransport, @unchecked Sendable {
 
     func receive() async throws -> [UInt8]? {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[UInt8]?, Error>) in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { data, _, isComplete, error in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: HTTPConnection.receiveChunk) { data, _, isComplete, error in
                 if let data, !data.isEmpty {
                     cont.resume(returning: [UInt8](data))
                 } else if let error {

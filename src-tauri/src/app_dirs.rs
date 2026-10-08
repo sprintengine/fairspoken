@@ -85,6 +85,40 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// Reads a JSON store. A missing file is `None`. A file that exists but cannot
+/// be read or parsed is renamed to `<name>.corrupt-<unix millis>` and is also
+/// `None`: the caller starts empty, and its next save cannot overwrite data
+/// that may still be recoverable by hand.
+pub(crate) fn read_json_or_back_up<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let failure = match fs::read_to_string(path) {
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(value) => return Some(value),
+            Err(err) => err.to_string(),
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return None,
+        Err(err) => err.to_string(),
+    };
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".corrupt-{millis}"));
+    let backup = path.with_file_name(name);
+    match fs::rename(path, &backup) {
+        Ok(()) => eprintln!(
+            "Could not read {} ({failure}); moved it to {} and started empty",
+            path.display(),
+            backup.display()
+        ),
+        Err(err) => eprintln!(
+            "Could not read {} ({failure}) or move it aside ({err}); started empty",
+            path.display()
+        ),
+    }
+    None
+}
+
 /// Each directory earlier builds wrote, paired with where that data lives now:
 /// the app's own stores and models, plus the webview storage (localStorage)
 /// Tauri keys by bundle identifier.
@@ -356,6 +390,31 @@ mod tests {
         assert!(!new.join("stale.json").exists());
         assert!(!staging.exists());
         assert!(old.join("models/model.onnx").exists(), "a copy keeps the old data");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_stores_are_moved_aside_and_missing_ones_are_not() {
+        let root = scratch();
+        let path = root.join("notes.json");
+        assert_eq!(read_json_or_back_up::<Vec<u32>>(&path), None);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+
+        fs::write(&path, "[1, 2]").unwrap();
+        assert_eq!(read_json_or_back_up::<Vec<u32>>(&path), Some(vec![1, 2]));
+
+        fs::write(&path, "[1, 2").unwrap();
+        assert_eq!(read_json_or_back_up::<Vec<u32>>(&path), None);
+        assert!(!path.exists());
+        let backup = fs::read_dir(&root).unwrap().next().unwrap().unwrap();
+        assert!(backup.file_name().to_string_lossy().starts_with("notes.json.corrupt-"));
+        assert_eq!(fs::read_to_string(backup.path()).unwrap(), "[1, 2");
+
+        // Bytes that are not text count as unreadable too.
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_eq!(read_json_or_back_up::<Vec<u32>>(&path), None);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         fs::remove_dir_all(root).unwrap();
     }
 

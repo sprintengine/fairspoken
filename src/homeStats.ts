@@ -71,9 +71,11 @@ function formatDuration(seconds: number): string {
   return `${minutes} m`;
 }
 
+const usdFormat = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
+
 function formatMoney(usd: number): string {
-  if (usd > 0 && usd < 0.005) return "<$0.01";
-  return `$${usd.toFixed(2)}`;
+  if (usd > 0 && usd < 0.005) return `<${usdFormat.format(0.01)}`;
+  return usdFormat.format(usd);
 }
 
 function weekDeltaLabel(thisWeek: number, lastWeek: number): string {

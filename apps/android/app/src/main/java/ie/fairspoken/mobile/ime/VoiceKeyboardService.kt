@@ -84,8 +84,8 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        // Don't keep the microphone open behind a closed keyboard.
-        if (app.dictation.isListening) app.dictation.cancel()
+        // Don't keep the microphone open behind a closed keyboard; another surface's dictation isn't ours to end.
+        if (app.dictation.isListeningFor(this)) app.dictation.cancel(this)
         // Also called from super.onDestroy(), after the lifecycle has ended.
         if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
@@ -106,7 +106,7 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
             dictationField = currentInputEditorInfo?.fieldKey()
             panel.notice = null
         }
-        app.dictation.toggle(::commit)
+        app.dictation.toggle(this, ::commit)
     }
 
     private fun commit(text: String) {
@@ -172,7 +172,7 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
     }
 
     private fun switchAway() {
-        if (app.dictation.isListening) app.dictation.cancel()
+        if (app.dictation.isListeningFor(this)) app.dictation.cancel(this)
         if (!switchToPreviousInputMethod()) {
             getSystemService(InputMethodManager::class.java).showInputMethodPicker()
         }

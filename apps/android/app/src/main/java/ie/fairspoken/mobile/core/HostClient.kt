@@ -15,6 +15,7 @@ import okhttp3.Response
 import okio.BufferedSink
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -36,7 +37,8 @@ data class Transcript(
     val superMode: String?,
 )
 
-class HostException(message: String) : Exception(message)
+/** [rejected]: the host refused the token, so the fix is to pair again. */
+class HostException(message: String, val rejected: Boolean = false) : Exception(message)
 
 /**
  * Speaks the Fairspoken host protocol (src-tauri/src/host/PROTOCOL.md):
@@ -54,6 +56,8 @@ class HostClient {
     private val probeHttp: OkHttpClient = http.newBuilder()
         .callTimeout(1500, TimeUnit.MILLISECONDS)
         .build()
+
+    private val recordingLimits = ConcurrentHashMap<String, Int>()
 
     suspend fun hello(baseUrl: String): HostHello? = withContext(Dispatchers.IO) {
         runCatching {
@@ -118,12 +122,30 @@ class HostClient {
             val started = System.nanoTime()
             val request = Request.Builder().url("${host.url}/v1/health").authorized(host).build()
             http.newCall(request).execute().use { response ->
-                if (response.code == 401) throw HostException("Token rejected, pair again")
+                if (response.code == 401) throw HostException("Token rejected, pair again", rejected = true)
                 if (!response.isSuccessful) throw HostException("Host answered ${response.code}")
             }
             (System.nanoTime() - started) / 1_000_000
         }
     }
+
+    /**
+     * Reads the host's `maxRecordingSeconds` from `GET /v1/stats`, so a
+     * dictation can stop before the host refuses it. Also warms the connection.
+     */
+    suspend fun learnLimits(host: SavedHost) = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder().url("${host.url}/v1/stats").authorized(host).build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use
+                val seconds = JSONObject(response.body?.string().orEmpty()).optInt("maxRecordingSeconds")
+                if (seconds > 0) recordingLimits[host.url] = seconds
+            }
+        }
+    }
+
+    /** The host's recording limit, once [learnLimits] has read it. */
+    fun recordingLimitSeconds(url: String): Int? = recordingLimits[url]
 
     /**
      * Opens `POST /v1/transcriptions/stream` right away, so the host queues
@@ -272,7 +294,7 @@ class StreamingUpload : Callback {
                     429 -> "Host is busy, try again"
                     else -> json?.optString("error")?.takeIf { e -> e.isNotBlank() } ?: "Host answered ${it.code}"
                 }
-                complete(Result.failure(HostException(message)))
+                complete(Result.failure(HostException(message, rejected = it.code == 401)))
                 return
             }
             complete(

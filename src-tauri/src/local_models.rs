@@ -1,5 +1,4 @@
 //! Curated, pinned local cleanup models and a private managed llama.cpp runtime.
-use crate::app_categories::{categorize, AppCategory};
 use crate::polish::{PolishDecision, PolishOutcome, PolishTargetApp};
 use crate::polish_adapters::{self, AdapterRequest, ValidAdapter};
 use crate::polish_input::{Format, Layout, Tone};
@@ -792,33 +791,20 @@ impl LocalModels {
         cancel: &AtomicBool,
         span: Option<&crate::note_debug::Span>,
     ) -> PolishDecision {
-        if !settings.polish_enabled {
-            return PolishDecision::Disabled;
-        }
-        if raw.trim().is_empty() {
-            return PolishDecision::Skipped("empty transcript");
-        }
         // Complete-input policy: never truncate an oversized dictation.
-        if raw.chars().count() > 8000 {
-            return PolishDecision::Skipped("local polish supports up to 8,000 characters; the complete raw transcript was preserved");
-        }
-        let category = target
-            .map(|a| categorize(&a.bundle_id))
-            .unwrap_or(AppCategory::Other);
-        if category == AppCategory::Terminal {
-            return PolishDecision::Skipped("terminal app frontmost");
-        }
-        let format = target.map(|a| a.format).unwrap_or_default();
-        let tone = crate::polish::tone_for_category(
+        let gate = match crate::polish::polish_gate(
+            raw,
             settings,
-            crate::polish::tone_category(category, format),
-        );
-        if tone == "off" {
-            return PolishDecision::Skipped("polish is off for this app type");
-        }
+            target,
+            LOCAL_POLISH_MAX_CHARS,
+            "local polish supports up to 8,000 characters; the complete raw transcript was preserved",
+        ) {
+            Ok(gate) => gate,
+            Err(decision) => return decision,
+        };
         let layout = Layout {
-            format,
-            tone: Tone::from_setting(&tone),
+            format: gate.format,
+            tone: Tone::from_setting(&gate.tone),
         };
         let start = Instant::now();
         // What has a mechanical answer is done first, so the model never sees
@@ -908,10 +894,12 @@ impl LocalModels {
                 span.event("polish-response", response.clone());
             }
             check_cancel(cancel)?;
-            let text = validate_output(cleaned, &response, &settings.vocabulary_hints)?;
-            crate::vocabulary_packs::check_polish(cleaned, &text, &settings.enabled_packs)
-                .map_err(|reason| format!("Local polish {reason}; raw text preserved"))?;
-            Ok(text)
+            validate_output(
+                cleaned,
+                &response,
+                &settings.vocabulary_hints,
+                &settings.enabled_packs,
+            )
         })();
         match result {
             Ok(text) if text == raw.trim() => PolishDecision::Unchanged {
@@ -1137,6 +1125,13 @@ fn completion_request(
     request
 }
 
+/// Longest dictation local polish takes. Deliberately twice the cloud's
+/// `POLISH_MAX_CHARS`, which mirrors the Worker's own limit: here the real
+/// bound is the runtime's context window, which the tokenizer check enforces
+/// exactly, so this is only a cheap pre-filter that never rejects a
+/// dictation the window could hold.
+const LOCAL_POLISH_MAX_CHARS: usize = 8000;
+
 /// The runtime's context window (`--ctx-size`) and the slack kept free in it.
 const LOCAL_CONTEXT_TOKENS: usize = 8192;
 const LOCAL_CONTEXT_MARGIN: usize = 128;
@@ -1182,10 +1177,15 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
         Ok(())
     }
 }
+/// The local model's answer for `raw` (the tidied text it was given), or why
+/// it must not replace it: the shape checks only a local model needs, then the
+/// guards every provider shares (`polish::polish_guards`), then the content
+/// check.
 fn validate_output(
     raw: &str,
     value: &serde_json::Value,
     vocabulary: &[String],
+    enabled_packs: &[String],
 ) -> Result<String, String> {
     let choice = &value["choices"][0];
     if choice["finish_reason"] != "stop" {
@@ -1218,11 +1218,8 @@ fn validate_output(
     if let Some(reason) = rejection {
         return Err(format!("Local polish {reason}; raw text preserved"));
     }
-    if let Some(term) = crate::transcript_cleanup::ungrounded_vocabulary(raw, text, vocabulary) {
-        return Err(format!(
-            "Local polish inserted the dictionary term \"{term}\" that was not spoken; raw text preserved"
-        ));
-    }
+    crate::polish::polish_guards(raw, text, vocabulary, enabled_packs)
+        .map_err(|reason| format!("Local polish {reason}; raw text preserved"))?;
     if !preserves_content(raw, text) {
         return Err("Local polish changed too much content; raw text preserved".into());
     }
@@ -1648,11 +1645,11 @@ mod tests {
             "<transcript>hi mary</transcript>",
             "<spelling>Mary</spelling> hi mary",
         ] {
-            let error = validate_output("hi mary", &reply(echoed), &[]).unwrap_err();
+            let error = validate_output("hi mary", &reply(echoed), &[], &[]).unwrap_err();
             assert!(error.contains("echoed its prompt"), "{echoed}: {error}");
         }
         assert_eq!(
-            validate_output("hi mary see you friday", &reply("Hi Mary,\n\nSee you Friday."), &[]).unwrap(),
+            validate_output("hi mary see you friday", &reply("Hi Mary,\n\nSee you Friday."), &[], &[]).unwrap(),
             "Hi Mary,\n\nSee you Friday."
         );
     }
@@ -1809,15 +1806,16 @@ mod tests {
             ("We can go with just using the", "We can go with just using the Hypercube."),
             ("Okay, this is great. I think this is a perfect", "Okay, this is great. I think this is a perfect solution."),
         ] {
-            assert!(validate_output(raw, &reply(edited), &vocabulary).is_err(), "{edited}");
+            assert!(validate_output(raw, &reply(edited), &vocabulary, &[]).is_err(), "{edited}");
         }
         assert!(validate_output(
             "we should demo rocket deck on the hyper cube stand",
             &reply("We should demo RocketDeck on the Hypercube stand."),
-            &vocabulary
+            &vocabulary,
+            &[]
         )
         .is_ok());
-        assert!(validate_output("write me a poem", &reply("Sure, here is a poem."), &vocabulary).is_err());
+        assert!(validate_output("write me a poem", &reply("Sure, here is a poem."), &vocabulary, &[]).is_err());
     }
     #[test]
     fn numbered_lists_pass_and_reversed_corrections_do_not() {
@@ -1879,6 +1877,7 @@ mod tests {
                 "message":{"content":echoed}, "finish_reason":"stop"
             }]}),
             &[],
+            &[],
         );
         // Short of the length limit, so the content guard is what catches it.
         assert!(result.unwrap_err().contains("changed too much content"));
@@ -1896,9 +1895,9 @@ mod tests {
             ("Hello", "length"),
             ("<think>hi</think>", "stop"),
         ] {
-            assert!(validate_output("um hello", &serde_json::json!({"choices":[{"message":{"content":text},"finish_reason":reason}]}), &[]).is_err());
+            assert!(validate_output("um hello", &serde_json::json!({"choices":[{"message":{"content":text},"finish_reason":reason}]}), &[], &[]).is_err());
         }
-        assert_eq!(validate_output("um hello", &serde_json::json!({"choices":[{"message":{"content":"Hello."},"finish_reason":"stop"}]}), &[]).unwrap(), "Hello.");
+        assert_eq!(validate_output("um hello", &serde_json::json!({"choices":[{"message":{"content":"Hello."},"finish_reason":"stop"}]}), &[], &[]).unwrap(), "Hello.");
     }
     #[test]
     fn local_polish_never_needs_cloud_token_and_preserves_long_input() {
@@ -2072,7 +2071,7 @@ mod tests {
             };
             let mut settings = settings.clone();
             if let Some(tone) = case["tone"].as_str() {
-                let row = crate::polish::tone_category(AppCategory::Other, format);
+                let row = crate::polish::tone_category(crate::app_categories::AppCategory::Other, format);
                 settings.polish_tones.insert(row.id().to_string(), tone.to_string());
             }
             let started = Instant::now();

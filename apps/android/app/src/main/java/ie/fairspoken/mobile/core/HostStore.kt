@@ -35,13 +35,16 @@ class HostStore(context: Context) {
     val hosts: StateFlow<List<SavedHost>> = _hosts.asStateFlow()
 
     private val _activeUrl = MutableStateFlow(prefs.getString("activeUrl", null))
-    val activeUrl: StateFlow<String?> = _activeUrl.asStateFlow()
 
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<MobileSettings> = _settings.asStateFlow()
 
+    /** The selected host, or the first one when the selection is gone. */
+    private val _activeHost = MutableStateFlow(resolveActive())
+    val activeHost: StateFlow<SavedHost?> = _activeHost.asStateFlow()
+
     val active: SavedHost?
-        get() = _hosts.value.firstOrNull { it.url == _activeUrl.value } ?: _hosts.value.firstOrNull()
+        get() = _activeHost.value
 
     fun save(host: SavedHost) {
         _hosts.update { list -> list.filterNot { it.url == host.url } + host }
@@ -52,13 +55,17 @@ class HostStore(context: Context) {
     fun remove(url: String) {
         _hosts.update { list -> list.filterNot { it.url == url } }
         persistHosts()
-        if (_activeUrl.value == url) select(_hosts.value.firstOrNull()?.url)
+        if (_activeUrl.value == url) select(_hosts.value.firstOrNull()?.url) else _activeHost.value = resolveActive()
     }
 
     fun select(url: String?) {
         _activeUrl.value = url
+        _activeHost.value = resolveActive()
         prefs.edit().putString("activeUrl", url).apply()
     }
+
+    private fun resolveActive(): SavedHost? =
+        _hosts.value.firstOrNull { it.url == _activeUrl.value } ?: _hosts.value.firstOrNull()
 
     fun updateSettings(transform: (MobileSettings) -> MobileSettings) {
         val next = transform(_settings.value)

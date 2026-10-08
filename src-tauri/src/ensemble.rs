@@ -917,38 +917,72 @@ fn push_code(out: &mut String, previous: &mut Option<char>, code: char) {
 /// Two normalized words that a listener could confuse: the same consonant
 /// skeleton, or a spelling one letter in four away.
 pub fn sounds_alike(a: &str, b: &str) -> bool {
-    if a.is_empty() || b.is_empty() {
-        return false;
+    PreparedWord::new(a).sounds_alike(&PreparedWord::new(b), &mut Vec::new())
+}
+
+/// A normalized word with what `sounds_alike` looks at worked out once, for
+/// the alignment, which compares every word with every other.
+struct PreparedWord<'a> {
+    key: &'a str,
+    chars: Vec<char>,
+    phonetic: String,
+}
+
+impl<'a> PreparedWord<'a> {
+    fn new(key: &'a str) -> Self {
+        Self {
+            key,
+            chars: key.chars().collect(),
+            phonetic: phonetic_key(key),
+        }
     }
-    if a == b {
-        return true;
+
+    /// `sounds_alike`; `row` is scratch space for the edit distance.
+    fn sounds_alike(&self, other: &Self, row: &mut Vec<usize>) -> bool {
+        if self.key.is_empty() || other.key.is_empty() {
+            return false;
+        }
+        if self.key == other.key {
+            return true;
+        }
+        let shorter = self.chars.len().min(other.chars.len());
+        let longer = self.chars.len().max(other.chars.len());
+        let allowed = (longer / 4).max(1);
+        // The length difference is a lower bound on the edit distance.
+        if shorter >= 4
+            && longer - shorter <= allowed
+            && edit_distance_chars(&self.chars, &other.chars, row) <= allowed
+        {
+            return true;
+        }
+        self.phonetic.len() >= 2 && self.phonetic == other.phonetic
     }
-    let shorter = a.chars().count().min(b.chars().count());
-    let longer = a.chars().count().max(b.chars().count());
-    if shorter >= 4 && edit_distance(a, b) <= (longer / 4).max(1) {
-        return true;
-    }
-    let (ka, kb) = (phonetic_key(a), phonetic_key(b));
-    ka.len() >= 2 && ka == kb
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    edit_distance_chars(&a, &b, &mut Vec::new())
+}
+
+/// Levenshtein distance over one reused row.
+fn edit_distance_chars(a: &[char], b: &[char], row: &mut Vec<usize>) -> usize {
+    row.clear();
+    row.extend(0..=b.len());
     for (i, ca) in a.iter().enumerate() {
-        let mut current = vec![i + 1];
+        // `row` holds the previous line up to `j`, the current one before.
+        let mut diagonal = row[0];
+        row[0] = i + 1;
         for (j, cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            current.push(
-                (previous[j + 1] + 1)
-                    .min(current[j] + 1)
-                    .min(previous[j] + cost),
-            );
+            let above = row[j + 1];
+            let value = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(ca != cb));
+            diagonal = above;
+            row[j + 1] = value;
         }
-        previous = current;
     }
-    previous[b.len()]
+    row[b.len()]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -969,17 +1003,26 @@ enum Op {
 fn align(p: &[String], s: &[String], config: &MergeConfig) -> Vec<Op> {
     let (n, m) = (p.len(), s.len());
     let gap = |key: &String| if key.is_empty() { 0.0 } else { 1.0 };
-    let sub = |a: &String, b: &String| -> f32 {
-        if a.is_empty() || b.is_empty() {
-            f32::INFINITY
-        } else if a == b {
-            0.0
-        } else if sounds_alike(a, b) {
-            config.sounds_alike_cost
-        } else {
-            1.0
+    // Every substitution cost once, from words prepared once: the fill and
+    // the traceback both read this table.
+    let p_prepared: Vec<PreparedWord> = p.iter().map(|key| PreparedWord::new(key)).collect();
+    let s_prepared: Vec<PreparedWord> = s.iter().map(|key| PreparedWord::new(key)).collect();
+    let mut row = Vec::new();
+    let mut substitution = Vec::with_capacity(n * m);
+    for a in &p_prepared {
+        for b in &s_prepared {
+            substitution.push(if a.key.is_empty() || b.key.is_empty() {
+                f32::INFINITY
+            } else if a.key == b.key {
+                0.0
+            } else if a.sounds_alike(b, &mut row) {
+                config.sounds_alike_cost
+            } else {
+                1.0
+            });
         }
-    };
+    }
+    let sub = |i: usize, j: usize| substitution[i * m + j];
     let mut cost = vec![vec![0.0_f32; m + 1]; n + 1];
     for i in 1..=n {
         cost[i][0] = cost[i - 1][0] + gap(&p[i - 1]);
@@ -989,7 +1032,7 @@ fn align(p: &[String], s: &[String], config: &MergeConfig) -> Vec<Op> {
     }
     for i in 1..=n {
         for j in 1..=m {
-            let diagonal = cost[i - 1][j - 1] + sub(&p[i - 1], &s[j - 1]);
+            let diagonal = cost[i - 1][j - 1] + sub(i - 1, j - 1);
             let delete = cost[i - 1][j] + gap(&p[i - 1]);
             let insert = cost[i][j - 1] + gap(&s[j - 1]);
             cost[i][j] = diagonal.min(delete).min(insert);
@@ -1002,7 +1045,7 @@ fn align(p: &[String], s: &[String], config: &MergeConfig) -> Vec<Op> {
     while i > 0 || j > 0 {
         if i > 0
             && j > 0
-            && (cost[i][j] - (cost[i - 1][j - 1] + sub(&p[i - 1], &s[j - 1]))).abs() < EPS
+            && (cost[i][j] - (cost[i - 1][j - 1] + sub(i - 1, j - 1))).abs() < EPS
         {
             ops.push(if p[i - 1] == s[j - 1] {
                 Op::Match(i - 1, j - 1)
@@ -1452,5 +1495,132 @@ mod tests {
         );
         let nul = targeted_prompt("", &dict(&["bad\0term"]), PROMPT_TOKEN_BUDGET).unwrap();
         assert!(!nul.contains('\0'));
+    }
+
+    /// The alignment as first written: `sounds_alike` from scratch for every
+    /// cell, and again in the traceback.
+    fn reference_align(p: &[String], s: &[String], config: &MergeConfig) -> Vec<Op> {
+        fn reference_distance(a: &str, b: &str) -> usize {
+            let a: Vec<char> = a.chars().collect();
+            let b: Vec<char> = b.chars().collect();
+            let mut previous: Vec<usize> = (0..=b.len()).collect();
+            for (i, ca) in a.iter().enumerate() {
+                let mut current = vec![i + 1];
+                for (j, cb) in b.iter().enumerate() {
+                    let cost = usize::from(ca != cb);
+                    current.push(
+                        (previous[j + 1] + 1)
+                            .min(current[j] + 1)
+                            .min(previous[j] + cost),
+                    );
+                }
+                previous = current;
+            }
+            previous[b.len()]
+        }
+        fn reference_sounds_alike(a: &str, b: &str) -> bool {
+            if a.is_empty() || b.is_empty() {
+                return false;
+            }
+            if a == b {
+                return true;
+            }
+            let shorter = a.chars().count().min(b.chars().count());
+            let longer = a.chars().count().max(b.chars().count());
+            if shorter >= 4 && reference_distance(a, b) <= (longer / 4).max(1) {
+                return true;
+            }
+            let (ka, kb) = (phonetic_key(a), phonetic_key(b));
+            ka.len() >= 2 && ka == kb
+        }
+        let (n, m) = (p.len(), s.len());
+        let gap = |key: &String| if key.is_empty() { 0.0 } else { 1.0 };
+        let sub = |a: &String, b: &String| -> f32 {
+            if a.is_empty() || b.is_empty() {
+                f32::INFINITY
+            } else if a == b {
+                0.0
+            } else if reference_sounds_alike(a, b) {
+                config.sounds_alike_cost
+            } else {
+                1.0
+            }
+        };
+        let mut cost = vec![vec![0.0_f32; m + 1]; n + 1];
+        for i in 1..=n {
+            cost[i][0] = cost[i - 1][0] + gap(&p[i - 1]);
+        }
+        for j in 1..=m {
+            cost[0][j] = cost[0][j - 1] + gap(&s[j - 1]);
+        }
+        for i in 1..=n {
+            for j in 1..=m {
+                let diagonal = cost[i - 1][j - 1] + sub(&p[i - 1], &s[j - 1]);
+                let delete = cost[i - 1][j] + gap(&p[i - 1]);
+                let insert = cost[i][j - 1] + gap(&s[j - 1]);
+                cost[i][j] = diagonal.min(delete).min(insert);
+            }
+        }
+        let mut ops = Vec::new();
+        let (mut i, mut j) = (n, m);
+        while i > 0 || j > 0 {
+            if i > 0
+                && j > 0
+                && (cost[i][j] - (cost[i - 1][j - 1] + sub(&p[i - 1], &s[j - 1]))).abs() < 1e-4
+            {
+                ops.push(if p[i - 1] == s[j - 1] {
+                    Op::Match(i - 1, j - 1)
+                } else {
+                    Op::Sub(i - 1, j - 1)
+                });
+                i -= 1;
+                j -= 1;
+            } else if i > 0 && (cost[i][j] - (cost[i - 1][j] + gap(&p[i - 1]))).abs() < 1e-4 {
+                ops.push(Op::Delete(i - 1));
+                i -= 1;
+            } else {
+                ops.push(Op::Insert(j - 1));
+                j -= 1;
+            }
+        }
+        ops.reverse();
+        ops
+    }
+
+    #[test]
+    fn the_prepared_alignment_matches_the_reference_on_a_long_dictation() {
+        // Near-misses, sound-alikes, punctuation and digits, shuffled by a
+        // fixed linear congruential generator.
+        const VOCABULARY: &[&str] = &[
+            "kubernetes", "coopernetties", "cooper", "netties", "grafana", "grafanna",
+            "the", "a", "build", "bill", "deploy", "deployed", "metoprolol", "metro",
+            "pro", "lol", "siobhan", "shiv", "bond", "", "2024", "twenty", "restart",
+            "restarts", "ångström", "angstrom", "ok", "okay", "railway", "rail", "way",
+        ];
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        for length in [0, 1, 7, 60, 240] {
+            let mut words = |count: usize| -> Vec<String> {
+                (0..count)
+                    .map(|_| VOCABULARY[next() % VOCABULARY.len()].to_string())
+                    .collect()
+            };
+            let p = words(length);
+            let s = words(length + length / 7);
+            let config = MergeConfig::default();
+            assert_eq!(align(&p, &s, &config), reference_align(&p, &s, &config));
+        }
+        for (a, b) in [("kubernetes", "coopernetties"), ("grafana", "grafanna"), ("ok", "okay")] {
+            let words = [a.to_string(), b.to_string()];
+            assert_eq!(
+                align(&words[..1], &words[1..], &MergeConfig::default()),
+                reference_align(&words[..1], &words[1..], &MergeConfig::default())
+            );
+        }
     }
 }

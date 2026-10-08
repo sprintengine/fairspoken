@@ -61,6 +61,26 @@ impl SttModel {
         }
     }
 
+    /// Every model this build can run, in the order the picker lists them.
+    pub fn all() -> Vec<Self> {
+        #[cfg_attr(not(feature = "whisper"), allow(unused_mut))]
+        let mut models = vec![Self::Parakeet, Self::ParakeetUltra, Self::ParakeetV2];
+        #[cfg(feature = "whisper")]
+        models.extend(
+            [
+                WhisperModel::Tiny,
+                WhisperModel::Base,
+                WhisperModel::Small,
+                WhisperModel::Medium,
+                WhisperModel::LargeV2,
+                WhisperModel::LargeV3,
+                WhisperModel::LargeV3Turbo,
+            ]
+            .map(Self::Whisper),
+        );
+        models
+    }
+
     pub fn model_id(self) -> &'static str {
         match self {
             Self::Parakeet => PARAKEET_MODEL_ID,
@@ -157,6 +177,12 @@ impl Default for ModelService {
 }
 
 impl ModelService {
+    /// Models stored under `base_dir`, for tests.
+    #[cfg(test)]
+    pub(crate) fn at(base_dir: PathBuf) -> Self {
+        Self { base_dir }
+    }
+
     pub fn status(&self, model: SttModel) -> ModelStatus {
         let (dir, files) = self.storage(model);
         let mut cached = true;
@@ -673,6 +699,20 @@ mod tests {
             Some(SttModel::Whisper(WhisperModel::LargeV3Turbo))
         );
         assert_eq!(SttModel::from_model_id("base").unwrap().model_id(), "base");
+    }
+
+    #[test]
+    fn every_listed_model_round_trips_through_its_id() {
+        let ids: Vec<&str> = SttModel::all().into_iter().map(SttModel::model_id).collect();
+        assert_eq!(&ids[..3], ["parakeet-tdt-0.6b-v3", "parakeet-ultra", "parakeet-tdt-0.6b-v2"]);
+        #[cfg(feature = "whisper")]
+        assert_eq!(
+            &ids[3..],
+            ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
+        );
+        for id in ids {
+            assert_eq!(SttModel::from_model_id(id).map(SttModel::model_id), Some(id));
+        }
     }
 
     #[cfg(not(feature = "whisper"))]

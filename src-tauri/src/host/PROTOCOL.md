@@ -45,10 +45,15 @@ or `pairingPassword` in the host config file, the env var winning). Rules:
   token pairs to get it).
 - Stored in the host config file next to the token (same file, `0600` where
   the platform supports it). It is never returned by any route, logged, or
-  sent in events. `/v1/stats` reports only `"pairingEnabled": bool`.
+  sent in events. `/v1/stats` reports only `"pairingEnabled": bool` and
+  `"pairingPasswordSource"`: `"env"` (`FAIRSPOKEN_HOST_PAIRING_PASSWORD`),
+  `"saved"` (the config file) or `null` with pairing off.
 - `POST /v1/config` accepts `pairingPassword: string | null` (`null` or `""`
   turns pairing off) with the same validation; the answer reports
-  `pairingEnabled`, never the password.
+  `pairingEnabled`, never the password. While the env var sets the password
+  (`pairingPasswordSource: "env"`), any `pairingPassword` answers `409` and
+  nothing in that update applies: the env var would win again at the next
+  start.
 
 ### GET /v1/hello (no auth)
 
@@ -163,8 +168,11 @@ Request headers: `x-fairspoken-language` (default `en`),
 `x-fairspoken-super-mode: 1` asks for super mode on this request and on
 `/v1/transcriptions/stream` (see [Super mode](#super-mode-optional)).
 
-Status: `413` over the size/duration limit, `429` queue or stream capacity
-reached, `500` worker failure.
+Status: `413` over the size/duration limit (the duration is checked from the
+WAV header before the audio is decoded), `400` for a sample rate outside
+1–192000 Hz, `429` queue or stream capacity reached, or as many batch uploads
+in flight as workers plus queue slots (checked before the body is read),
+`500` worker failure.
 
 ### POST /v1/transcriptions/stream
 
@@ -178,7 +186,10 @@ u32 LE sample_rate | u32 LE sample_count | sample_count × i16 LE samples
 
 `sample_rate` must stay constant (1–192000), at most 192000 samples per frame;
 a zero-count frame is a no-op. Closing the body ends the recording. The
-response is the same JSON as `/v1/transcriptions`.
+response is the same JSON as `/v1/transcriptions`. A stream that sends no
+frame for 30 s loses its job, which ends with `"Stream upload aborted"` so
+the worker is free again (a phone that dropped off the network never holds
+it).
 
 ### POST /v1/config
 
@@ -188,7 +199,9 @@ Body (every field optional; `deny_unknown_fields`):
 `model` sets every worker; `workerModels` must list exactly one id per
 worker. All fields validate before any apply; the result persists to the host
 config file. Answers `{maxActiveStreams, maxRecordingSeconds, useGpu, model,
-workerModels, pairingEnabled}`. Worker count and queue capacity are restart-only.
+workerModels, pairingEnabled}`; `409` for `pairingPassword` while
+`FAIRSPOKEN_HOST_PAIRING_PASSWORD` is set. Worker count and queue capacity
+are restart-only.
 
 ### POST /v1/models/download
 
@@ -259,6 +272,7 @@ when no stream, queued or running job remains.
   "activeSessions": 2, "activeStreams": 1, "queuedJobs": 0, "runningJobs": 1,
   "workerCount": 2, "queueCapacity": 8, "maxActiveStreams": 4,
   "maxRecordingSeconds": 600, "useGpu": true, "pairingEnabled": true,
+  "pairingPasswordSource": "saved",          // env | saved | null (pairing off)
   "model": "parakeet-tdt-0.6b-v3",          // or "mixed" when workers differ
   "models": [                                // every model this build can serve
     { "id": "parakeet-tdt-0.6b-v3", "name": "Parakeet TDT 0.6B v3",

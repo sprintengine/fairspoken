@@ -17,7 +17,7 @@ use crate::ensemble::{
 };
 use crate::models::{ModelService, SttModel};
 use crate::settings::{Settings, SuperModeSetting, TranscriptionLocation};
-use crate::transcription::{speech_activity_profile, ChunkTranscriber, NO_SPEECH};
+use crate::transcription::{speech_activity_profile, ChunkTranscriber, CANCELLED, NO_SPEECH};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -147,6 +147,39 @@ impl SuperModeOutcome {
         if self.reason.is_none() {
             self.reason = counts.last_failure;
         }
+        self.settle();
+    }
+
+    /// `Used` is claimed before a session runs; once its chunks are in, a
+    /// session in which Whisper never contributed says why instead.
+    fn settle(&mut self) {
+        if self.status != SuperModeStatus::Used || self.merged_chunks > 0 {
+            return;
+        }
+        if self.secondary_failures > 0 {
+            // `absorb` already took the last failure as the reason.
+            self.status = SuperModeStatus::Unavailable;
+        } else if self.secondary_timeouts > 0 {
+            self.status = SuperModeStatus::Unavailable;
+            self.reason
+                .get_or_insert_with(|| "Whisper did not finish in time for any chunk".to_string());
+        } else if self.skipped_chunks > 0 {
+            self.status = SuperModeStatus::Shed;
+            self.reason.get_or_insert_with(|| {
+                "nothing for Whisper to check: no dictionary terms were in play".to_string()
+            });
+        }
+    }
+
+    /// The session's audio was transcribed in one pass by the primary alone
+    /// (a fallback), so super mode did not run whatever was planned.
+    pub fn skipped_by_fallback(&mut self) {
+        if self.status == SuperModeStatus::Used {
+            self.status = SuperModeStatus::Unavailable;
+            self.reason = Some(
+                "the recording was transcribed in one pass without super mode".to_string(),
+            );
+        }
     }
 }
 
@@ -263,6 +296,10 @@ pub struct EnsembleTranscriber {
     released_at: Mutex<Option<Instant>>,
     /// What is left of `RELEASE_BUDGET` for the chunks after release.
     release_budget_left: Mutex<Duration>,
+    /// The session was cancelled: no chunk waits for or starts Whisper.
+    cancelled: AtomicBool,
+    /// The abort flag of the Whisper decode in flight, for `on_cancel`.
+    current_abort: Mutex<Option<Arc<AtomicBool>>>,
     tally: Arc<SessionTally>,
     trace: Option<crate::note_debug::Trace>,
 }
@@ -332,6 +369,8 @@ impl EnsembleTranscriber {
             config: MergeConfig::default(),
             released_at: Mutex::new(None),
             release_budget_left: Mutex::new(RELEASE_BUDGET),
+            cancelled: AtomicBool::new(false),
+            current_abort: Mutex::new(None),
             tally,
             trace,
         })
@@ -354,6 +393,9 @@ impl EnsembleTranscriber {
         // When this chunk began waiting on the release budget.
         let mut waiting_since: Option<Instant> = None;
         let result = loop {
+            if self.cancelled.load(Ordering::SeqCst) {
+                break None;
+            }
             let released = *self.released_at.lock().unwrap_or_else(|p| p.into_inner());
             let deadline = match released {
                 Some(released) => {
@@ -399,6 +441,13 @@ impl ChunkTranscriber for EnsembleTranscriber {
         released.get_or_insert_with(Instant::now);
     }
 
+    fn on_cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Some(abort) = &*self.current_abort.lock().unwrap_or_else(|p| p.into_inner()) {
+            abort.store(true, Ordering::Relaxed);
+        }
+    }
+
     fn transcribe_pcm(
         &self,
         samples: &[i16],
@@ -406,6 +455,9 @@ impl ChunkTranscriber for EnsembleTranscriber {
         language: &str,
         _initial_prompt: Option<&str>,
     ) -> Result<String, String> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(CANCELLED.to_string());
+        }
         let started = Instant::now();
         // Parakeet takes no prompt; a chunk it hears no speech in is empty
         // no matter what Whisper makes of it.
@@ -438,6 +490,12 @@ impl ChunkTranscriber for EnsembleTranscriber {
         let prompt = ensemble::targeted_prompt(&primary_text, &dictionary, PROMPT_TOKEN_BUDGET);
 
         let abort = Arc::new(AtomicBool::new(false));
+        *self.current_abort.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&abort));
+        // Checked after publishing the flag, so a cancel that raced past
+        // `on_cancel`'s look at it is still seen here.
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(CANCELLED.to_string());
+        }
         let (reply_tx, reply_rx) = mpsc::channel();
         let sent = self
             .jobs
@@ -460,6 +518,10 @@ impl ChunkTranscriber for EnsembleTranscriber {
             Some(Err("The super mode engine stopped".to_string()))
         };
 
+        if self.cancelled.load(Ordering::SeqCst) {
+            abort.store(true, Ordering::Relaxed);
+            return Err(CANCELLED.to_string());
+        }
         let secondary = match secondary {
             None => {
                 abort.store(true, Ordering::Relaxed);
@@ -915,6 +977,133 @@ mod tests {
             started.elapsed() < Duration::from_millis(900),
             "{:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_session_whisper_never_contributed_to_is_not_reported_as_used() {
+        let settled = |change: fn(&mut TallyCounts)| {
+            let tally = SessionTally::default();
+            tally.update(change);
+            let mut outcome =
+                SuperModeOutcome::new(SuperModeStatus::Used, Some("small".into()), None);
+            outcome.absorb(&tally);
+            outcome
+        };
+        let failed = settled(|t| {
+            t.chunks = 2;
+            t.secondary_failures = 2;
+            t.last_failure = Some("Failed to load Whisper model: bad file".into());
+        });
+        assert_eq!(failed.status, SuperModeStatus::Unavailable);
+        assert_eq!(
+            failed.reason.as_deref(),
+            Some("Failed to load Whisper model: bad file")
+        );
+        let late = settled(|t| {
+            t.chunks = 1;
+            t.secondary_timeouts = 1;
+        });
+        assert_eq!(late.status, SuperModeStatus::Unavailable);
+        assert!(late.reason.is_some());
+        let skipped = settled(|t| t.skipped_chunks = 3);
+        assert_eq!(skipped.status, SuperModeStatus::Shed);
+        // One merged chunk is enough to have used super mode.
+        let used = settled(|t| {
+            t.chunks = 2;
+            t.merged_chunks = 1;
+            t.secondary_failures = 1;
+            t.last_failure = Some("decode failed".into());
+        });
+        assert_eq!(used.status, SuperModeStatus::Used);
+        // A session with no speech at all keeps what was planned.
+        assert_eq!(settled(|_| {}).status, SuperModeStatus::Used);
+
+        let mut fallback = SuperModeOutcome::new(SuperModeStatus::Used, None, None);
+        fallback.skipped_by_fallback();
+        assert_eq!(fallback.status, SuperModeStatus::Unavailable);
+        let mut shed = SuperModeOutcome::new(SuperModeStatus::Shed, None, Some("on battery power"));
+        shed.skipped_by_fallback();
+        assert_eq!(
+            (shed.status, shed.reason.as_deref()),
+            (SuperModeStatus::Shed, Some("on battery power"))
+        );
+    }
+
+    /// A Whisper stand-in that decodes until its abort flag is raised.
+    struct AbortableEngine {
+        aborted: Arc<AtomicBool>,
+    }
+
+    impl ChunkTranscriber for AbortableEngine {
+        fn transcribe_pcm(&self, _: &[i16], _: u32, _: &str, _: Option<&str>) -> Result<String, String> {
+            unreachable!("super mode asks for the detailed transcript")
+        }
+
+        fn transcribe_detailed(
+            &self,
+            _: &[i16],
+            _: u32,
+            _: &str,
+            _: Option<&str>,
+            abort: Option<Arc<AtomicBool>>,
+        ) -> Result<Hypothesis, String> {
+            let abort = abort.expect("super mode passes an abort flag");
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                if abort.load(Ordering::Relaxed) {
+                    self.aborted.store(true, Ordering::SeqCst);
+                    return Err("aborted".into());
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Ok(Hypothesis::from_text("too late"))
+        }
+    }
+
+    #[test]
+    fn cancel_stops_the_wait_and_aborts_the_whisper_decode() {
+        let (primary, _) = engine("Deploy it on cooper netties, then restart.", 0);
+        let aborted = Arc::new(AtomicBool::new(false));
+        let tally = Arc::new(SessionTally::default());
+        let settings = Settings {
+            vocabulary_hints: vec!["Kubernetes".into()],
+            ..Settings::default()
+        };
+        let transcriber = Arc::new(
+            EnsembleTranscriber::start(
+                SuperModeEngines {
+                    primary,
+                    secondary: Arc::new(AbortableEngine {
+                        aborted: Arc::clone(&aborted),
+                    }),
+                    secondary_model: "small".into(),
+                },
+                &settings,
+                tally,
+                None,
+            )
+            .unwrap(),
+        );
+        let waiting = Arc::clone(&transcriber);
+        let started = Instant::now();
+        // Still speaking, so the chunk would wait seconds for Whisper.
+        let chunk = thread::spawn(move || waiting.transcribe_pcm(&speech(), 16_000, "en", None));
+        thread::sleep(Duration::from_millis(100));
+        transcriber.on_cancel();
+        assert_eq!(chunk.join().unwrap().unwrap_err(), CANCELLED);
+        assert!(started.elapsed() < Duration::from_millis(600), "{:?}", started.elapsed());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !aborted.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(aborted.load(Ordering::SeqCst), "the Whisper decode was not aborted");
+        // A cancelled session starts no more chunks.
+        assert_eq!(
+            transcriber
+                .transcribe_pcm(&speech(), 16_000, "en", None)
+                .unwrap_err(),
+            CANCELLED
         );
     }
 

@@ -530,7 +530,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
    ownership made visible, not hidden in a tooltip. */
 .vt-source { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--text-secondary); font-size: var(--fs-meta); flex-wrap: wrap; }
 .vt-source .k { color: var(--text-muted); }
-.vt-source .sep { color: var(--border-strong); }
+.vt-source .sep { color: var(--text-muted); }
 
 /* Metrics strip: flat cells split by a single hairline, no cards — the same
    idiom as Home's .tiles. Recording and transcription latency stay separate. */

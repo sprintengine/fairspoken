@@ -39,10 +39,7 @@ pub struct NotesService {
 impl Default for NotesService {
     fn default() -> Self {
         let path = default_notes_path();
-        let notes = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Vec<Note>>(&raw).ok())
-            .unwrap_or_default();
+        let notes = crate::app_dirs::read_json_or_back_up::<Vec<Note>>(&path).unwrap_or_default();
         Self { notes, path }
     }
 }

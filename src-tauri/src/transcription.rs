@@ -82,6 +82,8 @@ const SHED_UNLOAD_AFTER: std::time::Duration = std::time::Duration::from_secs(10
 const NO_STREAMED_AUDIO: &str = "No audio frames were streamed to the transcriber";
 /// What an engine answers for a chunk with nothing to transcribe.
 pub(crate) const NO_SPEECH: &str = "No speech was transcribed";
+/// What a cancelled session (or a chunk of one) answers.
+pub(crate) const CANCELLED: &str = "Transcription was cancelled";
 
 /// A loaded speech-to-text engine that can transcribe a single block of PCM.
 /// Both Parakeet and (optionally) Whisper implement this so the chunked
@@ -119,6 +121,8 @@ pub trait ChunkTranscriber: Send + Sync {
     /// The user has released the key: the chunks still to come are on the
     /// critical path to the text appearing.
     fn on_release(&self) {}
+    /// The session was cancelled: stop waiting and abort work in flight.
+    fn on_cancel(&self) {}
 }
 
 #[derive(Default)]
@@ -178,6 +182,8 @@ enum SessionControl {
 struct ActiveEngine {
     active_model: Option<SttModel>,
     active_use_gpu: Option<bool>,
+    /// The model files' modification time when this engine was created.
+    files_mtime: Option<std::time::SystemTime>,
     transcriber: Option<Arc<dyn ChunkTranscriber>>,
 }
 
@@ -244,6 +250,33 @@ impl TranscriptionService {
             .ready()
     }
 
+    /// Starts loading the speech model, and super mode's Whisper engine when
+    /// the next dictation would run it, so the first dictation after launch
+    /// or a model change does not wait for the weights. Returns at once: the
+    /// loads run on their own threads, and a session starting meanwhile
+    /// reuses the same engines instead of loading them again.
+    pub fn warm_up(&mut self, settings: &Settings, models: &ModelService) {
+        use crate::super_mode::LocalDecision;
+        if self.session.is_some()
+            || settings.transcription_location != crate::settings::TranscriptionLocation::Local
+            || self
+                .active
+                .ensure(settings.model, models, settings.use_gpu)
+                .is_err()
+        {
+            return;
+        }
+        if let LocalDecision::Run(model) = crate::super_mode::local_decision(settings, models) {
+            if self
+                .secondary
+                .known_failure(model, settings.use_gpu, models)
+                .is_none()
+            {
+                let _ = self.secondary.ensure(model, models, settings.use_gpu);
+            }
+        }
+    }
+
     pub fn finish_session(
         &mut self,
         recording: &Recording,
@@ -285,6 +318,11 @@ impl TranscriptionService {
             drop(ensemble);
             self.close_super_tally();
             return result;
+        }
+        // The fallbacks above (dropped frames, nothing streamed) transcribe
+        // with the primary alone, whatever super mode had planned.
+        if let Some(outcome) = self.super_mode.as_mut() {
+            outcome.skipped_by_fallback();
         }
         self.active.transcribe_recording(recording, settings)
     }
@@ -365,6 +403,16 @@ impl TranscriptionService {
             LocalDecision::Run(model) => {
                 self.secondary_shed_since = None;
                 let id = model.model_id().to_string();
+                // Kept loaded-and-failed until the settings or the files
+                // change, so a broken model is not reloaded every dictation.
+                if let Some(err) = self.secondary.known_failure(model, settings.use_gpu, models) {
+                    self.super_mode = Some(SuperModeOutcome::new(
+                        SuperModeStatus::Unavailable,
+                        Some(id),
+                        Some(&err),
+                    ));
+                    return None;
+                }
                 if let Err(err) = self.secondary.ensure(model, models, settings.use_gpu) {
                     self.drop_secondary();
                     self.super_mode = Some(SuperModeOutcome::new(
@@ -459,7 +507,28 @@ impl ActiveEngine {
         self.transcriber = Some(transcriber);
         self.active_model = Some(model);
         self.active_use_gpu = Some(use_gpu);
+        self.files_mtime = models.installed_mtime(model);
         Ok(())
+    }
+
+    /// Why this engine failed to load, when it is the engine for `model`
+    /// and `use_gpu` and its files have not changed since: loading it again
+    /// would only fail again.
+    fn known_failure(
+        &self,
+        model: SttModel,
+        use_gpu: bool,
+        models: &ModelService,
+    ) -> Option<String> {
+        let transcriber = self.transcriber.as_ref()?;
+        if self.active_model != Some(model)
+            || self.active_use_gpu != Some(use_gpu)
+            || !transcriber.load_failed()
+            || self.files_mtime != models.installed_mtime(model)
+        {
+            return None;
+        }
+        transcriber.ready().err()
     }
 
     fn start_chunked_session(
@@ -866,6 +935,8 @@ fn run_chunked_session(
 ) -> Result<String, String> {
     let chunk_seconds = usize::from(chunk_seconds.clamp(5, 60));
     let release_hook = Arc::clone(&transcriber);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
     let (job_tx, job_rx) = mpsc::channel::<WhisperChunkJob>();
     let (chunk_result_tx, chunk_result_rx) = mpsc::channel::<Result<ChunkResult, String>>();
     let worker = thread::Builder::new()
@@ -876,6 +947,11 @@ fn run_chunked_session(
             // the chunks after them (Whisper only; Parakeet has no prompt).
             let mut earlier_text = String::new();
             for job in job_rx {
+                // Chunks still queued when the session is cancelled are
+                // not transcribed.
+                if worker_cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
                 let started = std::time::Instant::now();
                 let prompt = initial_prompt.as_deref().map(|base| {
                     crate::vocabulary_packs::extend_whisper_prompt(base, &earlier_text)
@@ -934,13 +1010,16 @@ fn run_chunked_session(
     let mut chunks = Vec::new();
     let mut cut_state = ChunkCutState::default();
 
+    let cancel = || {
+        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+        release_hook.on_cancel();
+        // Returning drops `job_tx`, which ends the chunk worker.
+        Err(CANCELLED.to_string())
+    };
     loop {
         match control_rx.try_recv() {
             Ok(SessionControl::Finish) => break,
-            Ok(SessionControl::Cancel) => {
-                drop(job_tx);
-                return Err("Transcription was cancelled".to_string());
-            }
+            Ok(SessionControl::Cancel) => return cancel(),
             Err(mpsc::TryRecvError::Disconnected) => break,
             Err(mpsc::TryRecvError::Empty) => {}
         }
@@ -966,7 +1045,14 @@ fn run_chunked_session(
                 )?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // `SessionHandle::cancel` sends Cancel, then hangs up the
+                // audio: the hang-up must not turn a cancel into a finish.
+                if matches!(control_rx.try_recv(), Ok(SessionControl::Cancel)) {
+                    return cancel();
+                }
+                break;
+            }
         }
         collect_available_chunk_results(&chunk_result_rx, &mut chunks, &preview_tx)?;
     }
@@ -2570,5 +2656,122 @@ mod tests {
         assert!(engines.is_none());
         assert!(service.secondary.transcriber.is_none());
         assert!(service.secondary.active_model.is_none());
+    }
+
+    /// An engine whose weights would not load.
+    struct BrokenEngine;
+
+    impl ChunkTranscriber for BrokenEngine {
+        fn ready(&self) -> Result<(), String> {
+            Err("Failed to load Whisper model: bad file".into())
+        }
+        fn load_failed(&self) -> bool {
+            true
+        }
+        fn transcribe_pcm(&self, _: &[i16], _: u32, _: &str, _: Option<&str>) -> Result<String, String> {
+            self.ready().map(|_| String::new())
+        }
+    }
+
+    #[test]
+    fn a_failed_load_is_remembered_until_the_model_or_its_files_change() {
+        use crate::models::SttModel;
+        let dir = tempfile::tempdir().unwrap();
+        let models = crate::models::ModelService::at(dir.path().to_path_buf());
+        let mut engine = super::ActiveEngine {
+            active_model: Some(SttModel::Parakeet),
+            active_use_gpu: Some(true),
+            files_mtime: models.installed_mtime(SttModel::Parakeet),
+            transcriber: Some(Arc::new(BrokenEngine)),
+        };
+        assert_eq!(
+            engine.known_failure(SttModel::Parakeet, true, &models).as_deref(),
+            Some("Failed to load Whisper model: bad file")
+        );
+        // Another model or GPU setting is worth a try.
+        assert!(engine.known_failure(SttModel::ParakeetV2, true, &models).is_none());
+        assert!(engine.known_failure(SttModel::Parakeet, false, &models).is_none());
+        // So are files replaced on disk.
+        engine.files_mtime = Some(std::time::SystemTime::UNIX_EPOCH);
+        assert!(engine.known_failure(SttModel::Parakeet, true, &models).is_none());
+    }
+
+    #[test]
+    fn warm_up_loads_the_local_engine_only() {
+        use crate::models::SttModel;
+        use crate::settings::{Settings, TranscriptionLocation};
+        let dir = tempfile::tempdir().unwrap();
+        let models = crate::models::ModelService::at(dir.path().to_path_buf());
+        // Placeholder files: present, though the background load will fail.
+        let model_dir = models.path_for(SttModel::Parakeet);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        for file in ["encoder-model.onnx", "encoder-model.onnx.data", "decoder_joint-model.onnx", "vocab.txt"] {
+            std::fs::write(model_dir.join(file), b"").unwrap();
+        }
+        assert!(models.files_present(SttModel::Parakeet));
+
+        let mut remote = super::TranscriptionService::default();
+        remote.warm_up(
+            &Settings {
+                transcription_location: TranscriptionLocation::RemoteHost,
+                ..Settings::default()
+            },
+            &models,
+        );
+        assert!(remote.active.transcriber.is_none());
+
+        let mut local = super::TranscriptionService::default();
+        local.warm_up(&Settings::default(), &models);
+        assert_eq!(local.active.active_model, Some(SttModel::Parakeet));
+        assert!(local.active.transcriber.is_some());
+    }
+
+    #[test]
+    fn cancelling_a_session_tells_the_engine_and_drops_queued_chunks() {
+        struct BlockingEngine {
+            started: Mutex<Option<mpsc::Sender<()>>>,
+            cancelled: Arc<std::sync::atomic::AtomicBool>,
+            calls: Arc<AtomicUsize>,
+        }
+        impl ChunkTranscriber for BlockingEngine {
+            fn transcribe_pcm(&self, _: &[i16], _: u32, _: &str, _: Option<&str>) -> Result<String, String> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(started) = self.started.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !self.cancelled.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Ok("words".into())
+            }
+            fn on_cancel(&self) {
+                self.cancelled.store(true, Ordering::SeqCst);
+            }
+        }
+        let (started_tx, started_rx) = mpsc::channel();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handle = SessionHandle::start(
+            Arc::new(BlockingEngine {
+                started: Mutex::new(Some(started_tx)),
+                cancelled: Arc::clone(&cancelled),
+                calls: Arc::clone(&calls),
+            }),
+            "en".into(),
+            None,
+            5,
+            None,
+        )
+        .unwrap();
+        // Three forced 5 s chunks at 1 kHz: one transcribing, one queued.
+        handle.audio_tx.send(speech_frame(1_000, 15_000)).unwrap();
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        handle.cancel();
+        assert!(cancelled.load(Ordering::SeqCst));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

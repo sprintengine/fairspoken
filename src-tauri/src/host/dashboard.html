@@ -1712,14 +1712,19 @@
       $("hostAddr").title = addr;
       $("hostAddr").dataset.url = addr;
     }
-    $("pairingState").textContent = on ? "On" : "Off";
+    // A password from FAIRSPOKEN_HOST_PAIRING_PASSWORD only changes where the
+    // server is started (POST /v1/config answers 409), so it gets no controls.
+    const fromEnv = Boolean(S.stats && S.stats.pairingPasswordSource === "env");
+    if (fromEnv && P.editing) { closePairing(); return; }
+    $("pairingState").textContent = on ? (fromEnv ? "On · set on the server" : "On") : "Off";
+    $("pairingState").title = fromEnv ? "Set by FAIRSPOKEN_HOST_PAIRING_PASSWORD where the server is started" : "";
     // Password controls need an authorised session; a locked page only shows the address.
     const authed = Boolean(S.stats) || DEMO;
-    $("editPairing").hidden = !authed;
+    $("editPairing").hidden = !authed || fromEnv;
     $("editPairing").disabled = P.busy;
     $("editPairing").textContent = P.editing ? "Close" : on ? "Change" : "Set";
     $("editPairing").classList.toggle("primary", !on && !P.editing);
-    $("clearPairing").hidden = !authed || !on || P.editing;
+    $("clearPairing").hidden = !authed || !on || P.editing || fromEnv;
     $("clearPairing").disabled = P.busy;
   };
   const copyText = async (text) => {
@@ -1791,6 +1796,7 @@
         const res = await fetch("/v1/config", { method: "POST", headers: authHeaders(true), body: JSON.stringify({ pairingPassword: password }) });
         if (res.status === 401) { setConn("unauthorized", "Locked"); throw new Error("Unauthorized. Nothing was changed."); }
         const body = await res.json().catch(() => null);
+        if (res.status === 409 && S.stats) S.stats.pairingPasswordSource = "env";
         if (!res.ok) throw new Error((body && body.error) || `Server rejected the change (${res.status}).`);
         return body;
       })();

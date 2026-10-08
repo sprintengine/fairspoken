@@ -122,9 +122,36 @@ struct HTTPCodecTests {
 
     @Test func jsonMatchesSerdeFormatting() {
         let v = HostJSON.object([("a", .double(1)), ("b", .double(4.1)), ("c", .null), ("d", .string("q\"\n\u{1}é")),
-                                  ("e", .array([.int(3), .bool(false)]))])
+                                 ("e", .array([.int(3), .bool(false)]))])
         #expect(v.serialized == #"{"a":1.0,"b":4.1,"c":null,"d":"q\"\n\u0001é","e":[3,false]}"#)
         #expect(HostJSON.double(.nan).serialized == "null")
+    }
+
+    @Test func aConnectionStopsReceivingPastItsBufferCap() async throws {
+        let pipe = PipeTransport()
+        let connection = HTTPConnection(transport: pipe)
+        pipe.write([UInt8](repeating: 0x41, count: HTTPConnection.maxBuffered + 1))
+        #expect(try await connection.fill())
+        pipe.write("more")
+        await #expect(throws: HTTPTransportError.overflow) { try await connection.fill() }
+    }
+
+    @Test func bytesAfterAStreamedResponseAreDropped() async throws {
+        let pipe = PipeTransport()
+        let buffered = Box(-1)
+        let task = Task {
+            await HTTPConnection(transport: pipe).serve { request in
+                try? await request.startStreaming(status: 200, headers: [])
+                await request.waitForPeerClose()
+                buffered.value = request.connection.buffer.readableCount
+            }
+        }
+        pipe.write("GET /v1/events HTTP/1.1\r\n\r\n")
+        #expect(await pipe.waitForOutput(containing: "200 OK"))
+        for _ in 0..<64 { pipe.write([UInt8](repeating: 0x41, count: 16 * 1024)) }
+        pipe.endInput()
+        await task.value
+        #expect(buffered.value == 0)
     }
 
     @Test func constantTimeCompare() {

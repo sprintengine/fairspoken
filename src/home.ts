@@ -59,7 +59,8 @@ function go(screen: Screen): void {
   speedTest?.stop();
   voiceTest?.stop();
   for (const item of navItems) {
-    if (item.dataset.screen === screen || (screen === "dictionary" && item.dataset.screen === "settings")) {
+    // Dictionary has no rail item of its own; it opens from Your profile.
+    if (item.dataset.screen === screen || (screen === "dictionary" && item.dataset.screen === "profile")) {
       item.setAttribute("aria-current", "page");
     } else {
       item.removeAttribute("aria-current");

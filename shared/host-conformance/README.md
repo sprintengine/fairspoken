@@ -30,6 +30,9 @@ Each check prints `PASS`, `FAIL` (with the reason) or `SKIP` (with what it
 needs). Exit status: `0` all passed or skipped, `1` at least one failure
 or the host config could not be restored (also `summary.restoreFailed`
 with `--json`), `2` the host could not be reached or rejected the token.
+A check that runs past 15 minutes fails, its connections are closed, and
+the run stops there (the rest are reported as `SKIP`, `summary.stoppedBy`
+names the check) so it cannot overlap later checks.
 
 The suite changes host configuration while it runs (`POST /v1/config`
 persists to the host's config file). It records the configuration at the

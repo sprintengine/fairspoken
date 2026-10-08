@@ -3,8 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { addEvent } from "./events";
+import { createPreviewOrder, type PreviewPosition } from "./transcriptPreviewOrder";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
 
-interface TranscriptPreviewEvent {
+interface TranscriptPreviewEvent extends PreviewPosition {
   text: string;
   finalPreview: boolean;
 }
@@ -46,15 +49,9 @@ let contextMenu: HTMLElement | null = null;
 // user is working on behind it.
 let shelfVisible = false;
 
-function required<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node as T;
-}
-
 // Failures land in the Activity feed; the shelf itself stays as it was.
 function reportError(error: unknown): void {
-  addEvent("warning", error instanceof Error ? error.message : String(error));
+  addEvent("warning", errorMessage(error));
 }
 
 async function loadTranscriptHistory(): Promise<void> {
@@ -396,12 +393,18 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("blur", closeContextMenu);
 
 // Recording previews update the live bubble only while the stack is already
-// open; they never summon it.
+// open; they never summon it. Stale previews (older session or revision, or raw
+// text after its polish) are dropped so the bubble never steps back.
+const previewOrder = createPreviewOrder();
+void listen<number>("transcript-session-started", (event) => {
+  previewOrder.startSession(event.payload);
+}).catch(reportError);
 void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
   if (event.payload.finalPreview) {
     resetLiveTranscript();
     return;
   }
+  if (!previewOrder.accept(event.payload)) return;
   if (shelfVisible) {
     showLiveTranscript(event.payload.text);
   }

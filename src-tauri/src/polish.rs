@@ -109,7 +109,7 @@ struct PolishResponse {
     duration_ms: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PolishOutcome {
     pub text: String,
     pub model: String,
@@ -169,23 +169,16 @@ fn maybe_polish_impl(
     if settings.cloud_auth_token.trim().is_empty() {
         return PolishDecision::Skipped("no Fairspoken Cloud token");
     }
-    if raw_transcript.trim().is_empty() {
-        return PolishDecision::Skipped("empty transcript");
-    }
-    if raw_transcript.chars().count() > POLISH_MAX_CHARS {
-        return PolishDecision::Skipped("transcript too long");
-    }
-    let category = target_app
-        .map(|app| categorize(&app.bundle_id))
-        .unwrap_or(AppCategory::Other);
-    if category == AppCategory::Terminal {
-        return PolishDecision::Skipped("terminal app frontmost");
-    }
-    let format = target_app.map(|app| app.format).unwrap_or_default();
-    let tone = tone_for_category(settings, tone_category(category, format));
-    if tone == "off" {
-        return PolishDecision::Skipped("polish is off for this app type");
-    }
+    let PolishGate { category, tone, .. } = match polish_gate(
+        raw_transcript,
+        settings,
+        target_app,
+        POLISH_MAX_CHARS,
+        "transcript too long",
+    ) {
+        Ok(gate) => gate,
+        Err(decision) => return decision,
+    };
     if cloud_url().is_none() {
         return PolishDecision::Skipped("Fairspoken Cloud is not available in this build");
     }
@@ -209,20 +202,12 @@ fn maybe_polish_impl(
     ) {
         Ok(response) => {
             let text = response.text.trim();
-            // Whatever the model, a dictionary term nobody said is invented.
-            if let Some(term) = crate::transcript_cleanup::ungrounded_vocabulary(
+            // The cloud is given the raw transcript, so that is what the
+            // guards compare against.
+            if let Err(reason) = polish_guards(
                 raw_transcript,
                 text,
                 &settings.vocabulary_hints,
-            ) {
-                return PolishDecision::Failed(format!(
-                    "polish inserted the dictionary term \"{term}\" that was not spoken"
-                ));
-            }
-            // Pack terms nobody said, and one medicine turned into another.
-            if let Err(reason) = crate::vocabulary_packs::check_polish(
-                raw_transcript,
-                text,
                 &settings.enabled_packs,
             ) {
                 return PolishDecision::Failed(format!("polish {reason}"));
@@ -241,6 +226,72 @@ fn maybe_polish_impl(
         }
         Err(err) => PolishDecision::Failed(err),
     }
+}
+
+/// What the shared pre-polish checks decided about a pass.
+pub struct PolishGate {
+    pub category: AppCategory,
+    pub format: Format,
+    pub tone: String,
+}
+
+/// The checks every provider makes before a pass, in order: polish on, a
+/// transcript to polish, no longer than `max_chars` (`too_long` is the skip
+/// reason; the limit is the provider's own), not a terminal, and a tone that
+/// is not "off". Provider-specific checks (a cloud token, a cloud endpoint)
+/// stay with the provider.
+pub fn polish_gate(
+    raw: &str,
+    settings: &Settings,
+    target: Option<&PolishTargetApp>,
+    max_chars: usize,
+    too_long: &'static str,
+) -> Result<PolishGate, PolishDecision> {
+    if !settings.polish_enabled {
+        return Err(PolishDecision::Disabled);
+    }
+    if raw.trim().is_empty() {
+        return Err(PolishDecision::Skipped("empty transcript"));
+    }
+    if raw.chars().count() > max_chars {
+        return Err(PolishDecision::Skipped(too_long));
+    }
+    let category = target
+        .map(|app| categorize(&app.bundle_id))
+        .unwrap_or(AppCategory::Other);
+    if category == AppCategory::Terminal {
+        return Err(PolishDecision::Skipped("terminal app frontmost"));
+    }
+    let format = target.map(|app| app.format).unwrap_or_default();
+    let tone = tone_for_category(settings, tone_category(category, format));
+    if tone == "off" {
+        return Err(PolishDecision::Skipped("polish is off for this app type"));
+    }
+    Ok(PolishGate {
+        category,
+        format,
+        tone,
+    })
+}
+
+/// The guards every provider applies to a polished `output`, checked against
+/// exactly the text the model was given (`input`: the raw transcript for the
+/// cloud, the tidied one locally — tidying never adds a word, so a term
+/// grounded in it was spoken). The reason reads after "polish".
+pub fn polish_guards(
+    input: &str,
+    output: &str,
+    vocabulary: &[String],
+    enabled_packs: &[String],
+) -> Result<(), String> {
+    // Whatever the model, a dictionary term nobody said is invented.
+    if let Some(term) = crate::transcript_cleanup::ungrounded_vocabulary(input, output, vocabulary) {
+        return Err(format!(
+            "inserted the dictionary term \"{term}\" that was not spoken"
+        ));
+    }
+    // Pack terms nobody said, and one medicine turned into another.
+    crate::vocabulary_packs::check_polish(input, output, enabled_packs)
 }
 
 fn polish_transcript(
@@ -432,6 +483,38 @@ mod tests {
             ),
             PolishDecision::Skipped("terminal app frontmost")
         ));
+    }
+
+    #[test]
+    fn the_shared_gate_takes_each_providers_length_limit() {
+        let long = "a ".repeat(2500);
+        assert!(matches!(
+            polish_gate(&long, &polish_settings(), None, POLISH_MAX_CHARS, "cloud limit"),
+            Err(PolishDecision::Skipped("cloud limit"))
+        ));
+        let gate = polish_gate(&long, &polish_settings(), None, 8000, "local limit")
+            .unwrap_or_else(|_| panic!("within the local limit"));
+        assert_eq!(gate.category, AppCategory::Other);
+        assert_eq!(gate.tone, "default");
+        assert!(matches!(
+            polish_gate("hi", &Settings::default(), None, 8000, "x"),
+            Err(PolishDecision::Disabled)
+        ));
+    }
+
+    #[test]
+    fn the_shared_guards_reject_invented_terms_and_swapped_medicines() {
+        let vocabulary = vec!["RocketDeck".to_string()];
+        let reason = polish_guards(
+            "we need to worry about the",
+            "We need to worry about the RocketDeck.",
+            &vocabulary,
+            &[],
+        )
+        .unwrap_err();
+        assert!(reason.starts_with("inserted the dictionary term \"RocketDeck\""));
+        assert!(polish_guards("swap atorvastatin", "Swap rosuvastatin.", &[], &[]).is_err());
+        assert!(polish_guards("ship rocket deck", "Ship RocketDeck.", &vocabulary, &[]).is_ok());
     }
 
     #[test]
