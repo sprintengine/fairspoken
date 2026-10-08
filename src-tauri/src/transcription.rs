@@ -73,6 +73,10 @@ const NO_SPEECH_PROBABILITY_THRESHOLD: f32 = 0.60;
 #[cfg(feature = "whisper")]
 const MIN_AVG_TOKEN_PROBABILITY: f32 = 0.12;
 
+/// How long super mode may stay shed (on battery) before its Whisper engine,
+/// 0.5–3 GB, is freed. Plugging back in soon after keeps it warm.
+const SHED_UNLOAD_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// Sentinel returned by the chunking worker when no audio was ever streamed, so
 /// the caller can fall back to a direct (whole-recording) transcription.
 const NO_STREAMED_AUDIO: &str = "No audio frames were streamed to the transcriber";
@@ -123,6 +127,9 @@ pub struct TranscriptionService {
     session: Option<SessionHandle>,
     /// Super mode's second engine when this app runs it locally.
     secondary: ActiveEngine,
+    /// Since when super mode has been shed (battery) with the second engine
+    /// still loaded; it is freed after `SHED_UNLOAD_AFTER`.
+    secondary_shed_since: Option<std::time::Instant>,
     /// Engines a host worker lent the next session (`arm_super_mode`).
     armed: Option<SuperModeEngines>,
     /// The super mode result of the session in progress, then of the last one.
@@ -292,7 +299,7 @@ impl TranscriptionService {
     pub fn unload(&mut self) {
         self.cancel_session();
         self.active = ActiveEngine::default();
-        self.secondary = ActiveEngine::default();
+        self.drop_secondary();
         self.armed = None;
     }
 
@@ -338,15 +345,28 @@ impl TranscriptionService {
         match crate::super_mode::local_decision(settings, models) {
             LocalDecision::Off => {
                 self.super_mode = None;
+                self.drop_secondary();
                 None
             }
             LocalDecision::Skip(outcome) => {
+                if outcome.status == SuperModeStatus::Shed {
+                    let since = *self
+                        .secondary_shed_since
+                        .get_or_insert_with(std::time::Instant::now);
+                    if since.elapsed() >= SHED_UNLOAD_AFTER {
+                        self.secondary = ActiveEngine::default();
+                    }
+                } else {
+                    self.drop_secondary();
+                }
                 self.super_mode = Some(outcome);
                 None
             }
             LocalDecision::Run(model) => {
+                self.secondary_shed_since = None;
                 let id = model.model_id().to_string();
                 if let Err(err) = self.secondary.ensure(model, models, settings.use_gpu) {
+                    self.drop_secondary();
                     self.super_mode = Some(SuperModeOutcome::new(
                         SuperModeStatus::Unavailable,
                         Some(id),
@@ -363,6 +383,12 @@ impl TranscriptionService {
                 })
             }
         }
+    }
+
+    /// Frees super mode's Whisper engine while super mode cannot run.
+    fn drop_secondary(&mut self) {
+        self.secondary = ActiveEngine::default();
+        self.secondary_shed_since = None;
     }
 
     fn start_ensemble(
@@ -872,7 +898,7 @@ fn run_chunked_session(
                         overlaps_previous: job.overlaps_previous,
                     })
                     .or_else(|err| {
-                        if err == "No speech was transcribed" {
+                        if err == NO_SPEECH {
                             Ok(ChunkResult {
                                 index: job.index,
                                 text: String::new(),
@@ -991,7 +1017,7 @@ fn run_chunked_session(
     chunks.sort_by_key(|chunk| chunk.index);
     let transcript = merge_chunk_results(&chunks);
     if transcript.is_empty() {
-        return Err("No speech was transcribed".to_string());
+        return Err(NO_SPEECH.to_string());
     }
     emit_preview(
         &preview_tx,
@@ -1315,7 +1341,7 @@ fn transcribe_whisper_pcm(
         return Err("No audio samples were captured".to_string());
     }
     if !contains_probable_speech(samples, sample_rate) {
-        return Err("No speech was transcribed".to_string());
+        return Err(NO_SPEECH.to_string());
     }
 
     let mut state = context
@@ -1337,7 +1363,7 @@ fn transcribe_whisper_pcm(
         .to_string();
 
     if transcript.is_empty() {
-        return Err("No speech was transcribed".to_string());
+        return Err(NO_SPEECH.to_string());
     }
 
     Ok(transcript)
@@ -2518,5 +2544,31 @@ mod tests {
         assert!(is_non_speech_annotation("[applause]"));
         assert!(is_non_speech_annotation("(laughter)"));
         assert!(!is_non_speech_annotation("thanks for watching"));
+    }
+
+    fn counting_engine() -> Arc<dyn ChunkTranscriber> {
+        Arc::new(CountingTranscriber {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen_rates: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    #[test]
+    fn super_mode_off_frees_the_second_engine() {
+        let mut service = super::TranscriptionService::default();
+        service.secondary.transcriber = Some(counting_engine());
+        service.secondary.active_model = Some(crate::models::SttModel::Parakeet);
+        let settings = crate::settings::Settings {
+            super_mode: crate::settings::SuperModeSetting::Off,
+            ..crate::settings::Settings::default()
+        };
+        let engines = service.super_mode_engines(
+            &settings,
+            &crate::models::ModelService::default(),
+            &counting_engine(),
+        );
+        assert!(engines.is_none());
+        assert!(service.secondary.transcriber.is_none());
+        assert!(service.secondary.active_model.is_none());
     }
 }

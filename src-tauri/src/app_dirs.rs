@@ -53,6 +53,38 @@ pub(crate) fn data_dir() -> Option<PathBuf> {
     })
 }
 
+/// Replaces `path` with `bytes` so a crash or full disk leaves either the old
+/// file or the new one, never a truncated mix: the bytes go to a uniquely
+/// named file in the same directory, are flushed, and are renamed over the
+/// target. The parent directory is created when missing. On unix the file is
+/// readable only by the user, since several stores hold tokens or dictations.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let write = || -> io::Result<()> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)
+    };
+    let result = write();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Each directory earlier builds wrote, paired with where that data lives now:
 /// the app's own stores and models, plus the webview storage (localStorage)
 /// Tauri keys by bundle identifier.
@@ -122,8 +154,26 @@ fn migrate(old: &Path, new: &Path) -> io::Result<MigrationOutcome> {
     if fs::rename(old, new).is_ok() {
         return Ok(MigrationOutcome::Moved);
     }
-    copy_dir_all(old, new)?;
+    copy_into_place(old, new)?;
     Ok(MigrationOutcome::Copied)
+}
+
+/// Copies `old` to a sibling staging directory and renames it into place, so
+/// `new` only ever appears complete. A copy that fails part way leaves `new`
+/// absent, and the next launch plans the migration again.
+fn copy_into_place(old: &Path, new: &Path) -> io::Result<()> {
+    let mut staging_name = new.file_name().unwrap_or_default().to_os_string();
+    staging_name.push(".migrating");
+    let staging = new.with_file_name(staging_name);
+    if staging.exists() {
+        // Left by an interrupted earlier attempt.
+        fs::remove_dir_all(&staging)?;
+    }
+    let result = copy_dir_all(old, &staging).and_then(|()| fs::rename(&staging, new));
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
 }
 
 fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {
@@ -282,6 +332,50 @@ mod tests {
             fs::read_to_string(copy.join("models/parakeet/model.onnx")).unwrap(),
             "weights"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copied_migration_appears_whole_or_not_at_all() {
+        let root = scratch();
+        let (old, new) = (root.join("old"), root.join("new"));
+        let staging = root.join("new.migrating");
+
+        // A failed copy (here: nothing to read) leaves neither the target nor
+        // the staging directory, so the next launch still plans a move.
+        assert!(copy_into_place(&old, &new).is_err());
+        assert!(!new.exists() && !staging.exists());
+
+        fs::create_dir_all(old.join("models")).unwrap();
+        fs::write(old.join("models").join("model.onnx"), "weights").unwrap();
+        // Debris from an interrupted attempt is not merged into the result.
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("stale.json"), "{}").unwrap();
+        copy_into_place(&old, &new).unwrap();
+        assert_eq!(fs::read_to_string(new.join("models/model.onnx")).unwrap(), "weights");
+        assert!(!new.join("stale.json").exists());
+        assert!(!staging.exists());
+        assert!(old.join("models/model.onnx").exists(), "a copy keeps the old data");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_replaces_the_file_privately_and_leaves_no_temporaries() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch();
+        let path = root.join("nested").join("store.json");
+        write_atomic(&path, b"first").unwrap();
+        write_atomic(&path, b"second").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+
+        // A target that cannot be replaced fails without leaving debris.
+        let blocked = root.join("blocked");
+        fs::create_dir_all(blocked.join("inner")).unwrap();
+        assert!(write_atomic(&blocked, b"x").is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         fs::remove_dir_all(root).unwrap();
     }
 }

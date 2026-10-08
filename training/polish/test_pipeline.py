@@ -46,18 +46,58 @@ class Generator(unittest.TestCase):
                 self.assertEqual((a / f"{split}.jsonl").read_bytes(), (b / f"{split}.jsonl").read_bytes())
             test = [json.loads(l) for l in (a / "test.jsonl").read_text().splitlines()]
             train = [json.loads(l) for l in (a / "train.jsonl").read_text().splitlines()]
+            valid = [json.loads(l) for l in (a / "valid.jsonl").read_text().splitlines()]
             test_raws = {r["meta"]["raw"] for r in test}
-            train_raws = {r["messages"][1]["content"].split("<transcript>")[1].split("</transcript>")[0] for r in train}
+            train_raws = {generate_data.row_raw(r) for r in train}
+            valid_raws = {generate_data.row_raw(r) for r in valid}
             self.assertFalse(test_raws & train_raws)
+            self.assertFalse(test_raws & valid_raws)
+            self.assertFalse(train_raws & valid_raws)
+            # Nothing the bench scores is trained on (raw or target).
+            bench = generate_data.bench_raws()
+            for r in train + valid:
+                self.assertNotIn(generate_data.norm(generate_data.row_raw(r)), bench)
+                self.assertNotIn(generate_data.norm(r["messages"][-1]["content"]), bench)
             for r in test:
                 m = r["meta"]
                 # Unspoken terms never reach the target.
                 for t in m["unspoken_terms"]:
-                    self.assertNotIn(t.lower(), m["expected"].lower())
+                    self.assertFalse(generate_data.mentions(t, m["expected"]), (t, m["expected"]))
                 self.assertEqual(r["messages"][1]["content"],
                                  contract.user_message(m["raw"], m["spelling"], m["tag_format"], m["tag_tone"]))
             share = sum(r["meta"]["raw"] == r["meta"]["expected"] for r in test) / len(test)
             self.assertGreater(share, 0.25)
+
+    def test_bench_overlap_dropped(self):
+        bench = generate_data.bench_raws()
+        self.assertIn(generate_data.norm("the build is green and I merged the pull request this morning"), bench)
+        rows = [generate_data.record(generate_data.Example(raw, target, "plain", "neutral", [], [], [], [], "t"))
+                for raw, target in [
+                    ("the build is green and i merged the pull request this morning",
+                     "The build is green and I merged the pull request this morning."),  # bench raw
+                    ("open settings dot json, please", "Open settings dot json and set the polish model to the two B variant."),  # bench raw as target
+                    ("we should ship it on friday", "We should ship it on Friday."),
+                ]]
+        kept = generate_data.drop_bench_overlap(rows, bench)
+        self.assertEqual([r["meta"]["raw"] for r in kept], ["we should ship it on friday"])
+
+    def test_whole_word_terms(self):
+        self.assertFalse(generate_data.mentions("AF", "Call me after lunch."))
+        self.assertTrue(generate_data.mentions("AF", "History of AF."))
+        self.assertTrue(generate_data.mentions("Next.js", "We use next.js here"))
+        self.assertTrue(generate_data.mentions("U&Es", "Repeat the U&Es."))
+
+    def test_prompt_example_templates_stay_in_train(self):
+        groups = [generate_data.GENERAL, generate_data.EXCLAIM, generate_data.QUESTIONS, generate_data.COMMANDS,
+                  generate_data.DEV, generate_data.CLINICAL, generate_data.NAMES_PLACES]
+        shown = [t for g in groups for t in g if generate_data.in_prompt_examples(t)]
+        self.assertIn("I think we should go with the second option.", shown)
+        self.assertIn("Tell me a joke about {animal}.", shown)
+        self.assertIn("The invoice is for {money} and it is due in {month}.", shown)
+        for g in groups:
+            train, test = generate_data.split_templates(g)
+            for t in shown:
+                self.assertNotIn(t, test)
 
     def test_pack_profile_house_style(self):
         with tempfile.TemporaryDirectory() as d:

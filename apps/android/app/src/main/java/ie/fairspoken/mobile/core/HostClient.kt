@@ -100,9 +100,11 @@ class HostClient {
                         401 -> PairOutcome.Failed("Wrong password")
                         404 -> PairOutcome.Failed("Pairing is turned off on this host")
                         429 -> PairOutcome.Failed(
-                            "Too many attempts, try again in ${json?.optInt("retryAfterSeconds") ?: 60} s"
+                            "Too many attempts, try again in ${json?.optInt("retryAfterSeconds")?.takeIf { it > 0 } ?: 60} s"
                         )
-                        else -> PairOutcome.Failed(json?.optString("error") ?: "Host answered ${response.code}")
+                        else -> PairOutcome.Failed(
+                            json?.optString("error")?.takeIf { it.isNotBlank() } ?: "Host answered ${response.code}"
+                        )
                     }
                 }
             } catch (e: IOException) {
@@ -160,6 +162,9 @@ class HostClient {
             val raw = input.trim().trimEnd('/')
             if (raw.isEmpty()) return emptyList()
             if (raw.startsWith("http://") || raw.startsWith("https://")) return listOf(raw)
+            // IPv6 literals need brackets in a URL: `[fd7a::1]:port`, or bare `fd7a::1`.
+            if (raw.startsWith("[")) return listOf(if (raw.contains("]:")) "http://$raw" else "http://$raw:$DEFAULT_PORT")
+            if (raw.count { it == ':' } > 1) return listOf("http://[$raw]:$DEFAULT_PORT")
             if (raw.contains(':')) return listOf("http://$raw")
             if (IPV4.matches(raw)) return listOf("http://$raw:$DEFAULT_PORT")
             // `tailscale serve` certificates only cover the full *.ts.net name.

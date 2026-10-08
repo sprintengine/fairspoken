@@ -3,7 +3,7 @@ import Synchronization
 
 /// A byte stream the HTTP layer runs over: a Network.framework connection in the server,
 /// an in-memory pipe in tests.
-public protocol HTTPTransport: AnyObject, Sendable {
+public protocol ByteStreamTransport: AnyObject, Sendable {
     /// Next bytes from the peer; nil at end of stream.
     func receive() async throws -> [UInt8]?
     func send(_ bytes: [UInt8]) async throws
@@ -111,7 +111,7 @@ public final class HTTPServerRequest: @unchecked Sendable {
         try? await connection.transport.send(HTTPStatus.head(status, headers: headers) + body)
     }
 
-    public func respondJSON(_ status: Int, _ value: JSONValue) async {
+    public func respondJSON(_ status: Int, _ value: HostJSON) async {
         await respond(status: status, contentType: "application/json", body: value.bytes)
     }
 
@@ -148,10 +148,10 @@ public final class HTTPServerRequest: @unchecked Sendable {
 
 /// Serves HTTP/1.x requests on one transport, one at a time (keep-alive supported).
 final class HTTPConnection: @unchecked Sendable {
-    let transport: any HTTPTransport
+    let transport: any ByteStreamTransport
     var buffer = ByteBuffer()
 
-    init(transport: any HTTPTransport) {
+    init(transport: any ByteStreamTransport) {
         self.transport = transport
     }
 
@@ -171,7 +171,7 @@ final class HTTPConnection: @unchecked Sendable {
                 head = parsed
             } catch let error as HTTPParseError {
                 let status = error == .headTooLarge || error == .lineTooLong ? 431 : (error == .unsupportedVersion ? 505 : 400)
-                let body = JSONValue.error("Malformed HTTP request").bytes
+                let body = HostJSON.error("Malformed HTTP request").bytes
                 try? await transport.send(HTTPStatus.head(status, headers: [
                     ("Content-Type", "application/json"), ("Content-Length", String(body.count)), ("Connection", "close"),
                 ]) + body)
@@ -182,7 +182,7 @@ final class HTTPConnection: @unchecked Sendable {
             let framing: HTTPRequestHead.BodyFraming
             do { framing = try head.bodyFraming() } catch {
                 let status = error == .unsupportedTransferEncoding ? 501 : 400
-                let body = JSONValue.error("Unsupported request body framing").bytes
+                let body = HostJSON.error("Unsupported request body framing").bytes
                 try? await transport.send(HTTPStatus.head(status, headers: [
                     ("Content-Type", "application/json"), ("Content-Length", String(body.count)), ("Connection", "close"),
                 ]) + body)
@@ -205,8 +205,9 @@ final class HTTPConnection: @unchecked Sendable {
     }
 
     private func readHead() async throws -> HTTPRequestHead? {
+        var skipped = 0
         while true {
-            if let head = try HTTPHeadParser.parse(&buffer) { return head }
+            if let head = try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped) { return head }
             guard try await fill() else { return nil }
         }
     }

@@ -60,23 +60,8 @@ impl NotesService {
             return Err("Note was not found".into());
         }
         let path = self.metadata_path(id)?;
-        fs::create_dir_all(path.parent().ok_or("Invalid metadata path")?)
-            .map_err(|e| e.to_string())?;
-        let partial = path.with_extension("partial");
         let payload = serde_json::to_vec_pretty(metadata).map_err(|e| e.to_string())?;
-        use std::io::Write;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&partial).map_err(|e| e.to_string())?;
-        file.write_all(&payload).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
-        fs::rename(partial, path).map_err(|e| e.to_string())
+        crate::app_dirs::write_atomic(&path, &payload).map_err(|e| e.to_string())
     }
     pub fn metadata(&self, id: &str) -> Result<Option<crate::note_debug::NoteMetadata>, String> {
         if !crate::note_debug::AVAILABLE {
@@ -217,13 +202,11 @@ impl NotesService {
     }
 
     fn save(&self) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create notes directory: {err}"))?;
-        }
-        let payload = serde_json::to_string_pretty(&self.notes)
+        // Compact: the library is rewritten on every dictation.
+        let payload = serde_json::to_vec(&self.notes)
             .map_err(|err| format!("Failed to serialize notes: {err}"))?;
-        fs::write(&self.path, payload).map_err(|err| format!("Failed to write notes: {err}"))
+        crate::app_dirs::write_atomic(&self.path, &payload)
+            .map_err(|err| format!("Failed to write notes: {err}"))
     }
 }
 

@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.provider.Settings
 import ie.fairspoken.mobile.R
 import ie.fairspoken.mobile.fairspoken
 import ie.fairspoken.mobile.insert.InsertService
@@ -36,7 +37,12 @@ class DockService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        val window = DockWindow(this, fairspoken)
+        // "Show over other apps" may have been turned off since the dock was switched on.
+        if (!Settings.canDrawOverlays(this)) {
+            stopSelf()
+            return
+        }
+        val window = DockWindow(this, fairspoken, onOverlayLost = ::stopSelf)
         dock = window
         _running.value = true
         scope.launch {

@@ -122,6 +122,9 @@ export function createVoiceAccuracyTest(opts: {
   let ticker: number | null = null;
   let backend: BackendInfo | null = null;
   let unlistenPreview: UnlistenFn | null = null;
+  // Bumped by stop(); a listen() that resolves for an older generation is
+  // released at once instead of leaking a listener.
+  let previewGeneration = 0;
 
   let previewText = "";
   let previewTextEl: HTMLElement | null = null;
@@ -150,12 +153,15 @@ export function createVoiceAccuracyTest(opts: {
   // finalizing — otherwise a dictation or speed-test preview could leak in.
   async function attachPreview(): Promise<void> {
     if (unlistenPreview) return;
+    const generation = ++previewGeneration;
     try {
-      unlistenPreview = await listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
+      const unlisten = await listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
         if (state !== "recording" && state !== "transcribing") return;
         previewText = event.payload.text;
         updatePreviewView();
       });
+      if (generation !== previewGeneration) unlisten();
+      else unlistenPreview = unlisten;
     } catch {
       /* live preview is best-effort; the test still completes without it */
     }
@@ -470,6 +476,7 @@ export function createVoiceAccuracyTest(opts: {
   function stop(): void {
     clearTicker();
     document.removeEventListener("keydown", onKeydown);
+    previewGeneration += 1;
     if (unlistenPreview) {
       unlistenPreview();
       unlistenPreview = null;

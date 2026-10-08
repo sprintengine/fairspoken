@@ -158,16 +158,30 @@ impl Default for UsageStatsService {
 }
 
 impl UsageStatsService {
-    /// Append one completed dictation. `at_epoch_secs` is the wall-clock time
-    /// the dictation finished; passing it in keeps the method testable.
-    pub fn record(
+    /// Append one finished dictation with a single write: its words and audio
+    /// (skipped when it produced no words) and, when it was kept in history,
+    /// its zero-edit metric record (`history_id`, polished, transcript chars).
+    /// `at_epoch_secs` is the wall-clock time the dictation finished; passing
+    /// it in keeps the method testable.
+    pub fn record_dictation(
         &mut self,
         words: u64,
         recording_seconds: f32,
+        completed: Option<(&str, bool, u32)>,
         at_epoch_secs: u64,
     ) -> Result<(), String> {
-        if words == 0 {
+        let counted = self.add_words(words, recording_seconds, at_epoch_secs);
+        if let Some((history_id, polished, text_chars)) = completed {
+            self.add_completed(history_id, polished, text_chars, at_epoch_secs);
+        } else if !counted {
             return Ok(());
+        }
+        self.save()
+    }
+
+    fn add_words(&mut self, words: u64, recording_seconds: f32, at_epoch_secs: u64) -> bool {
+        if words == 0 {
+            return false;
         }
 
         let recording_seconds = f64::from(recording_seconds.max(0.0));
@@ -183,23 +197,11 @@ impl UsageStatsService {
         bucket.words += words;
         bucket.recording_seconds += recording_seconds;
         bucket.dictations += 1;
-
-        self.save()
+        true
     }
 
-    pub fn summary(&self, now_epoch_secs: u64) -> UsageStatsSummary {
-        summarize(&self.data, now_epoch_secs)
-    }
-
-    /// Zero-edit metric: register a completed dictation. Best-effort like the
-    /// rest of the stats — callers ignore the Result.
-    pub fn record_dictation_completed(
-        &mut self,
-        history_id: &str,
-        polished: bool,
-        text_chars: u32,
-        at_epoch_secs: u64,
-    ) -> Result<(), String> {
+    /// Zero-edit metric: register a completed dictation.
+    fn add_completed(&mut self, history_id: &str, polished: bool, text_chars: u32, at_epoch_secs: u64) {
         self.data.recent_dictations.push(DictationRecord {
             history_id: history_id.to_string(),
             completed_at: at_epoch_secs,
@@ -218,7 +220,26 @@ impl UsageStatsService {
         if polished {
             bucket.polished_completed += 1;
         }
-        self.save()
+    }
+
+    #[cfg(test)]
+    fn record(&mut self, words: u64, recording_seconds: f32, at_epoch_secs: u64) -> Result<(), String> {
+        self.record_dictation(words, recording_seconds, None, at_epoch_secs)
+    }
+
+    #[cfg(test)]
+    fn record_dictation_completed(
+        &mut self,
+        history_id: &str,
+        polished: bool,
+        text_chars: u32,
+        at_epoch_secs: u64,
+    ) -> Result<(), String> {
+        self.record_dictation(0, 0.0, Some((history_id, polished, text_chars)), at_epoch_secs)
+    }
+
+    pub fn summary(&self, now_epoch_secs: u64) -> UsageStatsSummary {
+        summarize(&self.data, now_epoch_secs)
     }
 
     /// Zero-edit metric: an explicit edit signal (pill Undo / Copy original /
@@ -311,24 +332,13 @@ impl UsageStatsService {
     }
 
     fn save(&self) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create usage stats directory: {err}"))?;
-        }
-        let payload = serde_json::to_string_pretty(&self.data)
+        // Compact, and replaced only as a complete, flushed snapshot so an
+        // interruption cannot leave the lifetime counters as truncated JSON.
+        // All writes go through the service mutex.
+        let payload = serde_json::to_vec(&self.data)
             .map_err(|err| format!("Failed to serialize usage stats: {err}"))?;
-        // Replace only a complete, flushed snapshot so interruption cannot leave
-        // the lifetime counters as truncated JSON. All writes use the service mutex.
-        let temporary = self.path.with_extension("json.tmp");
-        use std::io::Write;
-        let mut file = fs::File::create(&temporary)
-            .map_err(|err| format!("Failed to create usage stats snapshot: {err}"))?;
-        file.write_all(payload.as_bytes())
-            .and_then(|_| file.sync_all())
-            .map_err(|err| format!("Failed to write usage stats snapshot: {err}"))?;
-        drop(file);
-        fs::rename(&temporary, &self.path)
-            .map_err(|err| format!("Failed to replace usage stats: {err}"))
+        crate::app_dirs::write_atomic(&self.path, &payload)
+            .map_err(|err| format!("Failed to write usage stats: {err}"))
     }
 }
 
@@ -964,6 +974,29 @@ mod tests {
         assert_eq!(summary.months[0].words, 42);
         assert_eq!(summary.total_words, 42);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn one_dictation_records_totals_and_its_metric_entry_in_one_write() {
+        let path =
+            std::env::temp_dir().join(format!("usage-stats-merged-{}.json", uuid::Uuid::new_v4()));
+        let mut service = UsageStatsService {
+            data: UsageStatsData::default(),
+            path: path.clone(),
+        };
+        service
+            .record_dictation(12, 4.0, Some(("t-1", true, 60)), 100 * SECONDS_PER_DAY)
+            .unwrap();
+        let reloaded: UsageStatsData = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(reloaded.total_words, 12);
+        assert_eq!(reloaded.recent_dictations[0].history_id, "t-1");
+        let day = &reloaded.days[&100];
+        assert_eq!((day.dictations, day.completed, day.polished_completed), (1, 1, 1));
+
+        // No words and no history entry: nothing changed, nothing written.
+        fs::remove_file(&path).unwrap();
+        service.record_dictation(0, 1.0, None, 100 * SECONDS_PER_DAY).unwrap();
+        assert!(!path.exists());
     }
 
     #[test]

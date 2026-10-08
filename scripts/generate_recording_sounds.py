@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import struct
 import wave
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,10 @@ def synth_tick(body_freq: float, seed: str) -> np.ndarray:
 
     # Contact: a few milliseconds of heavily low-passed noise. This is the
     # "click" itself -- dull and woody, not sharp.
-    rng = np.random.default_rng(hash((round(body_freq), seed)) & 0xFFFF_FFFF)
+    # Seed from a CRC of a stable string rather than hash(): Python salts
+    # str hashes per process (PYTHONHASHSEED), so hash() would give a
+    # different click on every run and make the output non-reproducible.
+    rng = np.random.default_rng(zlib.crc32(f"{round(body_freq)}:{seed}".encode()))
     contact_len = int(0.007 * SAMPLE_RATE)
     contact = lowpass(rng.standard_normal(contact_len), passes=8)
     contact *= np.hanning(contact_len)

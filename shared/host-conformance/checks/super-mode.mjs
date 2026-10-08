@@ -124,11 +124,14 @@ export default [
         check(!('secondaryModel' in res.json), 'secondaryModel should be absent when shed');
         checkSpeech(ctx, res.json, 'shed batch');
       } finally {
-        await held.writeAll(framesFor(ctx.speech.samples, ctx.speech.sampleRate), 0);
-        heldDone = await held.end();
-        await ctx.setConfig({ maxActiveStreams: ctx.originalConfig.maxActiveStreams });
+        heldDone = await ctx.cleanup('end the held stream', async () => {
+          await held.writeAll(framesFor(ctx.speech.samples, ctx.speech.sampleRate), 0);
+          return held.end();
+        });
+        await ctx.cleanup('restore maxActiveStreams', () => ctx.setConfig({ maxActiveStreams: ctx.originalConfig.maxActiveStreams }));
       }
-      check(heldDone.status === 200, `held stream ended with ${heldDone.status}`);
+      ctx.assertCleanedUp();
+      check(heldDone.status === 200, `held stream ended with ${heldDone.status}${heldDone.error ? ` (${heldDone.error.message})` : ''}`);
       const after = await ctx.stats();
       check(after.superMode.shed === before.superMode.shed + 1, `superMode.shed went ${before.superMode.shed} → ${after.superMode.shed}`);
     },

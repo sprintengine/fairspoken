@@ -58,6 +58,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -67,6 +70,7 @@ import ie.fairspoken.mobile.core.DictationState
 import ie.fairspoken.mobile.core.SavedHost
 import ie.fairspoken.mobile.core.Tailnet
 import ie.fairspoken.mobile.core.TailnetStatus
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -117,10 +121,14 @@ fun AppRoot(app: FairspokenApp, readiness: Readiness, refreshTick: Int, actions:
         val screen = if (firstRun) Route.Connect else routes.last()
 
         val health = remember { mutableStateMapOf<String, Result<Long>>() }
-        LaunchedEffect(hosts, refreshTick) {
-            while (true) {
-                hosts.forEach { host -> launch { health[host.url] = app.client.ping(host) } }
-                delay(20_000)
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(hosts, refreshTick, lifecycle) {
+            // Only while the screen is visible, and one round at a time so a slow host never stacks pings.
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    coroutineScope { hosts.forEach { host -> launch { health[host.url] = app.client.ping(host) } } }
+                    delay(20_000)
+                }
             }
         }
 
@@ -158,7 +166,8 @@ private fun HomeScreen(
     onSettings: () -> Unit,
 ) {
     val state by app.dictation.state.collectAsState()
-    val level by app.dictation.level.collectAsState()
+    // Read only while drawing, so the level doesn't recompose the screen.
+    val level = app.dictation.level.collectAsState()
     val hosts by app.store.hosts.collectAsState()
     val activeUrl by app.store.activeUrl.collectAsState()
     val active = hosts.firstOrNull { it.url == activeUrl } ?: hosts.firstOrNull()
@@ -183,7 +192,7 @@ private fun HomeScreen(
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             val orb = minOf(184.dp, maxHeight * 0.62f, maxWidth * 0.56f)
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                MicOrb(state, level, backdrop, orb) {
+                MicOrb(state, { level.value }, backdrop, orb) {
                     if (!readiness.mic) actions.requestMic() else app.dictation.toggle { }
                 }
                 Spacer(Modifier.height(26.dp))

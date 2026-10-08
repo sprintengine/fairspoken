@@ -140,8 +140,9 @@ export default [
         noResponse(res, 'over-long stream');
         expectError(res, 413, 'stream of 11 s (maxRecordingSeconds 10)');
       } finally {
-        await ctx.setConfig({ maxRecordingSeconds: ctx.originalConfig.maxRecordingSeconds });
+        await ctx.cleanup('restore maxRecordingSeconds', () => ctx.setConfig({ maxRecordingSeconds: ctx.originalConfig.maxRecordingSeconds }));
       }
+      ctx.assertCleanedUp();
     },
   },
   {

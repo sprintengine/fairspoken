@@ -344,11 +344,10 @@ pub fn capture_dictation(
     if !settings.training_capture {
         return None;
     }
-    let samples = to_16khz(recording);
-    let entry = CaptureEntry {
+    let mut entry = CaptureEntry {
         id: uuid::Uuid::new_v4().to_string(),
         created_at: now_seconds(),
-        duration_seconds: samples.len() as f32 / SAMPLE_RATE as f32,
+        duration_seconds: 0.0,
         speech_model: settings.speech_model_id(),
         app_category: app_category.to_string(),
         raw_text: texts.raw.to_string(),
@@ -359,9 +358,15 @@ pub fn capture_dictation(
     let id = entry.id.clone();
     let retention_days = settings.training_retention_days;
     let app = app.clone();
+    // The copy is cheap; the resample runs on the writer thread so it never
+    // delays the paste.
+    let recording = recording.clone();
     let _ = std::thread::Builder::new()
         .name("training-capture".to_string())
         .spawn(move || {
+            let samples = to_16khz(&recording);
+            drop(recording);
+            entry.duration_seconds = samples.len() as f32 / SAMPLE_RATE as f32;
             let result = with_store(|store| {
                 store.record(&entry, &samples)?;
                 store.prune(retention_days, entry.created_at)
@@ -399,18 +404,25 @@ pub fn start_retention_sweeper(app: AppHandle) {
         });
 }
 
+/// Prunes and sizes the folder off the main thread.
 #[tauri::command]
-pub fn get_training_data_summary(app: AppHandle) -> Result<CaptureSummary, String> {
-    let days = retention_days(&app);
-    with_store(|store| {
-        store.prune(days, now_seconds())?;
-        Ok(store.summary())
-    })?
+pub async fn get_training_data_summary(app: AppHandle) -> Result<CaptureSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let days = retention_days(&app);
+        with_store(|store| {
+            store.prune(days, now_seconds())?;
+            Ok(store.summary())
+        })?
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-pub fn delete_training_data() -> Result<(), String> {
-    with_store(CaptureStore::delete_all)?
+pub async fn delete_training_data() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| with_store(CaptureStore::delete_all)?)
+        .await
+        .map_err(|err| err.to_string())?
 }
 
 /// Exports to the Downloads folder and reveals the zip. Returns its path.

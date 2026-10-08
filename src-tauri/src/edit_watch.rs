@@ -64,7 +64,7 @@ mod platform {
     use crate::macos_ax::{self, WatchedElement, WatchedField};
     use crate::settings::Settings;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Condvar, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
     use tauri::{AppHandle, Manager};
@@ -85,6 +85,8 @@ mod platform {
     }
 
     static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
+    /// Signalled when a watch is armed, so the idle poller can sleep.
+    static ARMED: Condvar = Condvar::new();
     static POLLER_STARTED: AtomicBool = AtomicBool::new(false);
 
     /// The focused field as read just before insertion.
@@ -121,6 +123,7 @@ mod platform {
             armed_at: Instant::now(),
         };
         let previous = WATCH.lock().ok().and_then(|mut slot| slot.replace(watch));
+        ARMED.notify_one();
         if let Some(previous) = previous {
             evaluate_in_background(app, previous);
         }
@@ -154,6 +157,13 @@ mod platform {
             .spawn(move || {
                 let mut polls: u32 = 0;
                 loop {
+                    // Parked while nothing is watched; `arm` wakes it.
+                    {
+                        let mut slot = WATCH.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        while slot.is_none() {
+                            slot = ARMED.wait(slot).unwrap_or_else(|poisoned| poisoned.into_inner());
+                        }
+                    }
                     thread::sleep(POLL_EVERY);
                     polls = polls.wrapping_add(1);
                     let pending = WATCH.lock().ok().and_then(|slot| {

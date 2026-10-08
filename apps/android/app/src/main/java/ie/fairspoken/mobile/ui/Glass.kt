@@ -81,13 +81,14 @@ object Radii {
  * Liquid glass: blur, a little lens refraction at the rim, vibrancy, a
  * specular edge, a hairline border and a soft drop shadow. [tint] goes over
  * the surface; the spec keeps it for the one primary control on a screen.
+ * It is read while drawing, so an animated tint doesn't recompose.
  */
 @Composable
 fun Modifier.glass(
     backdrop: Backdrop,
     shape: RoundedRectangularShape,
     fill: Color = Crystal.colors.surface,
-    tint: Color = Color.Transparent,
+    tint: () -> Color = { Color.Transparent },
     blurRadius: Dp = 18.dp,
     refraction: Dp = 12.dp,
     elevated: Boolean = true,
@@ -113,7 +114,8 @@ fun Modifier.glass(
             },
             onDrawSurface = {
                 drawRect(fill)
-                if (tint.alpha > 0f) drawRect(tint)
+                val overlay = tint()
+                if (overlay.alpha > 0f) drawRect(overlay)
             },
         )
         .border(0.8.dp, c.hairline, shape)

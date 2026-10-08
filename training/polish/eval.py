@@ -29,12 +29,14 @@ Metrics, all over the held-out split (exact match after trimming outer whitespac
   bench           the regex suite of scripts/polish-bench.py (CASES + HELD_OUT), plain prompt
 """
 import argparse
+import http.client
 import importlib.util
 import json
 import re
 import statistics
 import sys
 import time
+import urllib.error
 import urllib.request
 from collections import Counter
 from pathlib import Path
@@ -42,6 +44,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import contract  # noqa: E402
+from generate_data import mentions  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("polish_bench", HERE.parent.parent / "scripts" / "polish-bench.py")
 bench = importlib.util.module_from_spec(_spec)
@@ -75,8 +78,15 @@ def call(port, messages, lora=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", json.dumps(body).encode(),
                                  {"Content-Type": "application/json"})
     started = time.time()
-    out = json.load(urllib.request.urlopen(req, timeout=180))
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        out = json.load(resp)
     return out["choices"][0]["message"]["content"].strip(), round((time.time() - started) * 1000)
+
+
+# One failed request is recorded and the run goes on; this many in a row means
+# the server is gone, so the run stops (keeping what it has).
+MAX_CONSECUTIVE_ERRORS = 5
+CALL_ERRORS = (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, KeyError, IndexError, TypeError)
 
 
 # -- scoring -----------------------------------------------------------------
@@ -129,7 +139,7 @@ def score(rows):
     spelled = [(r, t) for r in rows for t in r["meta"].get("spoken_terms", [])
                if t in (r["meta"].get("spelling") or []) and t not in r["meta"]["raw"]]
     unspoken = [r for r in rows if r["meta"].get("unspoken_terms")]
-    inserted = [r for r in unspoken if any(t.lower() in r["out"].lower() for t in r["meta"]["unspoken_terms"])]
+    inserted = [r for r in unspoken if any(mentions(t, r["out"]) for t in r["meta"]["unspoken_terms"])]
     edit, restraint = rate(sum(map(exact, change)), len(change)), rate(sum(map(exact, same)), len(same))
     ms = [r["ms"] for r in rows if r.get("ms") is not None]
     by_format = {}
@@ -151,6 +161,7 @@ def score(rows):
         "house_style": rate(sum(map(exact, house)), len(house)),
         "exact_by_format": by_format,
         "latency_median_ms": statistics.median(ms) if ms else None,
+        "errors": sum(1 for r in rows if r.get("error")),  # scored as wrong answers
     }
 
 
@@ -160,7 +171,13 @@ def run_bench(port, variant, lora):
     cases = [(n, r, m, mn) for n, r, m, mn in bench.CASES] + [(n, r, m, mn) for n, _, r, m, mn in bench.HELD_OUT]
     for name, raw, must, must_not in cases:
         meta = {"raw": raw, "spelling": bench.relevant_vocab(raw, bench.VOCAB), "tag_format": None, "tag_tone": None}
-        out, _ = call(port, build(variant, meta), lora)
+        try:
+            out, _ = call(port, build(variant, meta), lora)
+        except CALL_ERRORS as e:
+            total += 1
+            fails.append({"name": name, "raw": raw, "out": "", "error": f"{type(e).__name__}: {e}"})
+            print(f"bench {name}: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
         bad = [p for p in must if not re.search(p, out, re.I | re.M)] + [p for p in must_not if re.search(p, out, re.I | re.M)]
         total += 1
         passed += not bad
@@ -210,23 +227,43 @@ def main():
         table(runs)
         return
 
+    if not (args.port and args.variant and args.data):
+        ap.error("a run needs --port, --variant and --data (or use --score / --baseline)")
     lora = [{"id": i, "scale": 1.0} for i in args.lora] if args.lora else ([] if args.variant == "tagged" else None)
     metas = [json.loads(l)["meta"] for l in Path(args.data).read_text().splitlines() if l.strip()]
     metas = metas[: args.limit] if args.limit else metas
+    if not metas:
+        raise SystemExit(f"no rows in {args.data}")
     call(args.port, build(args.variant, metas[0]), lora)  # warm-up, untimed
     rows = []
+    streak = 0
     for i, meta in enumerate(metas):
-        out, ms = call(args.port, build(args.variant, meta), lora)
-        rows.append({"meta": meta, "out": out, "ms": ms})
+        try:
+            out, ms = call(args.port, build(args.variant, meta), lora)
+            rows.append({"meta": meta, "out": out, "ms": ms})
+            streak = 0
+        except CALL_ERRORS as e:
+            rows.append({"meta": meta, "out": "", "ms": None, "error": f"{type(e).__name__}: {e}"})
+            print(f"row {i + 1}: {type(e).__name__}: {e}", file=sys.stderr)
+            streak += 1
+            if streak >= MAX_CONSECUTIVE_ERRORS:
+                break
         if (i + 1) % 50 == 0:
             print(f"{i + 1}/{len(metas)}", file=sys.stderr)
+    aborted = streak >= MAX_CONSECUTIVE_ERRORS
     run = {"name": args.name or args.variant, "variant": args.variant, "lora": lora, "rows": rows,
            "metrics": score(rows)}
-    if not args.no_bench:
+    if aborted:
+        run["aborted"] = f"stopped after {MAX_CONSECUTIVE_ERRORS} failed requests in a row ({len(rows)}/{len(metas)} rows)"
+    elif not args.no_bench:
         run["bench"] = run_bench(args.port, args.variant, lora)
     if args.json:
         Path(args.json).write_text(json.dumps(run, indent=1, ensure_ascii=False))
     table([(run["name"], run)])
+    if aborted:
+        raise SystemExit(run["aborted"])
+    if run["metrics"]["errors"]:
+        print(f"warning: {run['metrics']['errors']} request(s) failed and were scored as wrong", file=sys.stderr)
 
 
 if __name__ == "__main__":

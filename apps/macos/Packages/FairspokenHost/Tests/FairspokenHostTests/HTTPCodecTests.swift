@@ -42,6 +42,33 @@ struct HTTPCodecTests {
         #expect(throws: HTTPParseError.self) { try HTTPHeadParser.parse(&huge) }
     }
 
+    @Test func leadingEmptyLinesAreConsumedAsTheyArrive() throws {
+        var buffer = ByteBuffer()
+        var skipped = 0
+        for _ in 0..<1_000 {
+            buffer.append(Array("\r\n\n".utf8))
+            #expect(try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped) == nil)
+            #expect(buffer.isEmpty)
+        }
+        #expect(skipped == 3_000)
+        buffer.append(Array("GET /v1/health HTTP/1.1\r\nHost: x\r\n\r\n".utf8))
+        let head = try #require(try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped))
+        #expect(head.path == "/v1/health")
+        #expect(buffer.isEmpty)
+    }
+
+    @Test func emptyLinesCountTowardTheHeadLimit() throws {
+        var buffer = ByteBuffer()
+        var skipped = 0
+        let chunk = Array(String(repeating: "\r\n", count: 1_024).utf8)
+        #expect(throws: HTTPParseError.headTooLarge) {
+            for _ in 0...(HTTPHeadParser.maxHeadBytes / chunk.count) {
+                buffer.append(chunk)
+                _ = try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped)
+            }
+        }
+    }
+
     @Test func bodyFraming() throws {
         func framing(_ headers: String) throws -> HTTPRequestHead.BodyFraming {
             var b = ByteBuffer(Array("POST / HTTP/1.1\r\n\(headers)\r\n".utf8))
@@ -94,10 +121,10 @@ struct HTTPCodecTests {
     }
 
     @Test func jsonMatchesSerdeFormatting() {
-        let v = JSONValue.object([("a", .double(1)), ("b", .double(4.1)), ("c", .null), ("d", .string("q\"\n\u{1}é")),
+        let v = HostJSON.object([("a", .double(1)), ("b", .double(4.1)), ("c", .null), ("d", .string("q\"\n\u{1}é")),
                                   ("e", .array([.int(3), .bool(false)]))])
         #expect(v.serialized == #"{"a":1.0,"b":4.1,"c":null,"d":"q\"\n\u0001é","e":[3,false]}"#)
-        #expect(JSONValue.double(.nan).serialized == "null")
+        #expect(HostJSON.double(.nan).serialized == "null")
     }
 
     @Test func constantTimeCompare() {

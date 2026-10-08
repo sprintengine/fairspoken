@@ -18,6 +18,7 @@ const deleteButton = required<HTMLButtonElement>("trainingDataDelete");
 // Delete all asks for a second click instead of a dialog.
 const DELETE_CONFIRM_MS = 4000;
 let deleteArmedUntil = 0;
+let deleteDisarmTimer: ReturnType<typeof setTimeout> | undefined;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -44,6 +45,8 @@ async function refresh(): Promise<void> {
 }
 
 function resetDeleteButton(): void {
+  clearTimeout(deleteDisarmTimer);
+  deleteDisarmTimer = undefined;
   deleteArmedUntil = 0;
   deleteButton.textContent = "Delete all";
 }
@@ -64,7 +67,9 @@ deleteButton.addEventListener("click", async () => {
   if (Date.now() > deleteArmedUntil) {
     deleteArmedUntil = Date.now() + DELETE_CONFIRM_MS;
     deleteButton.textContent = "Click again to delete";
-    window.setTimeout(resetDeleteButton, DELETE_CONFIRM_MS);
+    // One pending disarm at a time, so an old timer cannot reset a newer arm.
+    clearTimeout(deleteDisarmTimer);
+    deleteDisarmTimer = setTimeout(resetDeleteButton, DELETE_CONFIRM_MS);
     return;
   }
   resetDeleteButton();

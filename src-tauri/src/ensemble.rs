@@ -776,7 +776,15 @@ fn secondary_replacement(
         let sentence_start = out
             .last()
             .is_none_or(|previous| previous.ends_with(['.', '?', '!']));
-        if primary_capital || sentence_start {
+        // A dictionary term keeps the dictionary's casing ("iPhone",
+        // "macOS"); an all-lowercase one ("metoprolol") is capitalized only
+        // to start a sentence.
+        let capitalize_first = if term.is_some_and(|term| cores[0] == term) {
+            sentence_start && !cores[0].chars().any(char::is_uppercase)
+        } else {
+            primary_capital || sentence_start
+        };
+        if capitalize_first {
             cores[0] = capitalize(&cores[0]);
         }
         cores[0] = format!("{lead}{}", cores[0]);
@@ -1155,6 +1163,26 @@ mod tests {
         assert_eq!(merged.text, "Done. Siobhan called.");
         let merged = run("shiv bond called.", "siobhan called.", &["siobhan"]);
         assert_eq!(merged.text, "Siobhan called.");
+    }
+
+    #[test]
+    fn a_dictionary_term_keeps_its_own_casing_at_a_sentence_start() {
+        let merged = run("Eye phone sales grew.", "iPhone sales grew.", &["iPhone"]);
+        assert_eq!(merged.text, "iPhone sales grew.");
+        let merged = run(
+            "Done. Mac oh ass updated.",
+            "Done. macOS updated.",
+            &["macOS"],
+        );
+        assert_eq!(merged.text, "Done. macOS updated.");
+        // An all-lowercase term takes a capital only to start a sentence,
+        // not because the primary happened to capitalize its guess.
+        let merged = run(
+            "Start Metro pro lol tonight.",
+            "Start metoprolol tonight.",
+            &["metoprolol"],
+        );
+        assert_eq!(merged.text, "Start metoprolol tonight.");
     }
 
     #[test]

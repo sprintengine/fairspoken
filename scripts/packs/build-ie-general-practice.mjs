@@ -29,6 +29,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { phoneticKey as key } from "./phonetic-key.mjs";
 
 const HPRA_URL = "https://assets.hpra.ie/products/xml/latestHumanlist.xml";
 const HPRA_DATASET = "https://data.gov.ie/dataset/medicines-authorised-or-transfer-pending-products";
@@ -73,7 +74,10 @@ function field(block, tag) {
 
 function parseProducts(xml) {
   if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error("HPRA list contains a DTD; refusing to read it");
-  const published = /datePublished="([^"]+)"/.exec(xml)?.[1] ?? "unknown";
+  // The publication date becomes the pack version; without it the pack would
+  // ship as "unknown.1", which no later build could compare against.
+  const published = /datePublished="(\d{4}-\d{2}-\d{2}[^"]*)"/.exec(xml)?.[1];
+  if (!published) throw new Error("HPRA list has no datePublished starting YYYY-MM-DD; the list format may have changed");
   const products = [...xml.matchAll(/<Product>([\s\S]*?)<\/Product>/g)].map((m) => ({
     name: field(m[1], "ProductName")[0] ?? "",
     holder: field(m[1], "PAHolder")[0] ?? "",
@@ -327,13 +331,9 @@ const CURATED = [
 
 // ── Assembly ────────────────────────────────────────────────
 
-function key(term) {
-  return term
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
+// Terms are merged by the app's own normalisation (phonetic-key.mjs, ported
+// from phonetic_index.rs), so two spellings the app would fold into one
+// entry are folded here too, and no others.
 
 async function main() {
   const { published, products } = parseProducts(await loadXml());

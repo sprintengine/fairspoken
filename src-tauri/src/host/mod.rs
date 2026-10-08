@@ -13,7 +13,7 @@ use crate::remote_transcription::{
 };
 use crate::settings::Settings;
 use crate::transcription::TranscriptionService;
-use catalog::{model_snapshots, ModelSnapshot};
+use catalog::{ModelInventory, ModelSnapshot};
 use config::{
     apply_config_update, default_host_config_path, load_persisted_config, overlay_persisted_config,
     persist_live_config, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig, DEFAULT_HOST_MODEL,
@@ -27,6 +27,7 @@ use pairing::{
     attempt_pairing, resolve_host_name, Hello, HostAuth, PairOutcome, PairRequest, PairingLimiter,
     HOST_NAME_ENV, PAIRING_PASSWORD_ENV,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
@@ -35,7 +36,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{HTTPVersion, Header, Method, Request, Response, Server, StatusCode};
@@ -54,12 +55,17 @@ const MAX_TRACKED_CLIENTS: usize = 32;
 const WORKER_IDLE_POLL: Duration = Duration::from_millis(250);
 
 pub fn run_transcription_host() -> Result<(), String> {
-    crate::app_dirs::migrate_legacy_dirs();
     let args: Vec<String> = env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    match cli::parse_args(&args) {
+    let command = cli::parse_args(&args);
+    // `--version` and `--help` touch no data, and the updater runs a staged
+    // binary's `--version` as a smoke check: neither may move directories.
+    if command.as_ref().is_ok_and(cli::HostCommand::uses_data_dirs) {
+        crate::app_dirs::migrate_legacy_dirs();
+    }
+    match command {
         Ok(cli::HostCommand::Serve) => {}
         Ok(command) => {
             let code = cli::run(command)?;
@@ -303,11 +309,12 @@ fn handle_request(
             )
         }
         (&Method::Get, "/v1/stats") => {
+            let inventory = runtime.model_inventory();
             let body = {
                 let metrics = metrics
                     .lock()
                     .map_err(|_| "Host metrics lock failed".to_string())?;
-                stats_json(&metrics, bind_addr, &runtime)?
+                stats_json(&metrics, bind_addr, &runtime.live, inventory)?
             };
             respond_json(request, StatusCode(200), body)
         }
@@ -345,9 +352,10 @@ fn handle_request(
 fn stats_json(
     metrics: &HostMetrics,
     bind_addr: &str,
-    runtime: &HostRuntime,
+    live: &HostLiveConfig,
+    inventory: ModelInventory,
 ) -> Result<String, String> {
-    serde_json::to_string(&metrics.snapshot(bind_addr, &runtime.live, &runtime.models))
+    serde_json::to_string(&metrics.snapshot(bind_addr, live, inventory))
         .map_err(|err| format!("Failed to serialize stats response: {err}"))
 }
 
@@ -362,13 +370,18 @@ fn spawn_event_stream(
 ) -> Result<(), String> {
     // Subscribe and snapshot under one metrics lock: every mutation publishes
     // while holding it, so no event falls between the snapshot and the feed.
+    // The disk checks happen first, outside it.
+    let inventory = runtime.model_inventory();
     let subscribed = {
         let metrics = runtime
             .metrics
             .lock()
             .map_err(|_| "Host metrics lock failed".to_string())?;
         match metrics.events.subscribe() {
-            Ok(subscription) => Ok((subscription, stats_json(&metrics, bind_addr, &runtime)?)),
+            Ok(subscription) => Ok((
+                subscription,
+                stats_json(&metrics, bind_addr, &runtime.live, inventory)?,
+            )),
             Err(message) => Err(message),
         }
     };
@@ -550,22 +563,18 @@ fn handle_stream_transcription(
 const MAX_CONFIG_BODY_BYTES: u64 = 4 * 1024;
 
 fn handle_config_update(mut request: Request, runtime: Arc<HostRuntime>) -> Result<(), String> {
-    let body = match read_limited_body(&mut request.as_reader(), MAX_CONFIG_BODY_BYTES) {
-        Ok(body) => body,
-        Err(err) => return respond_error(request, StatusCode(413), &err),
-    };
-    let update: HostConfigUpdate = match serde_json::from_slice(&body) {
-        Ok(update) => update,
-        Err(err) => {
+    let update: HostConfigUpdate =
+        match read_json_body(&mut request, MAX_CONFIG_BODY_BYTES, |body, err| {
             // serde quotes offending values, which could be the password.
-            let message = if String::from_utf8_lossy(&body).contains("pairingPassword") {
+            if String::from_utf8_lossy(body).contains("pairingPassword") {
                 "Invalid config update: pairingPassword must be a string or null, and every other field as documented".to_string()
             } else {
                 format!("Invalid config update: {err}")
-            };
-            return respond_error(request, StatusCode(400), &message);
-        }
-    };
+            }
+        }) {
+            Ok(update) => update,
+            Err((status, message)) => return respond_error(request, status, &message),
+        };
 
     if let Err(message) = apply_config_update(&update, &runtime.live) {
         return respond_error(request, StatusCode(400), &message);
@@ -603,24 +612,17 @@ const MAX_PAIR_BODY_BYTES: u64 = 4 * 1024;
 /// `POST /v1/pair`: the pairing password in, the host token out. Answers
 /// never echo the request, which carries the password.
 fn handle_pair(mut request: Request, runtime: &HostRuntime) -> Result<(), String> {
-    let body = match read_limited_body(&mut request.as_reader(), MAX_PAIR_BODY_BYTES) {
-        Ok(body) => body,
-        Err(err) => return respond_error(request, StatusCode(413), &err),
-    };
-    let Ok(pair) = serde_json::from_slice::<PairRequest>(&body) else {
-        return respond_error(
-            request,
-            StatusCode(400),
-            r#"Invalid pair request: expected {"password": "<string>", "clientName": "<string>"}"#,
-        );
+    let pair: PairRequest = match read_json_body(&mut request, MAX_PAIR_BODY_BYTES, |_, _| {
+        r#"Invalid pair request: expected {"password": "<string>", "clientName": "<string>"}"#
+            .to_string()
+    }) {
+        Ok(pair) => pair,
+        Err((status, message)) => return respond_error(request, status, &message),
     };
     let client = client_ip(&request);
     let outcome = {
         let auth = runtime.live.auth();
-        let mut limiter = runtime
-            .pairing
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut limiter = lock_unpoisoned(&runtime.pairing);
         attempt_pairing(
             &auth,
             &mut limiter,
@@ -674,20 +676,13 @@ fn respond_update_status(
 }
 
 fn handle_update_settings(mut request: Request, updater: &Arc<Updater>) -> Result<(), String> {
-    let body = match read_limited_body(&mut request.as_reader(), MAX_CONFIG_BODY_BYTES) {
-        Ok(body) => body,
-        Err(err) => return respond_error(request, StatusCode(413), &err),
-    };
-    let settings: UpdateSettingsRequest = match serde_json::from_slice(&body) {
-        Ok(settings) => settings,
-        Err(err) => {
-            return respond_error(
-                request,
-                StatusCode(400),
-                &format!("Invalid update settings: {err}"),
-            )
-        }
-    };
+    let settings: UpdateSettingsRequest =
+        match read_json_body(&mut request, MAX_CONFIG_BODY_BYTES, |_, err| {
+            format!("Invalid update settings: {err}")
+        }) {
+            Ok(settings) => settings,
+            Err((status, message)) => return respond_error(request, status, &message),
+        };
     if let Err(message) = updater.apply_settings(&settings) {
         let status = if message.starts_with("Saving") {
             500
@@ -710,20 +705,13 @@ struct ModelDownloadRequest {
 /// manual file copy on the host machine. One download runs at a time and its
 /// progress is published through `/v1/stats`.
 fn handle_model_download(mut request: Request, runtime: Arc<HostRuntime>) -> Result<(), String> {
-    let body = match read_limited_body(&mut request.as_reader(), MAX_CONFIG_BODY_BYTES) {
-        Ok(body) => body,
-        Err(err) => return respond_error(request, StatusCode(413), &err),
-    };
-    let download: ModelDownloadRequest = match serde_json::from_slice(&body) {
-        Ok(download) => download,
-        Err(err) => {
-            return respond_error(
-                request,
-                StatusCode(400),
-                &format!("Invalid model download request: {err}"),
-            )
-        }
-    };
+    let download: ModelDownloadRequest =
+        match read_json_body(&mut request, MAX_CONFIG_BODY_BYTES, |_, err| {
+            format!("Invalid model download request: {err}")
+        }) {
+            Ok(download) => download,
+            Err((status, message)) => return respond_error(request, status, &message),
+        };
     let Some(model) = SttModel::from_model_id(&download.model) else {
         return respond_error(
             request,
@@ -941,6 +929,12 @@ impl HostRuntime {
         self.live.max_recording_seconds()
     }
 
+    /// Reads the model files a stats snapshot reports on; call it before
+    /// taking the metrics lock.
+    fn model_inventory(&self) -> ModelInventory {
+        ModelInventory::read(&self.models, self.live.worker_models())
+    }
+
     fn try_begin_stream(&self, client: Option<String>) -> Result<ActiveStreamGuard, String> {
         let mut metrics = self
             .metrics
@@ -987,15 +981,9 @@ impl HostRuntime {
         source: &'static str,
         client: Option<String>,
     ) -> Result<TranscriptionOutcome, HostRuntimeError> {
+        // Callers check the duration first: over the limit is a 413, not a
+        // capacity answer.
         let duration_seconds = recording.stats().duration_seconds;
-        if let Err(err) = self.validate_recording_duration(duration_seconds) {
-            self.metrics
-                .lock()
-                .map(|mut metrics| metrics.reject_job(client.as_deref()))
-                .ok();
-            return Err(HostRuntimeError::QueueFull(err));
-        }
-
         let result_rx = self.enqueue(
             JobAudio::Recording(recording),
             settings,
@@ -1427,6 +1415,19 @@ fn read_limited_body(reader: &mut impl Read, max_bytes: u64) -> Result<Vec<u8>, 
     Ok(body)
 }
 
+/// Reads a JSON body of at most `max_bytes`. The error is the status and
+/// message to answer with: `413` over the limit, `400` when it doesn't
+/// parse (worded by `invalid`, so a handler can keep secrets out of it).
+fn read_json_body<T: DeserializeOwned>(
+    request: &mut Request,
+    max_bytes: u64,
+    invalid: impl FnOnce(&[u8], serde_json::Error) -> String,
+) -> Result<T, (StatusCode, String)> {
+    let body = read_limited_body(&mut request.as_reader(), max_bytes)
+        .map_err(|err| (StatusCode(413), err))?;
+    serde_json::from_slice(&body).map_err(|err| (StatusCode(400), invalid(&body, err)))
+}
+
 fn max_batch_body_bytes(max_recording_seconds: u16) -> u64 {
     MAX_BATCH_WAV_HEADER_BYTES.saturating_add(
         MAX_BATCH_WAV_BYTES_PER_SECOND.saturating_mul(u64::from(max_recording_seconds)),
@@ -1567,11 +1568,22 @@ fn authorized(request: &Request, token: Option<&str>) -> bool {
             .is_some_and(|value| constant_time_eq(value.as_bytes(), token.as_bytes()))
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+/// Compares secrets without stopping at the first differing byte, so the
+/// time taken does not reveal how much of a guess was right. A length
+/// mismatch returns early; callers comparing passwords hash both sides first.
+pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Locks a mutex whose critical sections only read or replace the value, so
+/// a lock poisoned by a panicking holder still guards a usable one.
+pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn query_param(url: &str, name: &str) -> Option<String> {
@@ -2160,29 +2172,29 @@ impl HostMetrics {
         }
     }
 
+    /// `inventory` is read from disk before the caller takes the metrics
+    /// lock (see `HostRuntime::model_inventory`).
     fn snapshot(
         &self,
         bind_addr: &str,
         live: &HostLiveConfig,
-        models: &ModelService,
+        inventory: ModelInventory,
     ) -> StatsSnapshot<'_> {
-        let assigned_models = live.worker_models();
         let workers = self
             .workers
             .iter()
             .enumerate()
             .map(|(index, worker)| {
-                let assigned = assigned_models
+                let (assigned, model_available) = inventory
+                    .workers
                     .get(index)
                     .copied()
-                    .unwrap_or(DEFAULT_HOST_MODEL);
+                    .unwrap_or((DEFAULT_HOST_MODEL, false));
                 WorkerSnapshot {
                     index,
                     state: worker.state.as_str(),
                     assigned_model: assigned.model_id(),
-                    // A cheap existence check: load/checksum failures surface
-                    // through the worker state and last error instead.
-                    model_available: models.files_present(assigned),
+                    model_available,
                     loaded_model: worker.loaded_model.clone(),
                     completed_jobs: worker.completed_jobs,
                     last_error: worker.last_error.clone(),
@@ -2254,7 +2266,7 @@ impl HostMetrics {
             use_gpu: live.use_gpu(),
             pairing_enabled: live.pairing_enabled(),
             model: live.model_summary(),
-            models: model_snapshots(models, &assigned_models),
+            models: inventory.models,
             model_download: self.model_download.clone(),
             rejected_jobs: self.rejected_jobs,
             failed_jobs: self.failed_jobs,
@@ -2473,6 +2485,10 @@ mod tests {
             next_job_id: AtomicU64::new(1),
             pairing: Mutex::new(super::PairingLimiter::default()),
         }
+    }
+
+    fn inventory(models: &ModelService, live: &HostLiveConfig) -> super::ModelInventory {
+        super::ModelInventory::read(models, live.worker_models())
     }
 
     fn test_outcome(text: &str) -> TranscriptionOutcome {
@@ -2701,29 +2717,21 @@ mod tests {
     }
 
     #[test]
-    fn oversized_recording_rejects_before_enqueue() {
+    fn recording_duration_check_rejects_only_over_the_limit() {
         let config = test_config();
         let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
         let (job_tx, _job_rx) = mpsc::sync_channel(1);
         let runtime = test_runtime(config, job_tx, Arc::clone(&metrics));
 
+        runtime
+            .validate_recording_duration(10.0)
+            .expect("at the limit is fine");
         let err = runtime
-            .transcribe(test_recording(11), Settings::default(), "batch", None)
+            .validate_recording_duration(test_recording(11).stats().duration_seconds)
             .expect_err("oversized recording should reject");
-
-        match err {
-            HostRuntimeError::QueueFull(message) => {
-                assert!(message.contains("Recording exceeds host maximum"));
-            }
-            HostRuntimeError::WorkerFailed(message) => {
-                panic!("unexpected worker failure: {message}");
-            }
-        }
-
-        let metrics = metrics.lock().expect("metrics");
-        assert_eq!(metrics.queued.len(), 0);
-        assert_eq!(metrics.rejected_jobs, 1);
-        assert_eq!(metrics.running_job_count(), 0);
+        assert!(err.contains("Recording exceeds host maximum of 10 seconds"));
+        // The batch handler answers that 413 itself; nothing was queued.
+        assert_eq!(metrics.lock().expect("metrics").queued.len(), 0);
     }
 
     #[test]
@@ -2825,7 +2833,7 @@ mod tests {
             Duration::from_millis(90),
         );
 
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, inventory(&models, &live));
 
         assert_eq!(snapshot.active_streams, 1);
         assert_eq!(snapshot.queued_jobs, 0);
@@ -2927,7 +2935,7 @@ mod tests {
         metrics.enqueue_job(test_queued_job(1, Some("192.168.1.10")));
         metrics.enqueue_job(test_queued_job(2, Some("192.168.1.11")));
 
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, inventory(&models, &live));
         assert_eq!(snapshot.queued_jobs, 2);
         assert_eq!(snapshot.queue.len(), 2);
         assert_eq!(snapshot.queue[0].id, 1);
@@ -2935,7 +2943,7 @@ mod tests {
         assert_eq!(snapshot.queue[0].client.as_deref(), Some("192.168.1.10"));
 
         metrics.dequeue_job(1);
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, inventory(&models, &live));
         assert_eq!(snapshot.queue.len(), 1);
         assert_eq!(snapshot.queue[0].id, 2);
     }
@@ -3209,8 +3217,12 @@ mod tests {
 
         let metrics = HostMetrics::new(&config);
         let stats =
-            serde_json::to_value(metrics.snapshot("127.0.0.1:0", &live, &ModelService::default()))
-                .unwrap();
+            serde_json::to_value(metrics.snapshot(
+                "127.0.0.1:0",
+                &live,
+                inventory(&ModelService::default(), &live),
+            ))
+            .unwrap();
         assert_eq!(stats["pairingEnabled"], true);
         assert!(!stats.to_string().contains("123456"));
 
@@ -3318,7 +3330,7 @@ mod tests {
         let mut metrics = HostMetrics::new(&config);
 
         assert!(metrics
-            .snapshot("127.0.0.1:48173", &live, &models)
+            .snapshot("127.0.0.1:48173", &live, inventory(&models, &live))
             .model_download
             .is_none());
 
@@ -3328,7 +3340,7 @@ mod tests {
             percentage: 42,
             error: None,
         });
-        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, &models);
+        let snapshot = metrics.snapshot("127.0.0.1:48173", &live, inventory(&models, &live));
         let download = snapshot.model_download.expect("download state");
         assert_eq!(download.model, "base");
         assert_eq!(download.percentage, 42);
@@ -3502,7 +3514,7 @@ mod tests {
         let models = ModelService::default();
         let metrics = HostMetrics::new(&config);
 
-        let json = serde_json::to_value(metrics.snapshot("127.0.0.1:48173", &live, &models))
+        let json = serde_json::to_value(metrics.snapshot("127.0.0.1:48173", &live, inventory(&models, &live)))
             .expect("serialize snapshot");
         let listed = json["models"].as_array().expect("models array");
         assert!(listed.len() >= 3);

@@ -122,7 +122,9 @@ final class ServerController {
     // MARK: Lifecycle
 
     func start() async {
-        guard host == nil, configIssue == nil else { return }
+        // `host` is only set once the bind finishes, so a second start while one is in flight
+        // (a double click on the menu item) is refused by state, not by `host`.
+        guard host == nil, configIssue == nil, runState != .starting, runState != .running else { return }
         runState = .starting
         do {
             let file = try HostConfigurationStore.load(configURL)

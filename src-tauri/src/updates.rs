@@ -19,7 +19,6 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -151,21 +150,8 @@ impl Preferences {
     }
 
     fn save(&self, path: &Path) -> Result<(), String> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|err| format!("Could not save the update channel: {err}"))?;
-        }
-        let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-        let write = || -> std::io::Result<()> {
-            let mut file = fs::File::create(&temporary)?;
-            file.write_all(self.to_json().as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temporary, path)
-        };
-        write().map_err(|err| {
-            let _ = fs::remove_file(&temporary);
-            format!("Could not save the update channel: {err}")
-        })
+        crate::app_dirs::write_atomic(path, self.to_json().as_bytes())
+            .map_err(|err| format!("Could not save the update channel: {err}"))
     }
 }
 
@@ -310,29 +296,42 @@ pub async fn check(app: &AppHandle) -> Result<UpdateStatus, String> {
     emit(app);
     loop {
         let generation = app.state::<Updates>().generation.load(Ordering::SeqCst);
-        let result = find(app, channel(app)).await;
-        if generation != app.state::<Updates>().generation.load(Ordering::SeqCst) {
-            // The channel changed while this check ran: ask the new feed.
-            continue;
-        }
-        let state = match result {
-            Ok(found) => {
-                record_check(app);
-                let state = match &found {
-                    Some(update) => UpdateState::Available {
-                        version: update.version.clone(),
-                        switch_to_stable: switches_to_stable(channel(app), &app.package_info().version),
-                    },
-                    None => UpdateState::UpToDate,
-                };
-                if let Ok(mut pending) = app.state::<Updates>().pending.lock() {
-                    *pending = found.map_or(Pending::None, Pending::Found);
-                }
-                state
+        let channel = channel(app);
+        let result = find(app, channel).await;
+        let reached_feed = result.is_ok();
+        {
+            // Compared and published under the state lock, which set_channel
+            // holds while it bumps the generation, so the old channel's result
+            // can never land after a switch.
+            let updates = app.state::<Updates>();
+            let Ok(mut state) = updates.state.lock() else {
+                return Err("Update state is unavailable.".into());
+            };
+            if generation != updates.generation.load(Ordering::SeqCst) {
+                // The channel changed while this check ran: ask the new feed.
+                continue;
             }
-            Err(message) => UpdateState::Failed { message },
-        };
-        set_state(app, state);
+            *state = match result {
+                Ok(found) => {
+                    let next = match &found {
+                        Some(update) => UpdateState::Available {
+                            version: update.version.clone(),
+                            switch_to_stable: switches_to_stable(channel, &app.package_info().version),
+                        },
+                        None => UpdateState::UpToDate,
+                    };
+                    if let Ok(mut pending) = updates.pending.lock() {
+                        *pending = found.map_or(Pending::None, Pending::Found);
+                    }
+                    next
+                }
+                Err(message) => UpdateState::Failed { message },
+            };
+        }
+        if reached_feed {
+            record_check(app);
+        }
+        emit(app);
         return Ok(status(app));
     }
 }
@@ -390,9 +389,12 @@ pub fn set_channel(app: &AppHandle, next: Channel) -> Result<UpdateStatus, Strin
         saved.save(&updates.path)?;
         *prefs = saved;
     }
+    // An offer from the other channel no longer applies. The generation moves
+    // under the state lock: a check finishing now either sees the switch or
+    // has already published and is reset here.
+    let state = updates.state.lock();
     updates.generation.fetch_add(1, Ordering::SeqCst);
-    // An offer from the other channel no longer applies.
-    if let Ok(mut state) = updates.state.lock() {
+    if let Ok(mut state) = state {
         if matches!(*state, UpdateState::Available { .. } | UpdateState::UpToDate | UpdateState::Failed { .. }) {
             *state = UpdateState::Idle;
             if let Ok(mut pending) = updates.pending.lock() {

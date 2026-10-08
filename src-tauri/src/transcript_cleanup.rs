@@ -13,6 +13,8 @@
 //! * streaming polish works on fragments, so the capital the model puts on a
 //!   mid-sentence tail and the period it puts on an unfinished one are undone.
 
+use std::collections::HashSet;
+
 /// Noises that are not words in any language the ASR models cover.
 const UNIVERSAL_FILLERS: &[&str] = &[
     "uh", "uhh", "uhm", "umm", "hm", "hmm", "mmm", "mhm", "mmhmm", "mm-hmm", "uh-huh",
@@ -148,31 +150,62 @@ const I_WOULD_VERBS: &[&str] = &[
 /// around a pause in the middle of a sentence. Every rule here was taken from
 /// what a polish model usefully did to real dictations; none of them can add a
 /// word, which is more than could be said for the model.
-pub fn tidy(text: &str, language: &str) -> String {
+///
+/// `capitalised_terms` are the user's dictionary terms and the pack terms the
+/// text writes out (`vocabulary_packs::capitalised_terms`): a word of one that
+/// is written with a capital keeps it.
+pub fn tidy(text: &str, language: &str, capitalised_terms: &[String]) -> String {
     let english = language.trim().to_ascii_lowercase().starts_with("en");
     // A capitalized word that the same dictation also wrote in lowercase is an
-    // ordinary word, not a name.
-    let lowercase_words: std::collections::HashSet<String> = text
+    // ordinary word, not a name — unless it is also a common given name
+    // ("Ask Will whether he will come").
+    let lowercase_words: HashSet<String> = text
         .split_whitespace()
         .filter(|t| t.chars().any(char::is_alphabetic) && !t.chars().any(char::is_uppercase))
         .map(token_core)
+        .filter(|core| !NAME_WORDS.contains(&core.as_str()))
         .collect();
+    let mut words = StrayCapitalWords {
+        lowercase: lowercase_words,
+        kept: HashSet::new(),
+    };
+    for term in capitalised_terms {
+        if term.chars().find(|c| c.is_alphabetic()).is_some_and(char::is_uppercase) {
+            words.kept.extend(term.split_whitespace().map(token_core));
+        }
+    }
     strip_fillers(text, language)
         .split('\n')
-        .map(|line| tidy_line(line, english, &lowercase_words))
+        .map(|line| tidy_line(line, english, &words))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Given names that are also everyday words. Seeing the word in lowercase
+/// elsewhere in a dictation is no evidence that its capitalised use is not
+/// the name.
+const NAME_WORDS: &[&str] = &[
+    "will", "bill", "mark", "may", "grace", "hope", "faith", "joy", "rose", "jack", "frank",
+    "pat", "bob", "sue", "dawn", "art", "rob", "drew", "chase", "ray", "rich", "summer", "iris",
+    "ivy", "amber", "ruby", "pearl", "penny", "lily", "holly", "june", "april", "august", "gene",
+    "grant", "lance", "miles", "pierce", "reed", "sandy", "victor", "wade", "carol", "cliff",
+    "dale", "dean", "don", "earl", "glen", "hazel", "heather", "jade", "jay", "matt", "max",
+    "nick", "norm", "olive", "page", "rod", "sage", "skip", "stone", "sterling", "win",
+];
+
+/// What `lower_stray_capitals` needs to know about the whole dictation.
+struct StrayCapitalWords {
+    /// Words the dictation also wrote in lowercase.
+    lowercase: HashSet<String>,
+    /// Words of capitalised dictionary and pack terms, never lowered.
+    kept: HashSet<String>,
 }
 
 fn ends_clause(token: &str) -> bool {
     token.chars().last().is_some_and(|c| is_sentence_end(c) || c == ':')
 }
 
-fn tidy_line(
-    line: &str,
-    english: bool,
-    lowercase_words: &std::collections::HashSet<String>,
-) -> String {
+fn tidy_line(line: &str, english: bool, words: &StrayCapitalWords) -> String {
     let original: Vec<&str> = line.split_whitespace().collect();
     let mut tokens: Vec<String> = original.iter().map(|t| t.to_string()).collect();
     if english {
@@ -181,7 +214,7 @@ fn tidy_line(
     }
     tokens = collapse_repeats(tokens);
     tokens = drop_stray_periods(tokens);
-    tokens = lower_stray_capitals(tokens, lowercase_words);
+    tokens = lower_stray_capitals(tokens, words);
     if tokens.len() == original.len() && tokens.iter().zip(&original).all(|(a, b)| a == b) {
         return line.to_string();
     }
@@ -297,10 +330,7 @@ fn drop_stray_periods(mut tokens: Vec<String>) -> Vec<String> {
 }
 
 /// A capital in the middle of a sentence, on a word that is plainly not a name.
-fn lower_stray_capitals(
-    mut tokens: Vec<String>,
-    lowercase_words: &std::collections::HashSet<String>,
-) -> Vec<String> {
+fn lower_stray_capitals(mut tokens: Vec<String>, words: &StrayCapitalWords) -> Vec<String> {
     for index in 1..tokens.len() {
         if ends_clause(&tokens[index - 1]) {
             continue;
@@ -316,8 +346,8 @@ fn lower_stray_capitals(
             && !core.starts_with("i’");
         let ordinary = CONTINUATION_WORDS.contains(&core.as_str())
             || CONTINUATION_WORDS.contains(&core.split(['\'', '’']).next().unwrap_or(""))
-            || lowercase_words.contains(&core);
-        if plain_capital && ordinary {
+            || words.lowercase.contains(&core);
+        if plain_capital && ordinary && !words.kept.contains(&core) {
             tokens[index] = token
                 .chars()
                 .map(|c| if c.is_uppercase() { c.to_lowercase().next().unwrap_or(c) } else { c })
@@ -592,7 +622,7 @@ mod tests {
             // Split contraction.
             ("I d like to know if that works.", "I'd like to know if that works."),
         ] {
-            assert_eq!(tidy(raw, "en"), tidied);
+            assert_eq!(tidy(raw, "en", &[]), tidied);
         }
     }
 
@@ -606,10 +636,39 @@ mod tests {
             "We have two goals:\n1. Fix the  login bug\n2. Write docs",
             "I think I'll ask Hypercube Labs about Canvas MCP today.",
         ] {
-            assert_eq!(tidy(text, "en"), text, "{text}");
+            assert_eq!(tidy(text, "en", &[]), text, "{text}");
         }
         // Word rules are English; structure rules are not.
-        assert_eq!(tidy("sabes, you know, que si", "es"), "sabes, you know, que si");
+        assert_eq!(tidy("sabes, you know, que si", "es", &[]), "sabes, you know, que si");
+    }
+
+    #[test]
+    fn names_that_are_also_words_keep_their_capital() {
+        for text in [
+            "Ask Will whether he will come.",
+            "Tell Bill the bill is paid.",
+            "I asked Mark to mark it and Grace said grace.",
+            "Maybe May may come too.",
+        ] {
+            assert_eq!(tidy(text, "en", &[]), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn dictionary_and_pack_terms_keep_their_capital() {
+        // "Transcription" seen lowercase is lowered, unless it is a term.
+        let text = "how the Transcription takes, how the transcription model takes";
+        assert_eq!(
+            tidy(text, "en", &[]),
+            "how the transcription takes, how the transcription model takes"
+        );
+        assert_eq!(tidy(text, "en", &["Transcription".to_string()]), text);
+        // Continuation words that make up a multi-word term stay too.
+        let text = "we shipped it with The Who playing";
+        assert_eq!(tidy(text, "en", &[]), "we shipped it with the who playing");
+        assert_eq!(tidy(text, "en", &["The Who".to_string()]), text);
+        // A lowercase dictionary term gives no capital to keep.
+        assert_eq!(tidy("ask Will and will", "en", &["will".to_string()]), "ask Will and will");
     }
 
     #[test]

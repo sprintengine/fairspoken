@@ -20,9 +20,8 @@ use crate::edit_diff::Mishearing;
 use crate::settings::{EntryOrigin, Settings, TranscriptCorrection};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, RwLock};
+use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Sightings before a word mapping becomes a correction.
@@ -113,7 +112,7 @@ impl LearnedStore {
             items: self.items.clone(),
         })
         .map_err(|err| format!("Failed to serialize learned words: {err}"))?;
-        write_private_atomically(&self.path, payload.as_bytes())
+        crate::app_dirs::write_atomic(&self.path, payload.as_bytes())
             .map_err(|err| format!("Failed to write learned words: {err}"))
     }
 
@@ -357,24 +356,6 @@ const MEDICAL_SUFFIXES: &[&str] = &[
     "ectomy", "otomy", "algia", "opathy",
 ];
 
-/// Medicine names supplied at runtime, lowercase.
-static DRUG_LEXICON: RwLock<Vec<String>> = RwLock::new(Vec::new());
-
-/// Hook for vocabulary packs: register a pack's medicine terms (its
-/// `category: "drug"` written and accepted forms) so learning treats them as
-/// medicines on top of the built-in heuristic and the bundled packs'
-/// medicines (`vocabulary_packs::is_drug_term`). Replaces any earlier list.
-#[allow(dead_code)]
-pub fn register_drug_lexicon(terms: impl IntoIterator<Item = String>) {
-    if let Ok(mut lexicon) = DRUG_LEXICON.write() {
-        *lexicon = terms
-            .into_iter()
-            .map(|term| term.trim().to_lowercase())
-            .filter(|term| !term.is_empty())
-            .collect();
-    }
-}
-
 fn phrase_words(phrase: &str) -> impl Iterator<Item = String> + '_ {
     phrase
         .split(|c: char| !c.is_alphanumeric() && c != '-')
@@ -382,14 +363,12 @@ fn phrase_words(phrase: &str) -> impl Iterator<Item = String> + '_ {
         .map(str::to_lowercase)
 }
 
+/// The built-in heuristic plus every medicine in the bundled packs
+/// (`vocabulary_packs::is_drug_term`), enabled or not.
 fn looks_medical(phrase: &str) -> bool {
-    let lexicon = DRUG_LEXICON.read().map(|terms| terms.clone()).unwrap_or_default();
-    let lowered = phrase.trim().to_lowercase();
-    lexicon.contains(&lowered)
-        || crate::vocabulary_packs::is_drug_term(phrase)
+    crate::vocabulary_packs::is_drug_term(phrase)
         || phrase_words(phrase).any(|word| {
-            lexicon.contains(&word)
-                || crate::vocabulary_packs::is_drug_term(&word)
+            crate::vocabulary_packs::is_drug_term(&word)
                 || COMMON_MEDICINES.contains(&word.as_str())
                 || LOOK_ALIKE_MEDICINES.contains(&word.as_str())
                 || (word.chars().count() >= 6
@@ -408,32 +387,6 @@ fn involves_medicine(heard: &str, intended: &str) -> bool {
     (looks_medical(heard) && looks_medical(intended))
         || is_look_alike_medicine(heard)
         || is_look_alike_medicine(intended)
-}
-
-fn write_private_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let write = || -> std::io::Result<()> {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)
-    };
-    let result = write();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
 }
 
 fn default_path() -> PathBuf {
@@ -518,27 +471,36 @@ pub fn get_learned_suggestions() -> Result<Vec<LearnedItem>, String> {
     with_store(|store| store.suggestions())
 }
 
+/// Saves the store (and the settings an accept changes) off the main thread.
 #[tauri::command]
-pub fn accept_learned_suggestion(app: AppHandle, id: String) -> Result<(), String> {
-    let promotion = with_store(|store| {
-        let promotion = store.accept(&id);
-        store.save().map(|_| promotion)
-    })??;
-    if let Some(promotion) = promotion {
-        apply_to_settings(&app, &[promotion]);
-    }
-    let _ = app.emit("learned-updated", ());
-    Ok(())
+pub async fn accept_learned_suggestion(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let promotion = with_store(|store| {
+            let promotion = store.accept(&id);
+            store.save().map(|_| promotion)
+        })??;
+        if let Some(promotion) = promotion {
+            apply_to_settings(&app, &[promotion]);
+        }
+        let _ = app.emit("learned-updated", ());
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-pub fn dismiss_learned_suggestion(app: AppHandle, id: String) -> Result<(), String> {
-    with_store(|store| {
-        store.dismiss(&id);
-        store.save()
-    })??;
-    let _ = app.emit("learned-updated", ());
-    Ok(())
+pub async fn dismiss_learned_suggestion(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_store(|store| {
+            store.dismiss(&id);
+            store.save()
+        })??;
+        let _ = app.emit("learned-updated", ());
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[cfg(test)]
@@ -647,17 +609,6 @@ mod tests {
             }]
         );
         assert!(store.suggestions().is_empty());
-    }
-
-    #[test]
-    fn registered_drug_lexicon_extends_the_heuristic() {
-        // A made-up brand: the bundled packs' medicines are always consulted.
-        assert!(!looks_medical("Zorblax"));
-        register_drug_lexicon(["Zorblax".to_string(), "zorblaxine".to_string()]);
-        assert!(looks_medical("Zorblax"));
-        assert!(involves_medicine("zorblaxine", "Zorblax"));
-        register_drug_lexicon(Vec::new());
-        assert!(!looks_medical("Zorblax"));
     }
 
     #[test]

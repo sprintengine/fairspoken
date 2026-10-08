@@ -1,6 +1,7 @@
 package ie.fairspoken.mobile.ime
 
 import android.inputmethodservice.InputMethodService
+import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -32,6 +33,9 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
     private val app get() = fairspoken
     private val panel = KeyboardPanelState()
 
+    /** The field a dictation started in; its transcript goes nowhere else. */
+    private var dictationField: String? = null
+
     override fun onCreate() {
         super.onCreate()
         savedState.performRestore(null)
@@ -52,7 +56,7 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
             w.navigationBarColor = android.graphics.Color.TRANSPARENT
         }
         return ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
                 KeyboardPanel(
                     app = app,
@@ -75,7 +79,8 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         panel.lastInsert = null
         app.warmUp()
-        if (!restarting && app.store.settings.value.autoListen && !app.dictation.isBusy) toggle()
+        val privateField = info?.isPrivate() == true
+        if (!restarting && !privateField && app.store.settings.value.autoListen && !app.dictation.isBusy) toggle()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -97,10 +102,19 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
     override fun onEvaluateFullscreenMode() = false
 
     private fun toggle() {
+        if (!app.dictation.isBusy) {
+            dictationField = currentInputEditorInfo?.fieldKey()
+            panel.notice = null
+        }
         app.dictation.toggle(::commit)
     }
 
     private fun commit(text: String) {
+        // The user moved on while it was transcribing: don't type into a field they didn't dictate into.
+        if (currentInputEditorInfo?.fieldKey() != dictationField) {
+            panel.notice = "Not inserted: the field changed"
+            return
+        }
         val ic = currentInputConnection ?: return
         val insertion = TextJoin.insertion(ic.getTextBeforeCursor(1, 0), text, ic.getTextAfterCursor(1, 0))
         ic.commitText(insertion, 1)
@@ -140,6 +154,21 @@ class VoiceKeyboardService : InputMethodService(), LifecycleOwner, SavedStateReg
         } else {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
         }
+    }
+
+    private fun EditorInfo.fieldKey() = "$packageName/$fieldId"
+
+    /** Password fields and apps that ask keyboards not to learn (incognito) don't open listening. */
+    private fun EditorInfo.isPrivate(): Boolean {
+        val variation = inputType and InputType.TYPE_MASK_VARIATION
+        val password = when (inputType and InputType.TYPE_MASK_CLASS) {
+            InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+            InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            else -> false
+        }
+        return password || imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
     }
 
     private fun switchAway() {

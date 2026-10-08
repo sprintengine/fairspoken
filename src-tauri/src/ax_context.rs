@@ -35,6 +35,10 @@ pub trait ContextNode {
     /// AX role, e.g. "AXTextField". Secure fields are excluded by the
     /// implementation before the walk, but the walker re-checks.
     fn role(&self) -> Option<String>;
+    /// AX subrole. `NSSecureTextField` and browser password inputs report
+    /// role `AXTextField` with subrole `AXSecureTextField`, so the walker
+    /// checks both.
+    fn subrole(&self) -> Option<String>;
     /// Visible text carried by this node (value/title/description).
     fn texts(&self) -> Vec<String>;
     fn children(&self) -> Vec<Self>
@@ -43,6 +47,11 @@ pub trait ContextNode {
 }
 
 pub const SECURE_FIELD_ROLE: &str = "AXSecureTextField";
+
+/// Whether a role/subrole pair marks a secure (password) field.
+pub fn is_secure_role(role: Option<&str>, subrole: Option<&str>) -> bool {
+    role == Some(SECURE_FIELD_ROLE) || subrole == Some(SECURE_FIELD_ROLE)
+}
 
 /// Breadth-first collection of on-screen text under the budgets. The
 /// traversal order (roots first, then their children level by level) is what
@@ -63,7 +72,7 @@ pub fn collect_context_text<N: ContextNode>(roots: Vec<N>, budget: &WalkBudget) 
         }
         visited += 1;
 
-        if node.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+        if is_secure_role(node.role().as_deref(), node.subrole().as_deref()) {
             continue; // never read, never descend
         }
 
@@ -288,8 +297,10 @@ pub fn adjust_for_caret(
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
     struct FakeNode {
         role: &'static str,
+        subrole: Option<&'static str>,
         text: Vec<&'static str>,
         children: Vec<FakeNode>,
     }
@@ -298,35 +309,21 @@ mod tests {
         fn role(&self) -> Option<String> {
             Some(self.role.to_string())
         }
+        fn subrole(&self) -> Option<String> {
+            self.subrole.map(str::to_string)
+        }
         fn texts(&self) -> Vec<String> {
             self.text.iter().map(|t| t.to_string()).collect()
         }
         fn children(&self) -> Vec<FakeNode> {
-            self.children
-                .iter()
-                .map(|c| FakeNode {
-                    role: c.role,
-                    text: c.text.clone(),
-                    children: clone_children(&c.children),
-                })
-                .collect()
+            self.children.clone()
         }
-    }
-
-    fn clone_children(children: &[FakeNode]) -> Vec<FakeNode> {
-        children
-            .iter()
-            .map(|c| FakeNode {
-                role: c.role,
-                text: c.text.clone(),
-                children: clone_children(&c.children),
-            })
-            .collect()
     }
 
     fn node(text: Vec<&'static str>, children: Vec<FakeNode>) -> FakeNode {
         FakeNode {
             role: "AXStaticText",
+            subrole: None,
             text,
             children,
         }
@@ -347,6 +344,7 @@ mod tests {
             vec![
                 FakeNode {
                     role: SECURE_FIELD_ROLE,
+                    subrole: None,
                     text: vec!["hunter2"],
                     children: vec![node(vec!["child of secure"], vec![])],
                 },
@@ -357,6 +355,30 @@ mod tests {
         let texts = collect_context_text(vec![tree], &generous_budget());
 
         assert_eq!(texts, vec!["root text", "visible child"]);
+    }
+
+    #[test]
+    fn walker_skips_text_fields_with_the_secure_subrole() {
+        // NSSecureTextField and browser password inputs: role AXTextField,
+        // subrole AXSecureTextField.
+        let tree = node(
+            vec!["root text"],
+            vec![
+                FakeNode {
+                    role: "AXTextField",
+                    subrole: Some(SECURE_FIELD_ROLE),
+                    text: vec!["hunter2"],
+                    children: vec![node(vec!["child of secure"], vec![])],
+                },
+                node(vec!["visible child"], vec![]),
+            ],
+        );
+
+        let texts = collect_context_text(vec![tree], &generous_budget());
+
+        assert_eq!(texts, vec!["root text", "visible child"]);
+        assert!(is_secure_role(Some("AXTextField"), Some(SECURE_FIELD_ROLE)));
+        assert!(!is_secure_role(Some("AXTextField"), None));
     }
 
     #[test]

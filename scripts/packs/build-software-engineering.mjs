@@ -17,6 +17,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { phoneticKey as key } from "./phonetic-key.mjs";
 
 const OUTPUT = join(dirname(fileURLToPath(import.meta.url)), "../../src-tauri/packs/software-engineering.json");
 
@@ -505,16 +506,9 @@ function parse(text) {
   return terms;
 }
 
-// The app's normalisation (phonetic_index.rs): a `+`/`#` closing a word is
-// "plus"/"sharp" and a `.` opening one is "dot", so C, C++ and C# differ.
-const key = (term) =>
-  term
-    .toLowerCase()
-    .replace(/(^|[\s/(])\.(?=[a-z0-9])/g, "$1dot")
-    .replace(/([a-z0-9])(\++|#+)(?![a-z0-9])/g, (_, head, run) =>
-      head + (run[0] === "+" ? "plus" : "sharp").repeat(run.length),
-    )
-    .replace(/[^a-z0-9]/g, "");
+// Duplicates are checked by the app's own normalisation (phonetic-key.mjs,
+// ported from phonetic_index.rs), so C, C++ and C# stay apart here exactly
+// as they do in the app.
 const terms = parse(TERMS);
 const seen = new Map();
 for (const term of terms) {

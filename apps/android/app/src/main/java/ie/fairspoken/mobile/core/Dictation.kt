@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,13 +69,21 @@ class Dictation(
         val settings = store.settings.value
         val newUpload = client.openStream(host, settings.superMode, VocabularyPacks.hintsFor(settings.packId))
         val tap = DebugAudio.startIfEnabled(context)
-        val newCapture = AudioCapture(
+        lateinit var newCapture: AudioCapture
+        newCapture = AudioCapture(
             replay = DebugAudio.replayFile(context),
             onFrame = { samples, count ->
                 newUpload.send(AudioCapture.SAMPLE_RATE, samples, count)
                 tap?.write(samples, count)
             },
             onLevel = { _level.value = it },
+            onFailure = {
+                scope.launch {
+                    if (capture !== newCapture) return@launch
+                    cancel()
+                    fail("The microphone stopped")
+                }
+            },
         )
         if (!newCapture.start()) {
             newUpload.cancel()
@@ -93,23 +102,29 @@ class Dictation(
         val currentUpload = upload ?: return
         val currentCapture = capture ?: return
         if (_state.value !is DictationState.Listening) return
-        currentCapture.stop()
-        DebugAudio.finish(context)
         _level.value = 0f
         capture = null
         if (SystemClock.elapsedRealtime() - startedAt < MIN_RECORDING_MS) {
+            currentCapture.stop { saveDebugAudio() }
             cancel()
-            return
-        }
-        if (!currentCapture.heardSignal) {
-            currentUpload.cancel()
-            upload = null
-            fail("The microphone gave silence. Open Fairspoken to re-arm it")
             return
         }
         val stoppedAt = SystemClock.elapsedRealtime()
         _state.value = DictationState.Transcribing
-        currentUpload.finish()
+        currentCapture.stop {
+            // On the audio thread, after its last frame, so the upload never ends before the tail.
+            saveDebugAudio()
+            if (currentCapture.heardSignal) {
+                currentUpload.finish()
+            } else {
+                scope.launch {
+                    if (upload !== currentUpload) return@launch
+                    currentUpload.cancel()
+                    upload = null
+                    fail("The microphone gave silence. Open Fairspoken to re-arm it")
+                }
+            }
+        }
         currentUpload.onResult { result ->
             scope.launch {
                 if (upload !== currentUpload) return@launch
@@ -150,6 +165,10 @@ class Dictation(
         upload = null
         _level.value = 0f
         _state.value = DictationState.Idle
+    }
+
+    private fun saveDebugAudio() {
+        scope.launch(Dispatchers.IO) { DebugAudio.finish(context) }
     }
 
     private fun fail(message: String): Boolean {

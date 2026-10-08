@@ -114,8 +114,8 @@ export class Host {
   }
 
   /** Starts a chunked upload to `/v1/transcriptions/stream`. */
-  openStream({ headers = {}, auth = 'bearer', path = '/v1/transcriptions/stream' } = {}) {
-    return new StreamUpload(this, { headers, auth, path });
+  openStream({ headers = {}, auth = 'bearer', path = '/v1/transcriptions/stream', timeoutMs } = {}) {
+    return new StreamUpload(this, { headers, auth, path, timeoutMs });
   }
 
   /** Opens `/v1/events`. Resolves once the response head arrives. */
@@ -149,10 +149,15 @@ export class Host {
  * A `/v1/transcriptions/stream` upload with the body written over time.
  * `done` always resolves (never rejects): `{status, headers, text, json,
  * endedAt, doneAt, error}` where `status` is null when no response arrived.
+ * An upload with no write and no complete answer for `timeoutMs` is destroyed
+ * and resolves with `status: null` and the timeout as `error`.
  */
 export class StreamUpload {
-  constructor(host, { headers, auth, path }) {
+  constructor(host, { headers, auth, path, timeoutMs = 120000 }) {
     const resolved = host.resolve(path, auth, { 'Content-Type': STREAM_CONTENT_TYPE, ...headers });
+    this.path = path;
+    this.timeoutMs = timeoutMs;
+    this.timer = null;
     this.responded = false;
     this.closed = false;
     this.endedAt = null;
@@ -166,6 +171,10 @@ export class StreamUpload {
       agent: false,
     });
     this.done = new Promise((resolve) => {
+      this.settle = (result) => {
+        clearTimeout(this.timer);
+        resolve(result);
+      };
       this.req.on('response', (res) => {
         this.responded = true;
         const chunks = [];
@@ -173,16 +182,29 @@ export class StreamUpload {
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8');
           this.closed = true;
-          resolve({ status: res.statusCode, headers: res.headers, text, json: tryJson(text), endedAt: this.endedAt, doneAt: performance.now(), error: null });
+          this.settle({ status: res.statusCode, headers: res.headers, text, json: tryJson(text), endedAt: this.endedAt, doneAt: performance.now(), error: null });
         });
-        res.on('error', (err) => resolve({ status: res.statusCode, headers: res.headers, text: '', json: undefined, endedAt: this.endedAt, doneAt: performance.now(), error: err }));
+        res.on('error', (err) => this.settle({ status: res.statusCode, headers: res.headers, text: '', json: undefined, endedAt: this.endedAt, doneAt: performance.now(), error: err }));
       });
       this.req.on('error', (err) => {
         this.closed = true;
-        if (!this.responded) resolve({ status: null, headers: {}, text: '', json: undefined, endedAt: this.endedAt, doneAt: performance.now(), error: err });
+        if (!this.responded) this.settle({ status: null, headers: {}, text: '', json: undefined, endedAt: this.endedAt, doneAt: performance.now(), error: err });
       });
     });
+    this.arm();
     this.req.flushHeaders();
+  }
+
+  /** (Re)starts the inactivity timeout. */
+  arm() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      const err = new Error(`POST ${this.path}: no answer within ${this.timeoutMs} ms of the last write`);
+      this.closed = true;
+      this.req.destroy(err);
+      this.settle({ status: null, headers: {}, text: '', json: undefined, endedAt: this.endedAt, doneAt: performance.now(), error: err });
+    }, this.timeoutMs);
+    this.timer.unref();
   }
 
   /** Writes one chunk unless the host already answered or the socket closed. */
@@ -191,6 +213,7 @@ export class StreamUpload {
     if (buf.length === 0) return true; // a zero-length chunk would end the body
     this.bytesWritten += buf.length;
     this.req.write(buf);
+    this.arm();
     return true;
   }
 
@@ -208,7 +231,10 @@ export class StreamUpload {
 
   /** Ends the body (the terminating zero chunk) and records when. */
   end() {
-    if (this.endedAt === null) this.endedAt = performance.now();
+    if (this.endedAt === null) {
+      this.endedAt = performance.now();
+      if (!this.closed) this.arm();
+    }
     if (!this.req.destroyed) this.req.end();
     return this.done;
   }

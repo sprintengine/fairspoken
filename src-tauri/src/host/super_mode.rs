@@ -83,6 +83,18 @@ impl SuperModeState {
             ..Self::default()
         }
     }
+
+    /// Some worker has a Whisper (`true`) or Parakeet (`false`) engine loaded.
+    fn engine_loaded(&self, whisper: bool) -> bool {
+        self.slots.iter().any(|slot| {
+            slot.engine.is_some() && slot.model.is_some_and(|m| m.is_whisper() == whisper)
+        })
+    }
+
+    /// Both engines are loaded somewhere, so super mode can run at all.
+    fn both_engines_loaded(&self) -> bool {
+        self.engine_loaded(true) && self.engine_loaded(false)
+    }
 }
 
 /// What the host decided for one dictation when it started.
@@ -141,12 +153,7 @@ impl HostMetrics {
         if policy == SuperModePolicy::Off {
             return SuperModeRequest::Refused(SuperModeStatus::Off);
         }
-        let loaded = |whisper: bool| {
-            self.super_mode.slots.iter().any(|slot| {
-                slot.engine.is_some() && slot.model.is_some_and(|m| m.is_whisper() == whisper)
-            })
-        };
-        if !(loaded(true) && loaded(false)) {
+        if !self.super_mode.both_engines_loaded() {
             self.super_mode.unavailable += 1;
             return SuperModeRequest::Refused(SuperModeStatus::Unavailable);
         }
@@ -177,14 +184,9 @@ impl HostMetrics {
     }
 
     pub(super) fn super_mode_stats(&self, policy: SuperModePolicy) -> SuperModeStats {
-        let loaded = |whisper: bool| {
-            self.super_mode.slots.iter().any(|slot| {
-                slot.engine.is_some() && slot.model.is_some_and(|m| m.is_whisper() == whisper)
-            })
-        };
         SuperModeStats {
             policy: policy.as_str(),
-            available: loaded(true) && loaded(false),
+            available: self.super_mode.both_engines_loaded(),
             used: self.super_mode.used,
             shed: self.super_mode.shed,
             unavailable: self.super_mode.unavailable,
@@ -270,9 +272,11 @@ pub(super) fn lend_partner(
                 .is_some_and(|model| model.is_whisper() != own_model.is_whisper())
     })?;
     let slot = &mut guard.super_mode.slots[partner];
-    slot.lent = true;
+    // Mark it lent only once nothing below can bail out, or a slot missing
+    // its model would stay lent (taking no jobs) with no lease to return it.
     let partner_model = slot.model?;
     let partner_engine = slot.engine.clone()?;
+    slot.lent = true;
     let engines = if own_model.is_whisper() {
         SuperModeEngines {
             primary: partner_engine,
@@ -363,7 +367,9 @@ pub(super) fn response_fields(
 mod tests {
     use super::*;
     use crate::host::config::HostRuntimeConfig;
+    #[cfg(feature = "whisper")]
     use crate::host::RunningJobInfo;
+    #[cfg(feature = "whisper")]
     use std::time::Instant;
 
     struct Stub;
@@ -401,6 +407,7 @@ mod tests {
         Arc::new(Stub)
     }
 
+    #[cfg(feature = "whisper")]
     fn busy(metrics: &mut HostMetrics, worker: usize) {
         metrics.start_job(
             worker,

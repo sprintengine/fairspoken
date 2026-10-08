@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./updates.css";
+import { addEvent } from "./events";
 import {
   buttonView,
   CHANNEL_HELP,
@@ -286,5 +287,20 @@ setInterval(() => {
   if (current) lastChecked.textContent = current.state === "disabled" ? "" : lastCheckedText(current, Date.now());
 }, 60_000);
 
-void listen<UpdateStatus>("update-status", (event) => render(event.payload));
-void invoke<UpdateStatus>("get_update_status").then(render);
+// Subscribe before fetching; a late initial response must not overwrite a
+// newer status the backend has already pushed.
+let receivedEvent = false;
+void listen<UpdateStatus>("update-status", (event) => {
+  receivedEvent = true;
+  render(event.payload);
+})
+  .catch(reportStatusError)
+  .then(() => invoke<UpdateStatus>("get_update_status"))
+  .then((status) => {
+    if (!receivedEvent) render(status);
+  })
+  .catch(reportStatusError);
+
+function reportStatusError(error: unknown): void {
+  addEvent("warning", `Update status unavailable: ${error instanceof Error ? error.message : String(error)}`);
+}

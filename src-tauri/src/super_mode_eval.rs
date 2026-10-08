@@ -18,6 +18,9 @@
 //! `say` voice (default Samantha), `FAIRSPOKEN_EVAL_FAST=1` feeds audio as
 //! fast as possible instead of in real time (latency is then meaningless),
 //! `FAIRSPOKEN_EVAL_OUT` writes the per-sentence results as JSON.
+//!
+//! It needs Whisper, so a Parakeet-only build leaves it out.
+#![cfg(feature = "whisper")]
 
 use crate::audio::{AudioFrame, Recording};
 use crate::models::{ModelService, SttModel, WhisperModel};

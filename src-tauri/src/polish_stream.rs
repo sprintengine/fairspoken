@@ -94,6 +94,7 @@ impl PolishStream {
 
     /// True once any pass has produced output for this session, polished or
     /// not — i.e. the stream can describe the transcript.
+    #[cfg(test)]
     pub fn has_output(&self) -> bool {
         !self.sealed.is_empty() || !self.tail.is_empty()
     }

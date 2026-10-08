@@ -365,15 +365,12 @@ impl LocalModels {
                 }
             })
         });
-        let client = Client::builder()
-            .timeout(Duration::from_secs(8))
-            .build()
-            .ok();
+        let client = crate::polish::shared_client().ok();
         let mut metadata_error = None;
         let polish = MODELS.iter().map(|m| {
             let downloads = if refresh {
-                let result = client.as_ref().ok_or_else(|| "Hub client unavailable".to_string()).and_then(|c| {
-                    c.get(format!("https://huggingface.co/api/models/{}", m.repo)).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()).map_err(|e| e.to_string())
+                let result = client.ok_or_else(|| "Hub client unavailable".to_string()).and_then(|c| {
+                    c.get(format!("https://huggingface.co/api/models/{}", m.repo)).timeout(Duration::from_secs(8)).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()).map_err(|e| e.to_string())
                 });
                 match result { Ok(v) => v["downloads"].as_u64(), Err(_) => { metadata_error = Some("Hugging Face is unavailable. Showing the built-in compatible catalog.".into()); None } }
             } else { None };
@@ -743,12 +740,9 @@ impl LocalModels {
         if timeout.is_zero() {
             return Err("no time left".into());
         }
-        let response: serde_json::Value = Client::builder()
-            .no_proxy()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| e.to_string())?
+        let response: serde_json::Value = local_client()?
             .post(format!("{url}/v1/chat/completions"))
+            .timeout(timeout)
             .bearer_auth(&token)
             .json(&serde_json::json!({"messages": messages, "temperature":0, "max_tokens":max_tokens, "chat_template_kwargs":{"enable_thinking":false}}))
             .send()
@@ -829,7 +823,11 @@ impl LocalModels {
         let start = Instant::now();
         // What has a mechanical answer is done first, so the model never sees
         // it and the guards below compare against what it was actually given.
-        let cleaned = crate::transcript_cleanup::tidy(raw, &settings.language);
+        let cleaned = crate::transcript_cleanup::tidy(
+            raw,
+            &settings.language,
+            &crate::vocabulary_packs::capitalised_terms(raw, settings),
+        );
         let cleaned = cleaned.trim();
         if cleaned.is_empty() {
             return PolishDecision::Skipped("nothing but filler noises");
@@ -843,11 +841,7 @@ impl LocalModels {
             let _gate = self.inference.lock().map_err(|e| e.to_string())?;
             let (url, token, adapters) = self.ensure_runtime(&model, &requests, cancel, span)?;
             check_cancel(cancel)?;
-            let client = Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(45))
-                .build()
-                .map_err(|e| e.to_string())?;
+            let client = local_client()?;
             // `polish_vocabulary` retrieves the terms something in the
             // transcript sounds like: the user's own, then the enabled packs'.
             let spelling = crate::vocabulary_packs::polish_vocabulary(cleaned, settings);
@@ -855,32 +849,41 @@ impl LocalModels {
                 PolishPrompt::Tagged(system) => tagged_messages(cleaned, system, layout, &spelling),
                 prompt => polish_messages(cleaned, layout, &spelling, prompt),
             };
-            // Ask the actual tokenizer, so non-Latin scripts cannot overflow a character-based estimate.
-            let rendered: serde_json::Value = client.post(format!("{url}/apply-template")).bearer_auth(&token).json(&serde_json::json!({"messages": messages, "chat_template_kwargs":{"enable_thinking":false}})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|format!("Local template failed: {e}"))?;
-            let prompt = rendered["prompt"]
-                .as_str()
-                .ok_or("Local template returned no prompt")?;
-            let counted: serde_json::Value = client
-                .post(format!("{url}/tokenize"))
-                .bearer_auth(&token)
-                .json(&serde_json::json!({"content":prompt}))
-                .send()
-                .and_then(|r| r.error_for_status())
-                .and_then(|r| r.json())
-                .map_err(|e| e.to_string())?;
-            if let Some(span) = span {
-                span.event("rendered-prompt", serde_json::json!({"prompt":prompt}));
-            }
-            let input_tokens = counted["tokens"]
-                .as_array()
-                .ok_or("Local tokenizer returned no tokens")?
-                .len();
-            let output_budget = input_tokens.max(256);
-            if input_tokens + output_budget + 128 > 8192 {
-                return Err(
-                    "Transcript exceeds local context budget; complete raw text preserved".into(),
-                );
-            }
+            // A pass that plainly fits skips two round trips to the runtime;
+            // a trace keeps them, for the rendered prompt.
+            let output_budget = match span.is_none().then(|| fast_output_budget(&messages, cleaned)).flatten() {
+                Some(budget) => budget,
+                None => {
+                    // Ask the actual tokenizer, so non-Latin scripts cannot overflow a character-based estimate.
+                    let rendered: serde_json::Value = client.post(format!("{url}/apply-template")).timeout(LOCAL_POLISH_TIMEOUT).bearer_auth(&token).json(&serde_json::json!({"messages": messages, "chat_template_kwargs":{"enable_thinking":false}})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|format!("Local template failed: {e}"))?;
+                    let prompt = rendered["prompt"]
+                        .as_str()
+                        .ok_or("Local template returned no prompt")?;
+                    let counted: serde_json::Value = client
+                        .post(format!("{url}/tokenize"))
+                        .timeout(LOCAL_POLISH_TIMEOUT)
+                        .bearer_auth(&token)
+                        .json(&serde_json::json!({"content":prompt}))
+                        .send()
+                        .and_then(|r| r.error_for_status())
+                        .and_then(|r| r.json())
+                        .map_err(|e| e.to_string())?;
+                    if let Some(span) = span {
+                        span.event("rendered-prompt", serde_json::json!({"prompt":prompt}));
+                    }
+                    let input_tokens = counted["tokens"]
+                        .as_array()
+                        .ok_or("Local tokenizer returned no tokens")?
+                        .len();
+                    let output_budget = input_tokens.max(256);
+                    if input_tokens + output_budget + LOCAL_CONTEXT_MARGIN > LOCAL_CONTEXT_TOKENS {
+                        return Err(
+                            "Transcript exceeds local context budget; complete raw text preserved".into(),
+                        );
+                    }
+                    output_budget
+                }
+            };
             // Every pack that asked for an adapter applies here; per-dictation
             // pack selection narrows this list when packs land.
             let packs: Vec<String> = requests.iter().map(|r| r.pack.clone()).collect();
@@ -894,6 +897,7 @@ impl LocalModels {
             }
             let response: serde_json::Value = client
                 .post(format!("{url}/v1/chat/completions"))
+                .timeout(LOCAL_POLISH_TIMEOUT)
                 .bearer_auth(&token)
                 .json(&request)
                 .send()
@@ -1131,6 +1135,44 @@ fn completion_request(
         request["lora"] = lora;
     }
     request
+}
+
+/// The runtime's context window (`--ctx-size`) and the slack kept free in it.
+const LOCAL_CONTEXT_TOKENS: usize = 8192;
+const LOCAL_CONTEXT_MARGIN: usize = 128;
+/// Whole budget for one request to the local runtime.
+const LOCAL_POLISH_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// One client for the loopback runtime, so passes reuse a kept-alive
+/// connection. Proxies are bypassed: the runtime is on 127.0.0.1.
+fn local_client() -> Result<&'static Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<Client, String>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| Client::builder().no_proxy().build().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// The output budget for a pass that fits the context window on a
+/// conservative estimate, so the template and tokenizer round trips can be
+/// skipped; `None` when only the real tokenizer can tell.
+///
+/// A token is at least one byte, so the message bytes plus the chat
+/// template's role markers bound the prompt's tokens. The output is an edit
+/// of `transcript`, which `validate_output` rejects past about twice its
+/// length, so twice its bytes covers every acceptable answer.
+fn fast_output_budget(messages: &serde_json::Value, transcript: &str) -> Option<usize> {
+    /// Role markers and separators per message, and the generation prompt.
+    const TEMPLATE_TOKENS_PER_MESSAGE: usize = 16;
+    const TEMPLATE_TOKENS: usize = 64;
+    let messages = messages.as_array()?;
+    let input = messages
+        .iter()
+        .map(|message| message["content"].as_str().map_or(0, str::len) + TEMPLATE_TOKENS_PER_MESSAGE)
+        .sum::<usize>()
+        + TEMPLATE_TOKENS;
+    let output = (transcript.len() * 2 + 128).max(256);
+    (input + output + LOCAL_CONTEXT_MARGIN <= LOCAL_CONTEXT_TOKENS).then_some(output)
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
@@ -1683,6 +1725,20 @@ mod tests {
         );
     }
     #[test]
+    fn only_a_pass_that_plainly_fits_skips_the_tokenizer() {
+        let short = "we moved it to rail way";
+        let messages = tagged_messages(short, TAGGED_SYSTEM_PROMPT, Layout::default(), &[]);
+        let budget = fast_output_budget(&messages, short).expect("a short pass fits");
+        assert!(budget >= 256 && budget >= short.len() * 2);
+        // The benchmarked prompt with its examples still fits a short pass.
+        let instructed = polish_messages(short, Layout::default(), &[], PolishPrompt::Instructed);
+        assert!(fast_output_budget(&instructed, short).is_some());
+        // A long dictation is left to the real tokenizer.
+        let long = "word ".repeat(1200);
+        let messages = tagged_messages(&long, TAGGED_SYSTEM_PROMPT, Layout::default(), &[]);
+        assert!(fast_output_budget(&messages, &long).is_none());
+    }
+    #[test]
     fn runtime_args_and_requests_carry_adapters_only_when_loaded() {
         let args = server_args(Path::new("/m/model.gguf"), 4242, "tok", &[]);
         let text: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -2078,7 +2134,11 @@ mod tests {
                 Some(&span),
             );
             let metadata = trace.finish(raw, raw, raw, raw);
-            let sent = crate::transcript_cleanup::tidy(raw, &settings.language);
+            let sent = crate::transcript_cleanup::tidy(
+                raw,
+                &settings.language,
+                &crate::vocabulary_packs::capitalised_terms(raw, &settings),
+            );
             assert!(metadata.events.iter().any(|e| e.kind == "polish-request"
                 && e.data["value"]["body"]["messages"]
                     .as_array()

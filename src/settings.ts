@@ -260,6 +260,8 @@ let meterStream: MediaStream | null = null;
 let meterContext: AudioContext | null = null;
 let meterAnimation: number | null = null;
 let meterSessionId = 0;
+// Device and processing the running (or starting) meter was opened with.
+let meterKey: string | null = null;
 
 function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -809,9 +811,25 @@ async function requestModelStatus(): Promise<void> {
   modelDownload.dataset.state = "loading";
   modelDownloadStatus.textContent = "Checking model...";
   modelDownloadBar.style.transform = "scaleX(0.01)";
-  const status = await invoke<ModelStatus>("get_transcription_model_status", {
-    request: { model },
-  });
+  delete modelPrepare.dataset.action;
+  let status: ModelStatus;
+  try {
+    status = await invoke<ModelStatus>("get_transcription_model_status", {
+      request: { model },
+    });
+  } catch (error) {
+    // Never leave Prepare disabled on "Checking": offer the check again.
+    const message = error instanceof Error ? error.message : String(error);
+    addEvent("warning", message);
+    modelDownload.dataset.state = "error";
+    modelDownloadStatus.textContent = "Couldn't check the model";
+    modelDownloadStatus.title = message;
+    modelDownloadBar.style.transform = "scaleX(0)";
+    modelPrepare.textContent = "Retry";
+    modelPrepare.dataset.action = "check";
+    modelPrepare.disabled = false;
+    return;
+  }
   addEvent(status.cached ? "info" : "warning", status.message);
   setModelCacheStatus(status);
 }
@@ -840,6 +858,7 @@ async function beginModelPreload(): Promise<void> {
 
 function handleModelPrepareProgress(event: ModelPrepareProgressEvent): void {
   if (event.model !== modelSelect.value) return;
+  delete modelPrepare.dataset.action;
 
   if (event.error) {
     addEvent("error", event.error);
@@ -1111,10 +1130,15 @@ async function loadAudioDevices(): Promise<void> {
   }
 }
 
+function meterConfig(settings: Settings): string {
+  return JSON.stringify([settings.audioDevice ?? "", settings.echoCancellation, settings.noiseSuppression]);
+}
+
 async function startMeter(): Promise<void> {
   stopMeter();
   const sessionId = ++meterSessionId;
   const settings = readFromForm();
+  meterKey = meterConfig(settings);
 
   try {
     const constraints: MediaTrackConstraints = {
@@ -1158,6 +1182,7 @@ async function startMeter(): Promise<void> {
     await loadAudioDevices();
   } catch {
     if (sessionId === meterSessionId) {
+      meterKey = null;
       addEvent("warning", "Microphone meter could not start");
       inputMeter.style.transform = "scaleX(0)";
     }
@@ -1166,6 +1191,7 @@ async function startMeter(): Promise<void> {
 
 function stopMeter(): void {
   meterSessionId += 1;
+  meterKey = null;
   if (meterAnimation !== null) {
     cancelAnimationFrame(meterAnimation);
     meterAnimation = null;
@@ -1184,8 +1210,12 @@ let meterScreenVisible = false;
 // microphone open and a rAF loop runs every frame. Scope it to when the Settings
 // screen is actually on-screen and the window is visible, so navigating to
 // another screen — or hiding the window — releases the mic and stops the loop.
-function refreshMeter(): void {
+// Reopening the microphone is not free (and briefly drops the level), so a
+// refresh that would reopen the same device with the same processing is a
+// no-op unless `force` asks for a restart (the Refresh microphones button).
+function refreshMeter(force = false): void {
   if (meterScreenVisible && required<HTMLElement>("screen-settings").classList.contains("active") && !document.querySelector<HTMLElement>("[data-settings-page=audio]")?.hidden && document.visibilityState === "visible") {
+    if (!force && meterKey !== null && meterKey === meterConfig(readFromForm())) return;
     void startMeter();
   } else {
     stopMeter();
@@ -1217,7 +1247,7 @@ async function loadSettings(): Promise<void> {
 
 refreshBtn.addEventListener("click", () => {
   void loadAudioDevices();
-  refreshMeter();
+  refreshMeter(true);
 });
 
 locationSeg.onChange((value) => {
@@ -1243,7 +1273,9 @@ modelSelect.addEventListener("change", () => {
 });
 
 modelPrepare.addEventListener("click", () => {
-  void beginModelPreload();
+  // After a failed status check, Retry checks again rather than downloading.
+  if (modelPrepare.dataset.action === "check") void requestModelStatus().catch(reportAsyncError);
+  else void beginModelPreload();
 });
 remoteTest.addEventListener("click", () => {
   void testRemoteHost(remoteStatus, remoteTest, "Remote host");

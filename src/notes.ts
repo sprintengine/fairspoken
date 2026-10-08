@@ -310,12 +310,22 @@ async function copy(note: Note, button: HTMLButtonElement): Promise<void> {
   }
 }
 
+// Filtering is debounced and only rebuilds the list, unless the open note no
+// longer matches: then the first match (or nothing) opens in its place.
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 searchInput?.addEventListener("input", () => {
-  query = searchInput.value;
-  if (!notes.some((note) => note.id === selectedId)) {
-    selectedId = visibleNotes()[0]?.id ?? null;
-  }
-  render();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    query = searchInput.value;
+    const shown = visibleNotes();
+    if (shown.some((note) => note.id === selectedId)) {
+      renderList();
+      return;
+    }
+    selectedId = shown[0]?.id ?? null;
+    metadataId = null;
+    render();
+  }, 120);
 });
 
 // A finished dictation is auto-saved as a note; refresh, but don't clobber an

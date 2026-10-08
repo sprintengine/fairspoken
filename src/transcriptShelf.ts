@@ -2,6 +2,7 @@ import "./appearance"; // the shelf follows the app's light or dark choice
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { addEvent } from "./events";
 
 interface TranscriptPreviewEvent {
   text: string;
@@ -49,6 +50,11 @@ function required<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`Missing #${id}`);
   return node as T;
+}
+
+// Failures land in the Activity feed; the shelf itself stays as it was.
+function reportError(error: unknown): void {
+  addEvent("warning", error instanceof Error ? error.message : String(error));
 }
 
 async function loadTranscriptHistory(): Promise<void> {
@@ -108,7 +114,7 @@ function buildTranscriptClip(item: TranscriptHistoryItem): HTMLElement {
       suppressClipClick = false;
       return;
     }
-    void copyTranscriptItem(item.id);
+    void copyTranscriptItem(item.id).catch(reportError);
   });
 
   const foot = document.createElement("div");
@@ -136,7 +142,7 @@ function buildTranscriptClip(item: TranscriptHistoryItem): HTMLElement {
     copyOriginal.title = "Copy the transcript as dictated, before AI polish";
     copyOriginal.addEventListener("click", (event) => {
       event.stopPropagation();
-      void invoke("copy_original_transcript", { id: item.id });
+      void invoke("copy_original_transcript", { id: item.id }).catch(reportError);
     });
     foot.append(copyOriginal);
   }
@@ -171,7 +177,7 @@ function buildTranscriptClip(item: TranscriptHistoryItem): HTMLElement {
   closeButton.title = "Delete";
   closeButton.textContent = "✕";
   closeButton.addEventListener("click", () => {
-    void deleteTranscriptItem(item.id);
+    deleteTranscriptItem(item.id);
   });
 
   clip.append(content, closeButton);
@@ -202,12 +208,19 @@ async function copyTranscriptItem(id: string): Promise<void> {
   await hideShelf();
 }
 
-async function deleteTranscriptItem(id: string): Promise<void> {
+function deleteTranscriptItem(id: string): void {
   const clip = transcriptShelf.querySelector<HTMLElement>(`.transcript-clip[data-id="${CSS.escape(id)}"]`);
   clip?.setAttribute("data-removing", "true");
 
   window.setTimeout(async () => {
-    await invoke("delete_transcript_history_item", { id });
+    try {
+      await invoke("delete_transcript_history_item", { id });
+    } catch (error) {
+      // The clip is still there: bring it back rather than leave it faded out.
+      clip?.removeAttribute("data-removing");
+      reportError(error);
+      return;
+    }
     transcriptHistory = transcriptHistory.filter((item) => item.id !== id);
     expandedTranscriptIds.delete(id);
     if (copiedTranscriptId === id) {
@@ -326,7 +339,7 @@ function openContextMenu(x: number, y: number): void {
   hideItem.setAttribute("role", "menuitem");
   hideItem.textContent = "Hide";
   hideItem.addEventListener("click", () => {
-    void hideShelf();
+    void hideShelf().catch(reportError);
   });
 
   menu.append(hideItem);
@@ -392,24 +405,29 @@ void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
   if (shelfVisible) {
     showLiveTranscript(event.payload.text);
   }
-});
+}).catch(reportError);
 
 // A finished transcript is recorded into the stack in the background; it does
 // not pop the stack open.
 void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event) => {
   resetLiveTranscript();
   addOrReplaceTranscriptItem(event.payload.item);
-});
+}).catch(reportError);
 
 // The only thing that opens the stack: a summon from the pill (click or
 // shortcut). Toggling again dismisses it.
 void listen("transcript-shelf-toggle", async () => {
-  if (shelfVisible) {
-    await hideShelf();
-    return;
+  try {
+    if (shelfVisible) {
+      await hideShelf();
+      return;
+    }
+    // A stale list is better than no shelf: show it even if the reload fails.
+    await loadTranscriptHistory().catch(reportError);
+    await showShelf();
+  } catch (error) {
+    reportError(error);
   }
-  await loadTranscriptHistory();
-  await showShelf();
-});
+}).catch(reportError);
 
-void loadTranscriptHistory();
+void loadTranscriptHistory().catch(reportError);

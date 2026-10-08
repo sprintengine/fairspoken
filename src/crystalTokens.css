@@ -18,15 +18,16 @@
   --crystal-hairline: rgba(16, 24, 32, 0.09);
   --crystal-ink: #15191d;
   --crystal-ink-2: #5b6670;
-  --crystal-ink-3: #8a949c;
-  /* Client accent: green, used sparingly. */
-  --crystal-accent: #2e8b5e;
-  --crystal-accent-hover: #26774f;
+  --crystal-ink-3: #6b7680;
+  /* Client accent: green, used sparingly. Dark enough for white button text
+     and for accent-coloured text to clear 4.5:1 on the page. */
+  --crystal-accent: #277a52;
+  --crystal-accent-hover: #216a47;
   --crystal-tint: rgba(46, 139, 94, 0.07);
   --crystal-tint-strong: rgba(46, 139, 94, 0.13);
   --crystal-wash: rgba(46, 139, 94, 0.075);
   /* Status: functional, never decorative. */
-  --crystal-ok: #2e8b5e;
+  --crystal-ok: #277a52;
   --crystal-warn: #9a6b12;
   --crystal-error: #b4283c;
   --crystal-live: #d9483b;
@@ -36,8 +37,15 @@
   --crystal-fill-active: rgba(16, 24, 32, 0.075);
   --crystal-chip: #ffffff;
   --crystal-track: rgba(16, 24, 32, 0.12);
+  /* Popovers, tooltips and listboxes: denser than a card so what scrolls
+     beneath them never reads through. */
+  --crystal-surface-overlay: rgba(255, 255, 255, 0.9);
   --crystal-shadow: 0 8px 24px rgba(16, 24, 32, 0.06);
   --crystal-shadow-float: 0 12px 32px rgba(16, 24, 32, 0.12), 0 2px 6px rgba(16, 24, 32, 0.06);
+  /* Small lifts: a resting control, and a selected chip or segment. */
+  --crystal-shadow-control: 0 1px 2px rgba(16, 24, 32, 0.06);
+  --crystal-shadow-chip: 0 1px 3px rgba(16, 24, 32, 0.12);
+  --crystal-shadow-track: inset 0 0 0 1px rgba(16, 24, 32, 0.04);
 
   --sem-color-text-default: #2b3238;
   --sem-color-text-on-accent: #ffffff;
@@ -68,7 +76,7 @@
   --crystal-hairline: rgba(255, 255, 255, 0.08);
   --crystal-ink: #e8ecef;
   --crystal-ink-2: #9aa4ad;
-  --crystal-ink-3: #6b747c;
+  --crystal-ink-3: #858e96;
   --crystal-accent: #5ccb94;
   --crystal-accent-hover: #74d6a6;
   --crystal-tint: rgba(92, 203, 148, 0.1);
@@ -82,8 +90,12 @@
   --crystal-fill-active: rgba(255, 255, 255, 0.085);
   --crystal-chip: rgba(255, 255, 255, 0.14);
   --crystal-track: rgba(255, 255, 255, 0.14);
+  --crystal-surface-overlay: rgba(28, 32, 37, 0.94);
   --crystal-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   --crystal-shadow-float: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --crystal-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --crystal-shadow-chip: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --crystal-shadow-track: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 
   --sem-color-text-default: #cdd3d8;
   --sem-color-text-on-accent: #0b1a12;
@@ -111,10 +123,12 @@
   [data-mode="light"][data-mode] {
     --crystal-surface: #f8f9fa;
     --crystal-surface-strong: #ffffff;
+    --crystal-surface-overlay: #ffffff;
   }
   [data-mode="dark"][data-mode] {
     --crystal-surface: #181b1f;
     --crystal-surface-strong: #20242a;
+    --crystal-surface-overlay: #20242a;
   }
 }
 
@@ -128,6 +142,8 @@
     linear-gradient(180deg, var(--crystal-page-sheen) 0%, var(--crystal-page) 62%);
   --crystal-radius-card: 20px;
   --crystal-radius-field: 12px;
+  /* A switch thumb stays white on both the track and the accent, in both modes. */
+  --crystal-thumb: #ffffff;
 
   --sem-color-bg-app: var(--crystal-page);
   --sem-color-bg-surface: var(--crystal-surface);

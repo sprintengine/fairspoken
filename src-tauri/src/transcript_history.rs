@@ -128,20 +128,10 @@ impl TranscriptHistoryService {
         self.save()
     }
 
-    pub fn clear(&mut self) -> Result<(), String> {
-        self.items.clear();
-        self.save()
-    }
-
     fn save(&self) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create transcript history directory: {err}"))?;
-        }
-
-        let payload = serde_json::to_string_pretty(&self.items)
+        let payload = serde_json::to_vec(&self.items)
             .map_err(|err| format!("Failed to serialize transcript history: {err}"))?;
-        fs::write(&self.path, payload)
+        crate::app_dirs::write_atomic(&self.path, &payload)
             .map_err(|err| format!("Failed to write transcript history: {err}"))
     }
 }

@@ -48,7 +48,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     assert.equal(await canonical(), 'Hello Sam, please send the draft.');
     assert(await page.locator('mark').count() >= 2, 'separate edits are highlighted independently');
     assert(await page.locator('del').count() > 0, 'removed words remain briefly struck through');
-    assert.equal(await page.locator('#previewAnnouncement').textContent(), 'Hello Sam, please send the draft.');
+    // The live region announces once the text settles, not on every chunk.
+    await page.waitForFunction(() => document.getElementById('previewAnnouncement').textContent === 'Hello Sam, please send the draft.');
     await emit(base);
     assert.equal(await canonical(), 'Hello Sam, please send the draft.', 'late raw revision cannot undo polish');
     await emit({ ...base, revision: 2, text: base.text + ' tomorrow' });

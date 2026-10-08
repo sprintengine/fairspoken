@@ -68,7 +68,7 @@ train-pack export-pack load-check eval`. Artefacts go to `$FAIRSPOKEN_TRAIN`
 | export-base | adapter → PEFT → merge in HF layout → `convert_hf_to_gguf.py` → `llama-quantize Q8_0` | minutes, ~3 GB |
 | train-pack | `configs/pack-ie-general-practice.yaml` on the merged model | ~20-30 min (estimate), same cap |
 | export-pack | `convert_lora_to_gguf.py` → `ie-general-practice.lora.gguf` + manifest | seconds |
-| load-check | starts the app's llama-server with `--lora … --lora-init-without-apply`, lists `/lora-adapters`, polishes once without and once with the adapter | 1-2 GB |
+| load-check | starts the app's llama-server with `--lora … --lora-init-without-apply`, fails unless `/lora-adapters` lists the adapter at scale 0 and a polish with it differs from one without | 1-2 GB |
 | eval | SpeakoFlow Mini (its own raw prompt), any `FAIRSPOKEN_EVAL_INSTRUCTED` GGUFs with the instructed prompt plus tags, and the retrained model with and without the adapter | ~10 min |
 
 Train when the machine is otherwise idle. `train.py` sets MLX's memory and

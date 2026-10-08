@@ -27,8 +27,9 @@ node shared/host-conformance/run.mjs --url http://127.0.0.1:48970 --token secret
 | `--list` | List every check with a one-line description. |
 
 Each check prints `PASS`, `FAIL` (with the reason) or `SKIP` (with what it
-needs). Exit status: `0` all passed or skipped, `1` at least one failure,
-`2` the host could not be reached or rejected the token.
+needs). Exit status: `0` all passed or skipped, `1` at least one failure
+or the host config could not be restored (also `summary.restoreFailed`
+with `--json`), `2` the host could not be reached or rejected the token.
 
 The suite changes host configuration while it runs (`POST /v1/config`
 persists to the host's config file). It records the configuration at the

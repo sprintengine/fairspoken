@@ -29,9 +29,9 @@ public enum HostWireEvent: Sendable {
         }
     }
 
-    func json(at: UInt64) -> JSONValue {
-        let at: (String, JSONValue) = ("at", .int(Int64(at)))
-        func id(_ v: UInt64) -> JSONValue { .int(Int64(v)) }
+    func json(at: UInt64) -> HostJSON {
+        let at: (String, HostJSON) = ("at", .int(Int64(at)))
+        func id(_ v: UInt64) -> HostJSON { .int(Int64(v)) }
         switch self {
         case .streamStarted(let s, let c):
             return .object([at, ("streamId", id(s)), ("client", .optionalString(c))])
@@ -51,7 +51,7 @@ public enum HostWireEvent: Sendable {
         case .workerState(let w, let s, let m):
             return .object([at, ("worker", .int(w)), ("state", .string(s)), ("model", .optionalString(m))])
         case .modelDownload(let m, let s, let p, let e):
-            var fields: [(String, JSONValue)] = [at, ("model", .string(m)), ("stage", .string(s)), ("percentage", .int(p))]
+            var fields: [(String, HostJSON)] = [at, ("model", .string(m)), ("stage", .string(s)), ("percentage", .int(p))]
             if let e { fields.append(("error", .string(e))) }
             return .object(fields)
         case .pairing(let c, let n, let ok):

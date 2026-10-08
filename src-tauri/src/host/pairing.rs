@@ -157,13 +157,10 @@ pub(super) fn generate_token() -> Result<String, String> {
 /// Compares fixed-length digests so neither the content nor the length of
 /// the stored password leaks through timing.
 fn passwords_match(given: &str, expected: &str) -> bool {
-    let given = Sha256::digest(given.as_bytes());
-    let expected = Sha256::digest(expected.as_bytes());
-    given
-        .iter()
-        .zip(expected.iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
+    super::constant_time_eq(
+        &Sha256::digest(given.as_bytes()),
+        &Sha256::digest(expected.as_bytes()),
+    )
 }
 
 /// `name` in `/v1/hello`: `FAIRSPOKEN_HOST_NAME`, else `name` in the host

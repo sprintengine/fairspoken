@@ -2,8 +2,8 @@ import Foundation
 import Network
 import Synchronization
 
-/// `HTTPTransport` over a Network.framework TCP connection.
-final class NWTransport: HTTPTransport, @unchecked Sendable {
+/// `ByteStreamTransport` over a Network.framework TCP connection.
+final class NWTransport: ByteStreamTransport, @unchecked Sendable {
     private let connection: NWConnection
     let peerAddress: String?
     private let closed = Mutex(false)

@@ -13,10 +13,13 @@ export class Context {
     this.slow = !!slow;
     this.transcriptCheck = transcriptCheck !== false;
     this.notes = [];
+    this.cleanupFailures = [];
     this.shared = {};
     this.transcripts = []; // every transcript the host returned, for the leak audit
     this.originalConfig = null;
     this.configDirty = false;
+    this.originalPairingPassword = undefined;
+    this.pairingDirty = false;
     this.nextTag = 1;
     this._speech = null;
   }
@@ -25,13 +28,39 @@ export class Context {
     this.notes.push(message);
   }
 
+  /**
+   * Runs a cleanup step from a `finally` block. A failure is noted instead of
+   * thrown, so it cannot replace the check's own error; call
+   * `assertCleanedUp()` after the try to fail a check that otherwise passed.
+   * Resolves with the step's value, or undefined when it failed.
+   */
+  async cleanup(label, fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = `cleanup failed: ${label}: ${err.message}`;
+      this.cleanupFailures.push(message);
+      this.note(message);
+      return undefined;
+    }
+  }
+
+  assertCleanedUp() {
+    const failures = this.cleanupFailures.splice(0);
+    check(failures.length === 0, () => failures.join('; '));
+  }
+
   async stats() {
     const res = await this.host.get('/v1/stats');
     check(res.status === 200 && res.json, () => `GET /v1/stats: ${describe(res)}`);
     return res.json;
   }
 
-  /** Remembers the live configuration so it can be restored at the end. */
+  /**
+   * Remembers the live configuration so it can be restored at the end. The
+   * pairing password is known when pairing is off (null) or was passed with
+   * --pairing-password; otherwise it is undefined and never restored.
+   */
   async captureConfig() {
     const s = await this.stats();
     this.initialStats = s;
@@ -41,11 +70,13 @@ export class Context {
       useGpu: s.useGpu,
       workerModels: s.workers.map((w) => w.assignedModel),
     };
+    this.originalPairingPassword = s.pairingEnabled === false ? null : s.pairingEnabled === true && this.pairingPassword ? this.pairingPassword : undefined;
   }
 
   /** POST /v1/config, marking the configuration as changed. */
   async postConfig(body, opts) {
     this.configDirty = true;
+    if (body && typeof body === 'object' && 'pairingPassword' in body) this.pairingDirty = true;
     return this.host.post('/v1/config', body, opts);
   }
 
@@ -55,10 +86,16 @@ export class Context {
     return res.json;
   }
 
+  /** Posts the captured configuration back; the pairing password only when the run changed it and it is known. */
   async restoreConfig() {
     if (!this.configDirty || !this.originalConfig) return null;
-    const res = await this.host.post('/v1/config', this.originalConfig);
-    if (res.status === 200) this.configDirty = false;
+    const body = { ...this.originalConfig };
+    if (this.pairingDirty && this.originalPairingPassword !== undefined) body.pairingPassword = this.originalPairingPassword;
+    const res = await this.host.post('/v1/config', body);
+    if (res.status === 200) {
+      this.configDirty = false;
+      if ('pairingPassword' in body) this.pairingDirty = false;
+    }
     return res;
   }
 

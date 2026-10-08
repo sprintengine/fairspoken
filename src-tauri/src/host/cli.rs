@@ -52,6 +52,16 @@ pub(super) enum HostCommand {
     ClearPairingPassword,
 }
 
+impl HostCommand {
+    /// Whether the command reads or writes the host's data directories (the
+    /// config file, models), so legacy directories must be migrated first.
+    /// `--version` is the updater's smoke check on a staged binary and must
+    /// leave everything where it is.
+    pub(super) fn uses_data_dirs(&self) -> bool {
+        !matches!(self, Self::Version | Self::Help)
+    }
+}
+
 fn parse_channel(raw: Option<&str>, flag: &str) -> Result<UpdateChannel, String> {
     let raw = raw.ok_or_else(|| format!("{flag} needs a channel: stable or nightly"))?;
     UpdateChannel::parse(raw).ok_or_else(|| format!("{flag} must be stable or nightly, not {raw}"))
@@ -396,6 +406,23 @@ mod tests {
             parse(&["--set-update-channel=stable"]),
             Ok(HostCommand::SetUpdateChannel(UpdateChannel::Stable))
         );
+    }
+
+    #[test]
+    fn only_commands_that_touch_data_migrate_legacy_dirs() {
+        for args in [&["--version"][..], &["-h"]] {
+            assert!(!parse(args).unwrap().uses_data_dirs(), "{args:?}");
+        }
+        for args in [
+            &[][..],
+            &["--check-update"],
+            &["--update"],
+            &["--set-update-channel", "stable"],
+            &["--set-pairing-password"],
+            &["--clear-pairing-password"],
+        ] {
+            assert!(parse(args).unwrap().uses_data_dirs(), "{args:?}");
+        }
     }
 
     #[test]

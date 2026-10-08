@@ -291,6 +291,21 @@ struct RouterTests {
         await task.value
         await h.shutdown()
     }
+
+    @Test func emptyLinesBeforeARequestAreSkippedUpToTheHeadLimit() async throws {
+        let h = Harness()
+        let (pipe, task) = h.connect()
+        for _ in 0..<100 { pipe.write("\r\n\r\n") }
+        pipe.write("GET /v1/health HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n")
+        #expect(await pipe.waitForOutput(containing: "standalone-host"))
+        // A peer that sends nothing but empty lines is answered 431 and closed.
+        let flood = String(repeating: "\r\n", count: 1_024)
+        for _ in 0...(HTTPHeadParser.maxHeadBytes / flood.utf8.count) { pipe.write(flood) }
+        await task.value
+        #expect(pipe.outputText.contains("HTTP/1.1 431"))
+        #expect(pipe.isClosed)
+        await h.shutdown()
+    }
 }
 
 @Suite("Listener", .serialized)

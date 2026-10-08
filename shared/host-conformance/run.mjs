@@ -149,13 +149,17 @@ async function main() {
 
   out(`host ${args.url}  token ${ctx.token ? 'yes' : 'no'}  pairing password ${ctx.pairingPassword ? 'yes' : 'no'}  speech ${process.platform === 'darwin' ? 'say' : 'synthetic'}  checks ${plan.length}`);
   const results = [];
+  let restoreFailed = null;
   let interrupted = false;
   const onSignal = async () => {
     if (interrupted) process.exit(130);
     interrupted = true;
     console.error('\ninterrupted: restoring host config');
     try {
-      await ctx.restoreConfig();
+      const restored = await ctx.restoreConfig();
+      if (restored && restored.status !== 200) console.error(`WARNING: restoring the host config failed: ${restored.status} ${restored.text}`);
+    } catch (err) {
+      console.error(`WARNING: restoring the host config failed: ${err.message}`);
     } finally {
       process.exit(130);
     }
@@ -168,11 +172,12 @@ async function main() {
       try {
         ctx.audit = await ctx.subscribe();
       } catch (err) {
-        out(`could not open the audit subscriber: ${err.message}`);
+        console.error(`WARNING: could not open the audit subscriber: ${err.message}`);
       }
     }
     for (const c of plan) {
       ctx.notes = [];
+      ctx.cleanupFailures = [];
       const started = performance.now();
       let status;
       let message = '';
@@ -206,22 +211,25 @@ async function main() {
     if (ctx.audit) ctx.audit.close();
     try {
       const restored = await ctx.restoreConfig();
-      if (restored && restored.status !== 200) out(`WARNING: restoring the host config failed: ${restored.status} ${restored.text}`);
+      if (restored && restored.status !== 200) restoreFailed = `${restored.status} ${restored.text}`;
       else if (restored) out('host config restored');
     } catch (err) {
-      out(`WARNING: restoring the host config failed: ${err.message}`);
+      restoreFailed = err.message;
     }
+    // On stderr, so --json output still shows it.
+    if (restoreFailed) console.error(`WARNING: restoring the host config failed: ${restoreFailed}`);
   }
 
   const count = (s) => results.filter((r) => r.status === s).length;
-  const summary = { pass: count('PASS'), fail: count('FAIL'), skip: count('SKIP') };
+  const summary = { pass: count('PASS'), fail: count('FAIL'), skip: count('SKIP'), restoreFailed };
   if (args.json) {
     console.log(JSON.stringify({ url: args.url, results, summary, latenciesMs: ctx.shared.latencies ?? null }, null, 2));
   } else {
     out(`\n${summary.pass} passed, ${summary.fail} failed, ${summary.skip} skipped`);
     for (const r of results.filter((x) => x.status === 'FAIL')) out(`  FAIL ${r.name}: ${r.message}`);
+    if (restoreFailed) out(`  the host config was not restored: ${restoreFailed}`);
   }
-  return summary.fail ? 1 : 0;
+  return summary.fail || restoreFailed ? 1 : 0;
 }
 
 main().then(

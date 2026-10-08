@@ -743,22 +743,28 @@ async function toggleTranscriptStack(): Promise<void> {
 // The idle capsule is nearly invisible; entering the (tiny) pill window
 // expands it to the hover layout with the wordmark, shortcut hint, and gear.
 function wirePillHover(): void {
+  // Native resizes can move the capsule out from under a stationary cursor
+  // without a mouseleave ever firing; reconcile while the hover layout is up,
+  // and only then.
+  let hoverPoll: ReturnType<typeof setInterval> | null = null;
+  const endHover = () => {
+    pillHovering = false;
+    if (hoverPoll !== null) {
+      clearInterval(hoverPoll);
+      hoverPoll = null;
+    }
+    updatePillLayout();
+  };
   document.body.addEventListener("mouseenter", () => {
     pillHovering = true;
-    updatePillLayout();
-  });
-  document.body.addEventListener("mouseleave", () => {
-    pillHovering = false;
-    updatePillLayout();
-  });
-  // Native resizes can move the capsule out from under a stationary cursor
-  // without a mouseleave ever firing; reconcile while the hover layout is up.
-  setInterval(() => {
-    if (pillHovering && !document.body.matches(":hover")) {
-      pillHovering = false;
-      updatePillLayout();
+    if (hoverPoll === null) {
+      hoverPoll = setInterval(() => {
+        if (!document.body.matches(":hover")) endHover();
+      }, 1000);
     }
-  }, 1000);
+    updatePillLayout();
+  });
+  document.body.addEventListener("mouseleave", endHover);
 }
 
 function isMacOS(): boolean {

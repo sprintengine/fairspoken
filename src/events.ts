@@ -37,7 +37,12 @@ export function addEventWithId(id: string, level: EventLevel, message: string): 
     message: normalized,
   });
 
-  localStorage.setItem(EVENT_LOG_KEY, JSON.stringify(events.slice(0, MAX_EVENTS)));
+  try {
+    localStorage.setItem(EVENT_LOG_KEY, JSON.stringify(events.slice(0, MAX_EVENTS)));
+  } catch {
+    // Storage full or unavailable: the console line above is the record.
+    return;
+  }
   window.dispatchEvent(new CustomEvent("fairspoken-events-updated"));
 }
 
@@ -53,7 +58,7 @@ export function readEvents(): AppEvent[] {
 }
 
 export function clearEvents(): void {
-  localStorage.removeItem(EVENT_LOG_KEY);
+  try { localStorage.removeItem(EVENT_LOG_KEY); } catch { /* nothing stored to clear */ }
   window.dispatchEvent(new CustomEvent("fairspoken-events-updated"));
 }
 

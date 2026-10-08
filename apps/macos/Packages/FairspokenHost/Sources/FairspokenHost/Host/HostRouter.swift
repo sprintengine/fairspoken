@@ -114,7 +114,7 @@ public final class HostRouter: Sendable {
 
     private func events(_ request: HTTPServerRequest) async {
         let subscription: EventSubscription
-        let snapshot: JSONValue
+        let snapshot: HostJSON
         do {
             (subscription, snapshot) = try runtime.subscribe()
         } catch {
@@ -204,7 +204,7 @@ public final class HostRouter: Sendable {
             return
         }
         let client = Self.clientAddress(peer: request.peerAddress, head: request.head)
-        let name: JSONValue = .string(runtime.displayName)
+        let name: HostJSON = .string(runtime.displayName)
         switch runtime.pair(password: parsed.password, clientName: parsed.clientName, client: client) {
         case .paired(let token):
             await request.respondJSON(200, .object([("token", .optionalString(token)), ("name", name)]))
@@ -213,7 +213,7 @@ public final class HostRouter: Sendable {
         case .disabled:
             await request.respondError(404, "pairing disabled")
         case .limited(let seconds):
-            let body: JSONValue = .object([("error", .string("too many attempts")), ("retryAfterSeconds", .int(seconds))])
+            let body: HostJSON = .object([("error", .string("too many attempts")), ("retryAfterSeconds", .int(seconds))])
             await request.respond(status: 429, contentType: "application/json", body: body.bytes, extraHeaders: [("Retry-After", String(seconds))])
         }
     }

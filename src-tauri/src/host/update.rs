@@ -1056,9 +1056,7 @@ impl Updater {
     }
 
     fn lock(&self) -> MutexGuard<'_, UpdateState> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        super::lock_unpoisoned(&self.state)
     }
 
     fn channel(&self) -> (UpdateChannel, ChannelSource) {

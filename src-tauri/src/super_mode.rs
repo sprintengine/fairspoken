@@ -6,9 +6,11 @@
 //! runs first; its text picks the dictionary terms for a targeted Whisper
 //! prompt; Whisper then decodes the same audio on its own thread. While the
 //! user speaks a slow Whisper result is waited for generously. Once the key
-//! is released, Whisper gets `RELEASE_BUDGET` past Parakeet's result for each
-//! remaining chunk, and a chunk it misses keeps Parakeet's text, so super
-//! mode never adds more than that to the wait for text.
+//! is released, the remaining chunks share `RELEASE_BUDGET` of waiting for
+//! Whisper past Parakeet's results, and a chunk it misses keeps Parakeet's
+//! text, so super mode never adds more than that to the wait for text. A
+//! chunk the merge could not change (no dictionary terms, no confidences)
+//! skips Whisper altogether.
 
 use crate::ensemble::{
     self, Disagreement, Hypothesis, MergeConfig, MergeInput, PROMPT_TOKEN_BUDGET,
@@ -23,7 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// After release, how long a chunk waits for Whisper beyond Parakeet's result.
+/// After release, how long all remaining chunks together wait for Whisper
+/// beyond Parakeet's results.
 pub const RELEASE_BUDGET: Duration = Duration::from_millis(300);
 /// While speaking, a chunk waits this long plus half its audio length.
 const SPEAKING_BUDGET_FLOOR: Duration = Duration::from_millis(2500);
@@ -99,6 +102,10 @@ pub struct SuperModeOutcome {
     /// Chunks that kept Parakeet's text because Whisper ran out of time.
     #[serde(default)]
     pub secondary_timeouts: usize,
+    /// Chunks Whisper was not asked for because the merge could not have
+    /// changed them (no dictionary terms and no confidences to weigh).
+    #[serde(default)]
+    pub skipped_chunks: usize,
     #[serde(default)]
     pub secondary_failures: usize,
     #[serde(default)]
@@ -120,6 +127,7 @@ impl SuperModeOutcome {
             chunks: 0,
             merged_chunks: 0,
             secondary_timeouts: 0,
+            skipped_chunks: 0,
             secondary_failures: 0,
             secondary_wins: 0,
             disagreements: Vec::new(),
@@ -132,6 +140,7 @@ impl SuperModeOutcome {
         self.chunks = counts.chunks;
         self.merged_chunks = counts.merged_chunks;
         self.secondary_timeouts = counts.secondary_timeouts;
+        self.skipped_chunks = counts.skipped_chunks;
         self.secondary_failures = counts.secondary_failures;
         self.secondary_wins = counts.secondary_wins;
         self.disagreements = counts.disagreements;
@@ -152,6 +161,7 @@ struct TallyCounts {
     chunks: usize,
     merged_chunks: usize,
     secondary_timeouts: usize,
+    skipped_chunks: usize,
     secondary_failures: usize,
     secondary_wins: usize,
     disagreements: Vec<Disagreement>,
@@ -251,6 +261,8 @@ pub struct EnsembleTranscriber {
     enabled_packs: Vec<String>,
     config: MergeConfig,
     released_at: Mutex<Option<Instant>>,
+    /// What is left of `RELEASE_BUDGET` for the chunks after release.
+    release_budget_left: Mutex<Duration>,
     tally: Arc<SessionTally>,
     trace: Option<crate::note_debug::Trace>,
 }
@@ -319,6 +331,7 @@ impl EnsembleTranscriber {
             enabled_packs: settings.enabled_packs.clone(),
             config: MergeConfig::default(),
             released_at: Mutex::new(None),
+            release_budget_left: Mutex::new(RELEASE_BUDGET),
             tally,
             trace,
         })
@@ -332,25 +345,43 @@ impl EnsembleTranscriber {
         audio_seconds: f32,
     ) -> Option<Result<Hypothesis, String>> {
         let speaking_budget = SPEAKING_BUDGET_FLOOR + Duration::from_secs_f32(audio_seconds * 0.5);
-        loop {
+        // Chunks run one at a time, so the shared budget cannot change
+        // under this wait.
+        let budget_left = *self
+            .release_budget_left
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // When this chunk began waiting on the release budget.
+        let mut waiting_since: Option<Instant> = None;
+        let result = loop {
             let released = *self.released_at.lock().unwrap_or_else(|p| p.into_inner());
             let deadline = match released {
-                Some(released) => released.max(primary_done) + RELEASE_BUDGET,
+                Some(released) => {
+                    *waiting_since.get_or_insert(released.max(primary_done)) + budget_left
+                }
                 None => primary_done + speaking_budget,
             };
             let now = Instant::now();
             if now >= deadline {
-                return None;
+                break None;
             }
             // Wake up regularly: a release shortens the deadline.
             match reply.recv_timeout((deadline - now).min(Duration::from_millis(20))) {
-                Ok(result) => return Some(result),
+                Ok(result) => break Some(result),
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Some(Err("The super mode engine stopped".to_string()))
+                    break Some(Err("The super mode engine stopped".to_string()))
                 }
             }
+        };
+        if let Some(since) = waiting_since {
+            let mut left = self
+                .release_budget_left
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *left = left.saturating_sub(since.elapsed());
         }
+        result
     }
 }
 
@@ -387,6 +418,23 @@ impl ChunkTranscriber for EnsembleTranscriber {
         let primary_done = Instant::now();
         let primary_text = primary.text();
         let dictionary = self.chunk_dictionary(&primary_text);
+        // With no dictionary term to steer towards and no primary confidence
+        // to weigh, every disagreement goes to the primary: Whisper's decode
+        // could not change a word, so it is not run.
+        if dictionary.is_empty() && primary.words.iter().all(|word| word.confidence.is_none()) {
+            self.tally.update(|t| t.skipped_chunks += 1);
+            self.trace_chunk(
+                &primary_text,
+                None,
+                &primary_text,
+                None,
+                &None,
+                started,
+                primary_done,
+                "skipped",
+            );
+            return Ok(primary_text);
+        }
         let prompt = ensemble::targeted_prompt(&primary_text, &dictionary, PROMPT_TOKEN_BUDGET);
 
         let abort = Arc::new(AtomicBool::new(false));
@@ -573,6 +621,11 @@ pub mod power {
         let mut mains_online = false;
         for entry in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
             let path = entry.path();
+            // A wireless mouse or headset battery (scope `Device`) does not
+            // power the machine.
+            if read(path.join("scope")) == "Device" {
+                continue;
+            }
             match read(path.join("type")).as_str() {
                 "Mains" | "USB" => mains_online |= read(path.join("online")) == "1",
                 "Battery" => has_battery = true,
@@ -730,12 +783,22 @@ mod tests {
     fn ensemble_with(
         secondary_delay_ms: u64,
     ) -> (EnsembleTranscriber, Arc<SessionTally>, Prompts) {
+        let (transcriber, tally, prompts, _) =
+            ensemble_for(secondary_delay_ms, &["Grafana", "Kubernetes"]);
+        (transcriber, tally, prompts)
+    }
+
+    fn ensemble_for(
+        secondary_delay_ms: u64,
+        dictionary: &[&str],
+    ) -> (EnsembleTranscriber, Arc<SessionTally>, Prompts, Arc<AtomicUsize>) {
         let (primary, _) = engine("Deploy it on cooper netties, then restart.", 0);
         let (secondary, prompts) =
             engine("Deploy it on Kubernetes then restart.", secondary_delay_ms);
+        let secondary_calls = Arc::clone(&secondary.calls);
         let tally = Arc::new(SessionTally::default());
         let settings = Settings {
-            vocabulary_hints: vec!["Grafana".into(), "Kubernetes".into()],
+            vocabulary_hints: dictionary.iter().map(|term| term.to_string()).collect(),
             ..Settings::default()
         };
         let transcriber = EnsembleTranscriber::start(
@@ -749,7 +812,7 @@ mod tests {
             None,
         )
         .unwrap();
-        (transcriber, tally, prompts)
+        (transcriber, tally, prompts, secondary_calls)
     }
 
     fn speech() -> Vec<i16> {
@@ -798,6 +861,43 @@ mod tests {
         let mut outcome = SuperModeOutcome::new(SuperModeStatus::Used, None, None);
         outcome.absorb(&tally);
         assert_eq!(outcome.secondary_timeouts, 1);
+    }
+
+    #[test]
+    fn chunks_after_release_share_one_release_budget() {
+        let (transcriber, tally, _) = ensemble_with(2_000);
+        transcriber.on_release();
+        let started = Instant::now();
+        for _ in 0..3 {
+            let text = transcriber
+                .transcribe_pcm(&speech(), 16_000, "en", None)
+                .unwrap();
+            assert_eq!(text, "Deploy it on cooper netties, then restart.");
+        }
+        // Three late chunks wait one budget in total, not one each.
+        let waited = started.elapsed();
+        assert!(
+            waited < RELEASE_BUDGET + Duration::from_millis(250),
+            "{waited:?}"
+        );
+        let mut outcome = SuperModeOutcome::new(SuperModeStatus::Used, None, None);
+        outcome.absorb(&tally);
+        assert_eq!(outcome.secondary_timeouts, 3);
+    }
+
+    #[test]
+    fn a_chunk_the_merge_cannot_change_skips_whisper() {
+        let (transcriber, tally, _, secondary_calls) = ensemble_for(0, &[]);
+        let text = transcriber
+            .transcribe_pcm(&speech(), 16_000, "en", None)
+            .unwrap();
+        assert_eq!(text, "Deploy it on cooper netties, then restart.");
+        // Give a wrongly dispatched job time to reach the engine.
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(secondary_calls.load(Ordering::SeqCst), 0);
+        let mut outcome = SuperModeOutcome::new(SuperModeStatus::Used, None, None);
+        outcome.absorb(&tally);
+        assert_eq!((outcome.chunks, outcome.skipped_chunks), (0, 1));
     }
 
     #[test]

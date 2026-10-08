@@ -71,6 +71,7 @@ import {
   releasesRepoFromEndpoint,
   sourceShaFromBody,
   SPARKLE_APPS,
+  tagChannel,
   unsignedMacApps,
   utcDateStamp,
 } from './release-lib.mjs'
@@ -165,14 +166,6 @@ function latestRelease(releases, predicate) {
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0] ?? null
 }
 
-const isTrain = (train) => (raw) => {
-  try {
-    return channelForVersion(raw) === train
-  } catch {
-    return false
-  }
-}
-
 // Every entry point, and what it builds:
 //
 //   push of a tag vX.Y.Z      that commit, as stable vX.Y.Z (the hotfix route)
@@ -206,7 +199,7 @@ async function resolve() {
   const source = await github(`/repos/${sourceRepo}`, sourceToken)
   const releases = await listReleases(sourceToken)
   const stable = latestStable(releases)
-  const lastStableRelease = latestRelease(releases, isTrain('stable'))
+  const lastStableRelease = latestRelease(releases, (raw) => tagChannel(raw) === 'stable')
   const date = utcDateStamp(now.toISOString())
 
   let version
