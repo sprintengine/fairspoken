@@ -95,3 +95,13 @@ whisper = ["dep:whisper-rs"]
 # vendor-neutral option. Both imply the whisper feature.
 cuda = ["whisper", "whisper-rs/cuda"]
 vulkan = ["whisper", "whisper-rs/vulkan"]
+
+[patch.crates-io]
+# tiny_http 0.12.0 (MIT OR Apache-2.0) with one patch, in
+# vendor/tiny_http/src/util/equal_reader.rs: an unread request body is
+# drained through a fixed 8 KiB buffer (up to 16 MiB) instead of a buffer of
+# whatever length the client claimed, which let one unauthenticated request
+# with a huge Content-Length crash or abort the transcription host. Only
+# src/, Cargo.toml, the licences and the README were copied. Drop this once
+# upstream drains without allocating the claimed length.
+tiny_http = { path = "vendor/tiny_http" }

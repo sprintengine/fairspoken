@@ -37,6 +37,9 @@ pub(super) struct HostAuth {
     pub(super) saved_token: Option<String>,
     pub(super) pairing_password: Option<String>,
     pub(super) saved_pairing_password: Option<String>,
+    /// `pairing_password` came from `FAIRSPOKEN_HOST_PAIRING_PASSWORD`, so
+    /// `POST /v1/config` may not change it: the env var wins at every start.
+    pub(super) pairing_password_from_env: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +84,7 @@ impl HostAuth {
         let mut auth = Self {
             token: non_blank(env_token).or_else(|| saved_token.clone()),
             saved_token,
+            pairing_password_from_env: env_password.is_some(),
             pairing_password: env_password.or_else(|| saved_pairing_password.clone()),
             saved_pairing_password,
         };
@@ -100,6 +104,14 @@ impl HostAuth {
         self.mode() == AuthMode::Password
     }
 
+    /// `/v1/stats` `pairingPasswordSource`: where the effective password
+    /// comes from, `None` without one.
+    pub(super) fn pairing_password_source(&self) -> Option<&'static str> {
+        self.pairing_password
+            .as_ref()
+            .map(|_| if self.pairing_password_from_env { "env" } else { "saved" })
+    }
+
     /// Sets (or with `None` clears) the pairing password, as
     /// `POST /v1/config` and `--set-pairing-password` do. Returns whether a
     /// token had to be generated. The password must already be validated.
@@ -111,6 +123,7 @@ impl HostAuth {
         let mut next = self.clone();
         next.pairing_password = password.clone();
         next.saved_pairing_password = password;
+        next.pairing_password_from_env = false;
         let generated = next.ensure_token_for_pairing()?;
         *self = next;
         Ok(generated)
@@ -390,6 +403,7 @@ mod tests {
             auth.saved_pairing_password.as_deref(),
             Some("file-password")
         );
+        assert_eq!(auth.pairing_password_source(), Some("env"));
 
         let (from_file, _) = HostAuth::resolve(
             None,
@@ -400,6 +414,8 @@ mod tests {
         .unwrap();
         assert_eq!(from_file.token.as_deref(), Some("file-token"));
         assert_eq!(from_file.pairing_password.as_deref(), Some("file-password"));
+        assert_eq!(from_file.pairing_password_source(), Some("saved"));
+        assert_eq!(HostAuth::default().pairing_password_source(), None);
     }
 
     #[test]

@@ -306,6 +306,18 @@ pub(super) fn lend_partner(
     ))
 }
 
+/// Blocks a worker while it is lent to another worker's job, in
+/// `LENT_POLL` steps, so it never starts a job of its own on an engine the
+/// borrower is using.
+pub(super) fn wait_until_returned(metrics: &Arc<Mutex<HostMetrics>>, worker: usize) {
+    while metrics
+        .lock()
+        .is_ok_and(|metrics| metrics.worker_lent(worker))
+    {
+        std::thread::sleep(LENT_POLL);
+    }
+}
+
 /// How a granted job ended, and the primary (Parakeet) model the response
 /// names when both engines ran.
 pub(super) struct SuperJobEnd {
@@ -538,6 +550,27 @@ mod tests {
         let m = metrics.lock().unwrap();
         assert!(!m.worker_lent(0));
         assert_eq!(m.super_mode_stats(SuperModePolicy::Allow).used, 1);
+    }
+
+    #[test]
+    fn a_lent_worker_waits_for_its_lease_to_end() {
+        let metrics = Arc::new(Mutex::new(metrics(2)));
+        wait_until_returned(&metrics, 0);
+        metrics.lock().unwrap().super_mode.slots[0].lent = true;
+        let lease = PartnerLease {
+            metrics: Arc::clone(&metrics),
+            worker: 0,
+            primary_model: SttModel::Parakeet,
+        };
+        let returned = std::thread::spawn(move || {
+            std::thread::sleep(LENT_POLL * 3);
+            drop(lease);
+            Instant::now()
+        });
+        wait_until_returned(&metrics, 0);
+        let done = Instant::now();
+        assert!(done >= returned.join().unwrap());
+        assert!(!metrics.lock().unwrap().worker_lent(0));
     }
 
     #[test]
