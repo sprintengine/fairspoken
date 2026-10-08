@@ -139,28 +139,50 @@ pub fn maybe_polish(
     raw: &str,
     settings: &Settings,
     target: Option<&PolishTargetApp>,
-    surrounding: Option<&str>,
+    caret_context: Option<&str>,
 ) -> PolishDecision {
-    maybe_polish_traced(raw, settings, target, surrounding, None)
+    maybe_polish_traced(raw, settings, target, None, caret_context, None)
 }
+/// `lead_in` is this dictation's own polished text before `raw` (a streamed
+/// tail's sealed prefix); `caret_context` is the field's text before the
+/// caret, read through Accessibility. Only the latter is screen content.
 pub fn maybe_polish_traced(
     raw: &str,
     settings: &Settings,
     target: Option<&PolishTargetApp>,
-    surrounding: Option<&str>,
+    lead_in: Option<&str>,
+    caret_context: Option<&str>,
     span: Option<&crate::note_debug::Span>,
 ) -> PolishDecision {
+    let surrounding = surrounding_text(settings, lead_in, caret_context);
     let result = maybe_polish_impl(raw, settings, target, surrounding, span);
     if let Some(span) = span {
         span.finish(raw, &result);
     }
     result
 }
+
+/// What the Worker's `surroundingText` carries: the dictation's own lead-in
+/// when there is one — the user's words, already headed off-device with the
+/// rest of the dictation — else the text around the caret, which goes
+/// off-device only when the user opted into BOTH polish and context
+/// awareness (Phase C of context-awareness-ax). One field, as before, so a
+/// Worker that predates the split reads it unchanged.
+fn surrounding_text<'a>(
+    settings: &Settings,
+    lead_in: Option<&'a str>,
+    caret_context: Option<&'a str>,
+) -> Option<&'a str> {
+    let present = |text: &&str| !text.trim().is_empty();
+    lead_in
+        .filter(present)
+        .or_else(|| caret_context.filter(present).filter(|_| settings.context_awareness))
+}
 fn maybe_polish_impl(
     raw_transcript: &str,
     settings: &Settings,
     target_app: Option<&PolishTargetApp>,
-    surrounding_text: Option<&str>,
+    surrounding: Option<&str>,
     span: Option<&crate::note_debug::Span>,
 ) -> PolishDecision {
     if !settings.polish_enabled {
@@ -182,14 +204,6 @@ fn maybe_polish_impl(
     if cloud_url().is_none() {
         return PolishDecision::Skipped("Fairspoken Cloud is not available in this build");
     }
-
-    // Surrounding text goes off-device only when the user opted into BOTH
-    // polish and context awareness (Phase C of context-awareness-ax).
-    let surrounding = if settings.context_awareness {
-        surrounding_text.filter(|text| !text.trim().is_empty())
-    } else {
-        None
-    };
 
     match polish_transcript(
         raw_transcript,
@@ -483,6 +497,23 @@ mod tests {
             ),
             PolishDecision::Skipped("terminal app frontmost")
         ));
+    }
+
+    #[test]
+    fn the_dictations_own_lead_in_is_sent_but_screen_text_needs_consent() {
+        let mut settings = polish_settings();
+        assert!(!settings.context_awareness);
+        // A streamed tail's sealed prefix is the user's own dictation.
+        assert_eq!(
+            surrounding_text(&settings, Some("Book it for Friday."), Some("Dear Sam,")),
+            Some("Book it for Friday.")
+        );
+        // Text read from the field stays on the device without consent.
+        assert_eq!(surrounding_text(&settings, None, Some("Dear Sam,")), None);
+        assert_eq!(surrounding_text(&settings, Some("  "), Some("Dear Sam,")), None);
+        settings.context_awareness = true;
+        assert_eq!(surrounding_text(&settings, Some(""), Some("Dear Sam,")), Some("Dear Sam,"));
+        assert_eq!(surrounding_text(&settings, Some("Okay."), Some("Dear Sam,")), Some("Okay."));
     }
 
     #[test]

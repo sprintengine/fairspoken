@@ -1529,6 +1529,10 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         ),
     );
     let released_at = std::time::Instant::now();
+    // The focused field is read once, now, while the final transcription
+    // runs, rather than in up to three serial reads after it.
+    #[cfg(target_os = "macos")]
+    let focused_read = start_focused_read(&settings);
     let raw_transcription = finish_transcription_raw(app, services, &recording, &settings)?;
     let transcribe_ms = released_at.elapsed().as_millis() as u64;
     let raw_transcript = raw_transcription.text;
@@ -1562,11 +1566,12 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     // the paste-time casing/spacing adjustment. Any failure means "no
     // context" and today's exact behavior.
     #[cfg(target_os = "macos")]
-    let caret_context = if settings.context_awareness {
-        with_ax_timeout(macos_ax::focused_caret_context).flatten()
-    } else {
-        None
-    };
+    let mut focused_read = focused_read
+        .recv_timeout(Duration::from_millis(200))
+        .ok()
+        .flatten();
+    #[cfg(target_os = "macos")]
+    let caret_context = focused_read.as_mut().and_then(|read| read.caret.take());
     #[cfg(not(target_os = "macos"))]
     let caret_context: Option<ax_context::CaretContext> = None;
 
@@ -1583,18 +1588,16 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .ok()
         .and_then(|mut stream| stream.finish_job(cursor_session, &raw_transcript))
         .map(|mut job| {
-            // Mid-dictation the sealed prefix is the right lead-in; with
-            // nothing sealed yet, fall back to the text around the caret.
-            if job.context.is_empty() {
-                job.context = caret_before.unwrap_or_default().to_string();
-                // A pass given this lead-in may differ from the preview pass
-                // that had none, so its output is not reused.
-                if !job.context.is_empty() {
-                    job.reuse = None;
-                }
+            // A pass given the caret text may differ from the preview pass
+            // that had no lead-in, so its output is not reused.
+            if job.context.is_empty() && caret_before.is_some_and(|text| !text.trim().is_empty()) {
+                job.reuse = None;
             }
             job
         });
+    // Mid-dictation the sealed prefix (the job's own context) is the right
+    // lead-in; with nothing sealed yet, the text around the caret stands in.
+    let caret_lead_in = caret_before.filter(|_| tail_job.as_ref().is_some_and(|job| job.context.is_empty()));
     let polish_input = tail_job
         .as_ref()
         .map(|job| job.raw.clone())
@@ -1621,6 +1624,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         Some(job) => run_polish_pass(
             services,
             job,
+            caret_lead_in,
             &settings,
             frontmost_app.as_ref(),
             &services.transcription_cancel_requested,
@@ -1640,6 +1644,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             &raw_transcript,
             &settings,
             frontmost_app.as_ref(),
+            None,
             caret_before,
             final_span.as_ref(),
         ),
@@ -1682,7 +1687,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         // prefix plus this tail. The dictation counts as polished when any
         // pass in the session actually rewrote something, not just this one.
         Some(job) => {
-            let text = pass_text(&decision, job, true);
+            let text = pass_text(&decision, job, caret_lead_in.unwrap_or(&job.context), true);
             services
                 .polish_stream
                 .lock()
@@ -1795,10 +1800,21 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(target_os = "macos")]
     {
         if will_insert_at_cursor && !cursor_preview::is_claimed(cursor_session) {
-            // Read the target field before inserting, so the edit watcher
-            // knows what surrounded the dictation.
-            let watched_field = edit_watch::prepare(&settings);
-            if deliver_transcript_at_cursor(app, &clipboard_text, settings.accessibility_insert) {
+            // The target field as read at release, so the edit watcher knows
+            // what surrounded the dictation. If the user has switched apps
+            // since, it is read again now.
+            let (watched_field, element) = match focused_read {
+                Some(read) if macos_ax::frontmost_pid() == Some(read.pid) => {
+                    (edit_watch::prepared(read.field), read.info)
+                }
+                _ => (edit_watch::prepare(&settings), None),
+            };
+            if deliver_transcript_at_cursor(
+                app,
+                &clipboard_text,
+                settings.accessibility_insert,
+                element,
+            ) {
                 edit_watch::arm(
                     app,
                     watched_field,
@@ -1940,7 +1956,14 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 /// paste — so the user can paste the same dictation into multiple targets.
 /// Returns whether an insertion was made (not verified, like the tiers).
 #[cfg(target_os = "macos")]
-fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_insert: bool) -> bool {
+/// `element` is the insertion facts already read for the focused element, if
+/// any; without them they are read here.
+fn deliver_transcript_at_cursor(
+    app: &AppHandle,
+    text: &str,
+    accessibility_insert: bool,
+    element: Option<insertion::FocusedElementInfo>,
+) -> bool {
     use insertion::InsertionTier;
 
     let our_window_focused = app
@@ -1959,7 +1982,7 @@ fn deliver_transcript_at_cursor(app: &AppHandle, text: &str, accessibility_inser
     let bundle_id = macos_input::frontmost_app().map(|frontmost| frontmost.bundle_id);
     // Without a focused element the tier choice never picks AX insertion.
     let element = if accessibility_insert {
-        with_ax_timeout(macos_ax::focused_element_info).flatten()
+        element.or_else(|| with_ax_timeout(macos_ax::focused_element_info).flatten())
     } else {
         None
     };
@@ -2412,7 +2435,8 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
         .unwrap_or(0);
     hide_cursor_session(&app, cursor_session);
     format_context::end_recording(&services.format_session);
-    services.local_models.unload();
+    // A local polish pass stops at its next token once the cancel flags are
+    // set, so the runtime stays loaded for the next dictation.
     if let Some(handle) = services
         .local_transcription_cancel
         .lock()
@@ -2430,6 +2454,21 @@ fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Res
 /// calls are cross-process IPC and can hang; recording start and paste must
 /// never wait on a wedged app. A timed-out thread is left to finish (or hang)
 /// on its own and its result is dropped.
+#[cfg(target_os = "macos")]
+fn start_focused_read(settings: &Settings) -> mpsc::Receiver<Option<macos_ax::FocusedRead>> {
+    // Asked for only what the commit path will use, as the single reads were.
+    let caret = settings.context_awareness;
+    let field = settings.insert_at_cursor && (settings.learn_from_edits || settings.training_capture);
+    let info = settings.insert_at_cursor && settings.accessibility_insert;
+    let (tx, rx) = mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("ax-focused-read".to_string())
+        .spawn(move || {
+            let _ = tx.send(macos_ax::read_focused(caret, field, info));
+        });
+    rx
+}
+
 #[cfg(target_os = "macos")]
 fn with_ax_timeout<T: Send + 'static>(read: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let (tx, rx) = mpsc::channel();
@@ -2590,22 +2629,30 @@ fn invalidate_previews(services: &AppServices) {
 
 /// Runs one polish pass over a tail, through whichever provider is configured.
 /// The sealed prefix is supplied as surrounding context so the model continues
-/// the sentence instead of re-opening one.
+/// the sentence instead of re-opening one; with nothing sealed, the caret text
+/// (`caret_context`, read only under context awareness) may stand in.
+#[allow(clippy::too_many_arguments)]
 fn run_polish_pass(
     services: &AppServices,
     job: &polish_stream::TailJob,
+    caret_context: Option<&str>,
     settings: &Settings,
     target: Option<&polish::PolishTargetApp>,
     cancel: &AtomicBool,
     span: Option<&note_debug::Span>,
 ) -> polish::PolishDecision {
-    let context = (!job.context.is_empty()).then_some(job.context.as_str());
+    let lead_in = (!job.context.is_empty()).then_some(job.context.as_str());
     if settings.polish_provider == settings::PolishProvider::Local {
-        services
-            .local_models
-            .polish_traced(&job.raw, settings, target, context, cancel, span)
+        services.local_models.polish_traced(
+            &job.raw,
+            settings,
+            target,
+            lead_in.or(caret_context),
+            cancel,
+            span,
+        )
     } else {
-        polish::maybe_polish_traced(&job.raw, settings, target, context, span)
+        polish::maybe_polish_traced(&job.raw, settings, target, lead_in, caret_context, span)
     }
 }
 
@@ -2616,13 +2663,20 @@ fn run_polish_pass(
 ///
 /// A tail is a fragment: it may continue the sealed text mid-sentence and,
 /// until release (`is_final`), may stop mid-sentence too. The model polishes
-/// it as if it were whole, so its edges are repaired here.
-fn pass_text(decision: &polish::PolishDecision, job: &polish_stream::TailJob, is_final: bool) -> String {
+/// it as if it were whole, so its edges are repaired here against `lead_in`
+/// (the sealed prefix, or the caret text when nothing is sealed). The repair
+/// is local, so the caret text never leaves the device for it.
+fn pass_text(
+    decision: &polish::PolishDecision,
+    job: &polish_stream::TailJob,
+    lead_in: &str,
+    is_final: bool,
+) -> String {
     match decision {
         polish::PolishDecision::Polished(outcome) => transcript_cleanup::repair_fragment_edges(
             &job.raw,
             &outcome.text,
-            &job.context,
+            lead_in,
             is_final,
         ),
         _ => job.raw.clone(),
@@ -2716,6 +2770,7 @@ fn start_transcript_preview_forwarder(
                     let result = run_polish_pass(
                         &services,
                         &job,
+                        None,
                         &settings,
                         target.as_ref(),
                         &preview_cancel,
@@ -2728,7 +2783,7 @@ fn start_transcript_preview_forwarder(
                         set_polish_activity(&app, generation, false);
                         break;
                     }
-                    let text = pass_text(&result, &job, false);
+                    let text = pass_text(&result, &job, &job.context, false);
                     let sealed = job.seal;
                     if let Ok(_gate) = services.preview_gate.lock() {
                         if services.preview_generation.load(Ordering::SeqCst) != generation {

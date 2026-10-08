@@ -41,7 +41,7 @@ pub fn flush(app: &AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
-pub use platform::{arm, prepare};
+pub use platform::{arm, prepare, prepared};
 
 /// Whether `phrase`'s words appear, in order, among `text`'s words.
 fn contains_words(text: &str, phrase: &str) -> bool {
@@ -98,8 +98,13 @@ mod platform {
         if !settings.learn_from_edits && !settings.training_capture {
             return None;
         }
-        crate::with_ax_timeout(macos_ax::snapshot_focused_field)
-            .and_then(Result::ok)
+        prepared(crate::with_ax_timeout(macos_ax::snapshot_focused_field).and_then(Result::ok))
+    }
+
+    /// `prepare` for a field the commit path already read
+    /// (`macos_ax::read_focused`, asked only when `prepare` would read).
+    pub fn prepared(field: Option<WatchedField>) -> Option<Prepared> {
+        field
             .filter(|field| categorize(&field.bundle_id) != AppCategory::Terminal)
             .map(Prepared)
     }
