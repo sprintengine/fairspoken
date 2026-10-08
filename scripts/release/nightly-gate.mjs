@@ -11,24 +11,16 @@
 // passes a clock, so every branch is covered offline by nightly-gate.test.mjs.
 // A dispatched nightly skips this gate entirely.
 
-import { channelForVersion, sourceShaFromBody } from './release-lib.mjs'
+import { sourceShaFromBody, tagChannel } from './release-lib.mjs'
 
 export const NIGHTLY_INTERVAL_MS = 6 * 60 * 60 * 1000
-
-function isNightly(release) {
-  try {
-    return channelForVersion(release.tag_name) === 'nightly'
-  } catch {
-    return false
-  }
-}
 
 // The newest published nightly by publish time, not by version: its version is
 // what the next stable would be, and a stable promoted in between resets that.
 export function lastNightly(releases) {
   return (
     releases
-      .filter((release) => !release.draft && release.published_at && isNightly(release))
+      .filter((release) => !release.draft && release.published_at && tagChannel(release.tag_name) === 'nightly')
       .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0] ?? null
   )
 }
