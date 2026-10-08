@@ -455,27 +455,39 @@ pub fn get_format_mappings(services: tauri::State<'_, crate::AppServices>) -> Re
     Ok(services.format_memory.lock().map_err(|e| e.to_string())?.list())
 }
 
+/// Runs a format-memory change off the main thread (it writes the file).
+async fn change_format_memory(
+    app: tauri::AppHandle,
+    change: impl FnOnce(&mut FormatMemory) -> Result<(), String> + Send + 'static,
+) -> Result<Vec<LearnedFormat>, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<crate::AppServices>();
+        let mut memory = services.format_memory.lock().map_err(|e| e.to_string())?;
+        change(&mut memory)?;
+        Ok(memory.list())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Settings: the user sets (or changes) the format for a site or app.
 #[tauri::command]
-pub fn set_format_mapping(
+pub async fn set_format_mapping(
     key: String,
     format: Format,
-    services: tauri::State<'_, crate::AppServices>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<LearnedFormat>, String> {
-    let mut memory = services.format_memory.lock().map_err(|e| e.to_string())?;
-    memory.set_by_user(&key, format)?;
-    Ok(memory.list())
+    change_format_memory(app, move |memory| memory.set_by_user(&key, format)).await
 }
 
 /// Settings: forget a mapping; the rules (or the classifier) decide again.
 #[tauri::command]
-pub fn remove_format_mapping(
+pub async fn remove_format_mapping(
     key: String,
-    services: tauri::State<'_, crate::AppServices>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<LearnedFormat>, String> {
-    let mut memory = services.format_memory.lock().map_err(|e| e.to_string())?;
-    memory.remove(&key)?;
-    Ok(memory.list())
+    change_format_memory(app, move |memory| memory.remove(&key)).await
 }
 
 impl FormatDecision {

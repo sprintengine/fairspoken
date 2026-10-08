@@ -5,14 +5,15 @@
 //!
 //! Privacy invariants:
 //! - reads are local and session-only; nothing is persisted;
-//! - secure fields (`AXSecureTextField`) are never read or descended into;
+//! - secure fields (`AXSecureTextField`, as role or subrole) are never read
+//!   or descended into;
 //! - password managers are skipped entirely by bundle id;
 //! - every entry point is wrapped in a caller-side thread timeout because AX
 //!   calls are cross-process IPC and can hang.
 
 use crate::ax_context::{
-    collect_context_text, extract_candidate_terms, CaretContext, ContextNode, WalkBudget,
-    SECURE_FIELD_ROLE,
+    collect_context_text, extract_candidate_terms, is_secure_role, CaretContext, ContextNode,
+    WalkBudget,
 };
 use core_foundation::base::{CFRange, CFType, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
@@ -31,6 +32,7 @@ extern "C" {
         value: *mut RawCFTypeRef,
     ) -> i32;
     fn AXValueGetValue(value: RawCFTypeRef, value_type: u32, out: *mut c_void) -> bool;
+    fn AXValueCreate(value_type: u32, value: *const c_void) -> RawCFTypeRef;
     fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> i32;
     fn AXUIElementCopyParameterizedAttributeValue(
         element: AXUIElementRef,
@@ -74,7 +76,7 @@ pub fn focused_caret_bounds() -> Option<CaretBounds> {
     unsafe { AXUIElementSetMessagingTimeout(application.element_ref(), 0.1) };
     let focused = AxElement(application.copy_attribute("AXFocusedUIElement")?);
     unsafe { AXUIElementSetMessagingTimeout(focused.element_ref(), 0.1) };
-    if focused.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+    if is_secure_field(&focused) {
         return None;
     }
     let range = focused.copy_attribute("AXSelectedTextRange")?;
@@ -205,6 +207,10 @@ fn focused_element() -> Option<AxElement> {
 impl ContextNode for AxElement {
     fn role(&self) -> Option<String> {
         self.string_attribute("AXRole")
+    }
+
+    fn subrole(&self) -> Option<String> {
+        self.string_attribute("AXSubrole")
     }
 
     fn texts(&self) -> Vec<String> {
@@ -340,7 +346,7 @@ fn browser_url(focused: Option<&AxElement>, window: Option<&AxElement>) -> Optio
         if let Some(url) = web_area_url(&node) {
             return Some(url);
         }
-        if node.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+        if is_secure_field(&node) {
             continue;
         }
         queue.extend(node.children());
@@ -376,15 +382,17 @@ pub fn focus_context() -> Option<crate::format_context::FocusContext> {
     let field = match &focused {
         Some(focused) => {
             let role = focused.role();
-            if role.as_deref() == Some(SECURE_FIELD_ROLE) {
+            let subrole = focused.short_string("AXSubrole");
+            if is_secure_role(role.as_deref(), subrole.as_deref()) {
                 FieldInfo {
                     role,
+                    subrole,
                     ..FieldInfo::default()
                 }
             } else {
                 FieldInfo {
                     role,
-                    subrole: focused.short_string("AXSubrole"),
+                    subrole,
                     role_description: focused.short_string("AXRoleDescription"),
                     placeholder: focused.short_string("AXPlaceholderValue"),
                     description: focused.short_string("AXDescription"),
@@ -464,7 +472,7 @@ fn read_cf_range(value: &CFType) -> Option<CFRange> {
 pub fn focused_element_info() -> Option<crate::insertion::FocusedElementInfo> {
     let focused = focused_element()?;
     let role = focused.role()?;
-    let secure = role == SECURE_FIELD_ROLE;
+    let secure = is_secure_role(Some(&role), focused.subrole().as_deref());
     let mut settable = false;
     let attribute = CFString::new("AXSelectedText");
     let err = unsafe {
@@ -487,7 +495,7 @@ pub fn focused_element_info() -> Option<crate::insertion::FocusedElementInfo> {
 /// was inserted, so the caller may safely fall through to ⌘V.
 pub fn ax_insert_text(text: &str) -> Result<(), i32> {
     let focused = focused_element().ok_or(-1)?;
-    if focused.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+    if is_secure_field(&focused) {
         return Err(-2);
     }
     let attribute = CFString::new("AXSelectedText");
@@ -517,35 +525,99 @@ pub fn focused_caret_context() -> Option<CaretContext> {
     }
 
     let focused = focused_element()?;
-    if focused.role().as_deref() == Some(SECURE_FIELD_ROLE) {
+    if is_secure_field(&focused) {
         return None;
     }
 
-    let value = focused
-        .copy_attribute("AXValue")?
-        .downcast::<CFString>()?
-        .to_string();
     let range = read_cf_range(&focused.copy_attribute("AXSelectedTextRange")?)?;
+    let (mut before_units, after_units) = read_around_selection(&focused, &range)?;
+    // A window that starts inside a surrogate pair: drop the orphaned half.
+    if before_units
+        .first()
+        .is_some_and(|unit| (0xDC00..=0xDFFF).contains(unit))
+    {
+        before_units.remove(0);
+    }
 
-    // AXSelectedTextRange is measured in UTF-16 code units (CFString/NSString
-    // indices); split there, then decode.
-    let utf16: Vec<u16> = value.encode_utf16().collect();
-    let caret = (range.location as usize).min(utf16.len());
-    // An insertion replaces the selection, so "after" starts at selection end.
-    let selection_end = caret.saturating_add(range.length as usize).min(utf16.len());
-
-    let before_full = String::from_utf16_lossy(&utf16[..caret]);
+    let before_full = String::from_utf16_lossy(&before_units);
     let before: String = {
         let chars: Vec<char> = before_full.chars().collect();
         let start = chars.len().saturating_sub(CARET_BEFORE_CHARS);
         chars[start..].iter().collect()
     };
-    let after_char =
-        String::from_utf16_lossy(&utf16[selection_end..(selection_end + 2).min(utf16.len())])
-            .chars()
-            .next();
+    let after_char = String::from_utf16_lossy(&after_units).chars().next();
 
     Some(CaretContext { before, after_char })
+}
+
+/// UTF-16 code units fetched before the caret: `CARET_BEFORE_CHARS` chars
+/// are at most two code units each.
+const CARET_BEFORE_UTF16: usize = CARET_BEFORE_CHARS * 2;
+
+/// The UTF-16 text just before the selection (up to `CARET_BEFORE_UTF16`
+/// units) and the two units just after it. Prefers `AXStringForRange` so only
+/// the window around the caret crosses the process boundary; falls back to a
+/// capped `AXValue` read for elements without the parameterized attribute.
+/// AXSelectedTextRange is measured in UTF-16 code units (CFString/NSString
+/// indices), so the split happens there before decoding.
+fn read_around_selection(element: &AxElement, selection: &CFRange) -> Option<(Vec<u16>, Vec<u16>)> {
+    let caret = selection.location as usize;
+    // An insertion replaces the selection, so "after" starts at selection end.
+    let selection_end = caret.saturating_add(selection.length as usize);
+    if let Some(total) = number_of_characters(element) {
+        let caret = caret.min(total);
+        let selection_end = selection_end.min(total);
+        let start = caret.saturating_sub(CARET_BEFORE_UTF16);
+        let before = string_for_range(element, start, caret - start);
+        let after = string_for_range(element, selection_end, (total - selection_end).min(2));
+        if let (Some(before), Some(after)) = (before, after) {
+            return Some((before.encode_utf16().collect(), after.encode_utf16().collect()));
+        }
+    }
+    let utf16: Vec<u16> = read_capped_value(element)?.encode_utf16().collect();
+    let caret = caret.min(utf16.len());
+    let selection_end = selection_end.min(utf16.len());
+    let after_end = (selection_end + 2).min(utf16.len());
+    Some((
+        utf16[caret.saturating_sub(CARET_BEFORE_UTF16)..caret].to_vec(),
+        utf16[selection_end..after_end].to_vec(),
+    ))
+}
+
+/// `AXStringForRange` over `[location, location + length)` in UTF-16 units.
+fn string_for_range(element: &AxElement, location: usize, length: usize) -> Option<String> {
+    if length == 0 {
+        return Some(String::new());
+    }
+    let range = CFRange {
+        location: location as isize,
+        length: length as isize,
+    };
+    let raw_range = unsafe {
+        AXValueCreate(
+            K_AX_VALUE_TYPE_CFRANGE,
+            &range as *const CFRange as *const c_void,
+        )
+    };
+    if raw_range.is_null() {
+        return None;
+    }
+    let range_value = unsafe { CFType::wrap_under_create_rule(raw_range) };
+    let attribute = CFString::new("AXStringForRange");
+    let mut raw = std::ptr::null();
+    let error = unsafe {
+        AXUIElementCopyParameterizedAttributeValue(
+            element.element_ref(),
+            attribute.as_concrete_TypeRef(),
+            range_value.as_CFTypeRef(),
+            &mut raw,
+        )
+    };
+    if error != 0 || raw.is_null() {
+        return None;
+    }
+    let value = unsafe { CFType::wrap_under_create_rule(raw) };
+    value.downcast::<CFString>().map(|s| s.to_string())
 }
 
 /// Fields longer than this (UTF-16 code units) are not watched for edits:
@@ -631,9 +703,10 @@ pub fn frontmost_pid() -> Option<i32> {
     frontmost_pid_and_bundle().map(|(pid, _)| pid)
 }
 
+/// Secure by role or subrole: `NSSecureTextField` and browser password
+/// inputs report role `AXTextField` with subrole `AXSecureTextField`.
 fn is_secure_field(element: &AxElement) -> bool {
-    element.role().as_deref() == Some(SECURE_FIELD_ROLE)
-        || element.string_attribute("AXSubrole").as_deref() == Some(SECURE_FIELD_ROLE)
+    is_secure_role(element.role().as_deref(), element.subrole().as_deref())
 }
 
 /// `AXValue` as a string, checking `AXNumberOfCharacters` first so a huge
@@ -652,4 +725,14 @@ fn read_capped_value(element: &AxElement) -> Option<String> {
         .downcast::<CFString>()?
         .to_string();
     (value.encode_utf16().count() <= WATCH_VALUE_CAP_UTF16).then_some(value)
+}
+
+/// `AXNumberOfCharacters` (UTF-16 code units), when the element reports it.
+fn number_of_characters(element: &AxElement) -> Option<usize> {
+    use core_foundation::number::CFNumber;
+    element
+        .copy_attribute("AXNumberOfCharacters")
+        .and_then(|value| value.downcast::<CFNumber>())
+        .and_then(|number| number.to_i64())
+        .and_then(|length| usize::try_from(length).ok())
 }

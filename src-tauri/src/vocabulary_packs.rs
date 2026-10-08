@@ -305,6 +305,18 @@ pub fn active_packs(enabled: &[String]) -> Option<Arc<ActivePacks>> {
     Some(built)
 }
 
+/// Parses the bundled packs, builds the drug lexicon (every polish pass
+/// checks it) and the index for `enabled` on a background thread, so neither
+/// the first polish pass nor the first Whisper prompt pays for them.
+pub fn warm_in_background(enabled: Vec<String>) {
+    let _ = std::thread::Builder::new()
+        .name("vocabulary-pack-warmup".to_string())
+        .spawn(move || {
+            drug_lexicon();
+            active_packs(&enabled);
+        });
+}
+
 fn last_active_packs() -> Option<Arc<ActivePacks>> {
     ACTIVE
         .lock()
@@ -350,6 +362,23 @@ pub fn polish_vocabulary(raw: &str, settings: &crate::settings::Settings) -> Vec
         &settings.enabled_packs,
         DEFAULT_RETRIEVAL_LIMIT,
     )
+}
+
+/// The terms whose capitals the model-free cleanup keeps in `text`: the
+/// user's whole dictionary, then the enabled pack terms `text` writes out.
+pub fn capitalised_terms(text: &str, settings: &crate::settings::Settings) -> Vec<String> {
+    let mut terms = settings.vocabulary_hints.clone();
+    if let Some(active) = active_packs(&settings.enabled_packs) {
+        let entries = active.index.entries();
+        terms.extend(
+            active
+                .index
+                .written_in(text)
+                .into_iter()
+                .map(|entry| entries[entry].term.clone()),
+        );
+    }
+    terms
 }
 
 /// Why a polished transcript must not replace `raw`, if it must not. Checks
@@ -433,28 +462,14 @@ fn drug_lexicon() -> &'static DrugLexicon {
 /// Whether `term` is a medicine name (a substance or brand) in the bundled
 /// drug lexicon. Case, spacing, hyphens and accents do not matter. For callers
 /// that must never auto-apply a drug-to-drug mapping (learned corrections).
-#[allow(dead_code)]
 pub fn is_drug_term(term: &str) -> bool {
     drug_lexicon().forms.contains_key(&normalize(term))
 }
 
-/// Every written and accepted form of every medicine in the bundled packs,
-/// for a caller that keeps its own list (`learned::register_drug_lexicon`).
-#[allow(dead_code)]
-pub fn drug_lexicon_terms() -> Vec<String> {
-    bundled_packs()
-        .iter()
-        .flat_map(|pack| &pack.terms)
-        .filter(|term| term.category == Category::Drug)
-        .flat_map(|term| std::iter::once(&term.term).chain(&term.accept))
-        .cloned()
-        .collect()
-}
-
 /// The medicines `text` names exactly, as their canonical terms, in order of
 /// first mention.
-#[allow(dead_code)]
-pub fn drug_terms_in(text: &str) -> Vec<String> {
+#[cfg(test)]
+fn drug_terms_in(text: &str) -> Vec<String> {
     drug_ids_in(text)
         .into_iter()
         .map(|id| drug_lexicon().terms[id].clone())
@@ -938,7 +953,12 @@ mod tests {
             drug_terms_in("Swap atorvastatin for rosuvastatin."),
             vec!["atorvastatin", "rosuvastatin"]
         );
-        let terms = drug_lexicon_terms();
+        let terms: Vec<&String> = bundled_packs()
+            .iter()
+            .flat_map(|pack| &pack.terms)
+            .filter(|term| term.category == Category::Drug)
+            .flat_map(|term| std::iter::once(&term.term).chain(&term.accept))
+            .collect();
         assert!(terms.len() > 4000 && terms.iter().all(|t| is_drug_term(t)));
     }
 

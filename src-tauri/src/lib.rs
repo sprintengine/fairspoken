@@ -611,6 +611,9 @@ fn save_dictionary_inner(update: DictionaryUpdate, services: &AppServices) -> Re
         settings.learn_from_edits = learn;
     }
     if let Some(enabled_packs) = update.enabled_packs {
+        if enabled_packs != settings.enabled_packs {
+            vocabulary_packs::warm_in_background(enabled_packs.clone());
+        }
         settings.enabled_packs = enabled_packs;
     }
     services
@@ -2770,9 +2773,11 @@ fn start_transcript_preview_forwarder(
                 if services.preview_generation.load(Ordering::SeqCst) != generation {
                     break;
                 }
-                let Some((rev, preview)) = pending.take() else {
+                // Woken by the next preview; the timeout only bounds how long
+                // a finished dictation's worker lingers before it sees the
+                // generation move on.
+                let Some((rev, preview)) = pending.wait_take(Duration::from_millis(500)) else {
                     set_polish_activity(&app, generation, false);
-                    thread::sleep(Duration::from_millis(100));
                     continue;
                 };
                 // Seal newly frozen chunks first, then polish the volatile
@@ -3023,6 +3028,13 @@ pub fn run() {
             }
             start_note_retention_sweeper(handle.clone());
             training_capture::start_retention_sweeper(handle.clone());
+            vocabulary_packs::warm_in_background(
+                app.state::<AppServices>()
+                    .settings
+                    .lock()
+                    .map(|service| service.current().enabled_packs)
+                    .unwrap_or_default(),
+            );
             updates::start(handle.clone());
             let _ = open_home_window(handle.clone(), None);
             #[cfg(target_os = "macos")]

@@ -20,7 +20,11 @@ pub fn apply_transcript_post_processing(
     // The model-free cleanup goes first, whether or not a polish pass ran: it
     // is the whole cleanup when polish is off, and a pass that tripped a guard
     // contributes its raw tail.
-    let mut text = crate::transcript_cleanup::tidy(transcript, &settings.language);
+    let mut text = crate::transcript_cleanup::tidy(
+        transcript,
+        &settings.language,
+        &crate::vocabulary_packs::capitalised_terms(transcript, settings),
+    );
     let mut corrections_applied = 0;
     // A scoped (learned) correction only fixes the speech models that made
     // the mishearing; another model may hear that phrase correctly.

@@ -107,11 +107,9 @@ fn classify_with_cloud(
     let url = reqwest::Url::parse(base)
         .and_then(|base| base.join("v1/format"))
         .map_err(|e| format!("invalid cloud URL: {e}"))?;
-    let response = reqwest::blocking::Client::builder()
-        .timeout(timeout)
-        .build()
-        .map_err(|e| e.to_string())?
+    let response = crate::polish::shared_client()?
         .post(url)
+        .timeout(timeout)
         .bearer_auth(token)
         .json(&serde_json::json!({
             "appName": input.app_name,

@@ -20,6 +20,21 @@ pub const POLISH_MAX_CHARS: usize = 4000;
 /// dictation already succeeded; polish may only add a bounded wait.
 const POLISH_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// One HTTP client for the cloud calls on the dictation path (polish, the
+/// format classifier), so each pass reuses a pooled connection instead of
+/// paying a fresh TCP and TLS handshake. Every request sets its own timeout.
+pub fn shared_client() -> Result<&'static Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<Client, String>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .build()
+                .map_err(|err| format!("HTTP client failed: {err}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
 /// Resolve the polish tone for a category from the user's `polish_tones`
 /// setting; missing key = "default".
 pub fn tone_for_category(settings: &Settings, category: AppCategory) -> String {
@@ -278,12 +293,9 @@ fn polish_transcript(
     if let Some(span) = span {
         span.event("polish-request", serde_json::json!({"provider":"cloud","body":request,"prompt":"The cloud service owns its system prompt; it is not available to this client."}));
     }
-    let client = Client::builder()
-        .timeout(POLISH_TIMEOUT)
-        .build()
-        .map_err(|err| format!("polish client failed: {err}"))?;
-    let response = client
+    let response = shared_client()?
         .post(url)
+        .timeout(POLISH_TIMEOUT)
         .headers(headers)
         .json(&request)
         .send()
