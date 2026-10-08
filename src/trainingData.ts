@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
 
 // Settings → Training data: how many dictations are kept and how much disk
 // they use, plus Export… and Delete all. The on/off switch and retention are
@@ -20,12 +22,6 @@ const DELETE_CONFIRM_MS = 4000;
 let deleteArmedUntil = 0;
 let deleteDisarmTimer: ReturnType<typeof setTimeout> | undefined;
 
-function required<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node as T;
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -40,7 +36,7 @@ async function refresh(): Promise<void> {
     exportButton.disabled = count === 0;
     deleteButton.disabled = count === 0;
   } catch (error) {
-    summary.textContent = error instanceof Error ? error.message : String(error);
+    summary.textContent = errorMessage(error);
   }
 }
 
@@ -58,7 +54,7 @@ exportButton.addEventListener("click", async () => {
     const path = await invoke<string>("export_training_data");
     addEvent("info", `Training data exported to ${path}`);
   } catch (error) {
-    addEvent("error", error instanceof Error ? error.message : String(error));
+    addEvent("error", errorMessage(error));
   }
   await refresh();
 });
@@ -77,7 +73,7 @@ deleteButton.addEventListener("click", async () => {
     await invoke("delete_training_data");
     addEvent("info", "Kept dictations deleted");
   } catch (error) {
-    addEvent("error", error instanceof Error ? error.message : String(error));
+    addEvent("error", errorMessage(error));
   }
   await refresh();
 });

@@ -1,0 +1,5 @@
+// People-facing names for the speech model ids in Settings.
+export function speechModelName(model: string): string {
+  if (model === "parakeet-ultra") return "Parakeet Ultra 0.6B";
+  return model.startsWith("parakeet") ? `Parakeet TDT 0.6B ${model.endsWith("-v2") ? "v2 · English" : "v3"}` : `Whisper ${model}`;
+}

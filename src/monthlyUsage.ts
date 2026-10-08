@@ -80,7 +80,10 @@ export function mountMonthlyUsage(root: HTMLElement): (summary: MonthlyUsageSumm
     }
     const buckets = selectMonths(summary.months, range);
     const words = buckets.reduce((sum, bucket) => sum + bucket.words, 0);
-    const period = buckets.length ? `${monthLabel(buckets[0].month)} – ${monthLabel(buckets[buckets.length - 1].month)}` : "All time";
+    // With no dated months yet the range still names the selected choice.
+    const period = buckets.length
+      ? `${monthLabel(buckets[0].month)} – ${monthLabel(buckets[buckets.length - 1].month)}`
+      : range ? `Last ${range} months` : "All time";
     total.textContent = `${words.toLocaleString()} words · ${period}`;
     chart.hidden = summary.totalWords === 0;
     const list = document.createElement("ul");

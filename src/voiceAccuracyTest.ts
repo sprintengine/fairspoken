@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { pickPassage } from "./speedTestPassages";
 import { compareTranscript, type TranscriptComparison } from "./transcriptCompare";
+import { speechModelName } from "./speechModels";
 
 // The voice accuracy test: read a known passage aloud, then see what the real
 // transcription backend actually heard. It answers "did it hear what I said?"
@@ -82,8 +83,10 @@ function secs(value: number): string {
   return `${Math.max(0, value).toFixed(1)} s`;
 }
 
-function engineDisplay(engine: string): string {
-  return engine === "whisper" ? "Whisper" : engine;
+// "Parakeet TDT 0.6B v3", "Whisper small": the model's own name already says
+// which engine runs it.
+function modelDisplay(model: string): string {
+  return speechModelName(model);
 }
 
 function previewModeLabel(mode: PreviewMode): string {
@@ -171,7 +174,7 @@ export function createVoiceAccuracyTest(opts: {
     try {
       const settings = await invoke<VoiceSettings>("get_settings");
       backend = {
-        engine: "whisper",
+        engine: settings.model.startsWith("parakeet") ? "parakeet" : "whisper",
         model: settings.model,
         location: settings.transcriptionLocation,
         previewMode: inferPreviewMode(settings),
@@ -202,7 +205,7 @@ export function createVoiceAccuracyTest(opts: {
       body.push(
         h("div", { class: "vt-source" }, [
           h("span", { class: "k", text: "Backend" }),
-          ` ${engineDisplay(backend.engine)} ${backend.model}`,
+          ` ${modelDisplay(backend.model)}`,
           h("span", { class: "sep", text: "·" }),
           backend.location === "remote-host" ? "remote host" : "local",
         ]),
@@ -363,7 +366,7 @@ export function createVoiceAccuracyTest(opts: {
         ]),
         h("div", { class: "vt-source" }, [
           h("span", { class: "k", text: "Engine" }),
-          ` ${engineDisplay(capture.engine)} ${capture.model}`,
+          ` ${modelDisplay(capture.model)}`,
           h("span", { class: "sep", text: "·" }),
           h("span", { class: "k", text: "Preview" }),
           ` ${previewModeLabel(capture.previewMode)}`,
@@ -444,7 +447,7 @@ export function createVoiceAccuracyTest(opts: {
     state = kind === "mic" ? "micError" : "transcribeError";
     clearTicker();
     const head = kind === "mic" ? "Couldn't start the recording." : "Transcription didn't finish.";
-    const backendNote = backend ? `the ${engineDisplay(backend.engine)} ${backend.model} backend` : "the backend";
+    const backendNote = backend ? `the ${modelDisplay(backend.model)} backend` : "the backend";
     const sub =
       kind === "mic"
         ? `Check your microphone under Settings → Capture, then try again. (${detail})`

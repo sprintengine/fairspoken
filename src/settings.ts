@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { addEvent } from "./events";
 import "./formatMappings";
+import { accelTokens, isMacOS, keyGlyph, keyWord, normalizeShortcut } from "./shortcuts";
+import { speechModelName } from "./speechModels";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
 
 // Parakeet is the default engine; the whisper.cpp ids are only meaningful when
 // the backend was built with the `whisper` Cargo feature.
@@ -263,12 +267,6 @@ let meterSessionId = 0;
 // Device and processing the running (or starting) meter was opened with.
 let meterKey: string | null = null;
 
-function required<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node as T;
-}
-
 // A segmented control is a group of `aria-pressed` buttons carrying the active
 // value in `data-value`; this adapts it to the same value-in/value-out + change
 // contract the form expects from a <select>.
@@ -302,42 +300,8 @@ function segControl(id: string): SegControl {
   return { get, set, onChange: (handler) => handlers.push(handler) };
 }
 
-// Accelerators are stored in the Tauri global-shortcut grammar
-// (e.g. "CommandOrControl+Shift+Digit1"); the chip renders them as keycaps.
+// Accelerators render through the shared helpers in shortcuts.ts.
 const onMac = isMacOS();
-const KEY_GLYPHS: Record<string, string> = {
-  CommandOrControl: onMac ? "⌘" : "Ctrl",
-  Command: "⌘", Cmd: "⌘", Meta: onMac ? "⌘" : "Win", Super: onMac ? "⌘" : "Win",
-  Control: "⌃", Ctrl: "⌃",
-  Alt: onMac ? "⌥" : "Alt", Option: "⌥",
-  Shift: "⇧",
-  ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
-  Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
-  Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`",
-};
-const KEY_WORDS: Record<string, string> = {
-  CommandOrControl: onMac ? "Command" : "Control",
-  Command: "Command", Cmd: "Command", Meta: onMac ? "Command" : "Windows", Super: onMac ? "Command" : "Windows",
-  Control: "Control", Ctrl: "Control",
-  Alt: onMac ? "Option" : "Alt", Option: "Option",
-  Shift: "Shift",
-};
-
-function accelTokens(accelerator: string): string[] {
-  return accelerator.split("+").map((token) => token.trim()).filter(Boolean);
-}
-
-function keyGlyph(token: string): string {
-  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(token);
-  if (digit) return digit[1];
-  return KEY_GLYPHS[token] ?? token;
-}
-
-function keyWord(token: string): string {
-  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(token);
-  if (digit) return digit[1];
-  return KEY_WORDS[token] ?? token;
-}
 
 // Paint the keycaps and keep the chip's accessible name describing the current
 // shortcut and the rebind affordance; `data-shortcut` is the form's value source.
@@ -412,11 +376,6 @@ function normalizeSettings(settings: Partial<Settings>): Settings {
   };
 }
 
-function speechModelName(model: string): string {
-  if (model === "parakeet-ultra") return "Parakeet Ultra 0.6B";
-  return model.startsWith("parakeet") ? `Parakeet TDT 0.6B ${model.endsWith("-v2") ? "v2 · English" : "v3"}` : `Whisper ${model}`;
-}
-
 function applyCloudAvailability(): void {
   const cloudLocation = document.querySelector<HTMLButtonElement>('#locationSeg button[data-value="cloud"]');
   const cloudPolish = polishProviderSelect.querySelector<HTMLOptionElement>('option[value="cloud"]');
@@ -425,6 +384,13 @@ function applyCloudAvailability(): void {
     choice.hidden = !cloudAvailable;
     choice.disabled = !cloudAvailable;
   }
+}
+
+// Typing fields keep what the user is entering when a settings echo (or
+// another window's save) re-applies the form; every other control follows.
+function setField(field: HTMLInputElement | HTMLSelectElement, value: string): void {
+  if (field === document.activeElement) return;
+  field.value = value;
 }
 
 function applyToForm(settings: Settings): void {
@@ -445,11 +411,11 @@ function applyToForm(settings: Settings): void {
       : POLISH_MODEL_NAMES[settings.polishModel] ?? settings.polishModel;
   }
   updateModelSize(settings.model);
-  remoteUrl.value = settings.remoteUrl;
-  remoteAuthToken.value = settings.remoteAuthToken;
-  remoteTimeoutSeconds.value = String(settings.remoteTimeoutSeconds);
-  cloudAuthToken.value = settings.cloudAuthToken;
-  polishCloudAuthToken.value = settings.cloudAuthToken;
+  setField(remoteUrl, settings.remoteUrl);
+  setField(remoteAuthToken, settings.remoteAuthToken);
+  setField(remoteTimeoutSeconds, String(settings.remoteTimeoutSeconds));
+  setField(cloudAuthToken, settings.cloudAuthToken);
+  setField(polishCloudAuthToken, settings.cloudAuthToken);
   polishProviderSelect.value = settings.polishProvider;
   langSelect.value = settings.language;
   audioDeviceSelect.value = settings.audioDevice ?? "";
@@ -475,9 +441,9 @@ function applyToForm(settings: Settings): void {
   polishEnabled.checked = settings.polishEnabled;
   contextAwareness.checked = settings.contextAwareness;
   formatAiDetection.checked = settings.formatAiDetection;
-  polishLocalModelPath.value = settings.polishLocalModelPath;
+  setField(polishLocalModelPath, settings.polishLocalModelPath);
   polishLocalModelPrompt.value = settings.polishLocalModelPrompt;
-  polishLocalAdapters.value = settings.polishLocalAdapters.join(", ");
+  setField(polishLocalAdapters, settings.polishLocalAdapters.join(", "));
   for (const category of POLISH_TONE_CATEGORIES) {
     polishToneSegs[category].set(settings.polishTones[category] ?? "default");
   }
@@ -604,16 +570,6 @@ function cleanSettingText(value: string, maxLength: number): string {
   return value.replace(/\0/g, "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
-function normalizeShortcut(value: string, fallback: string): string {
-  const normalized = value
-    .split("+")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join("+")
-    .slice(0, 80);
-  return normalized || fallback;
-}
-
 function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
   if (event.key === "Escape") return null;
   if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return "";
@@ -736,7 +692,7 @@ function beginShortcutCapture(chip: HTMLButtonElement, label: string): void {
       shortcutStatus.textContent = `${label} shortcut saved: ${accelTokens(shortcut).map(keyWord).join(" + ")}.`;
     }).catch((error) => {
       applyToForm(currentSettings);
-      shortcutStatus.textContent = String(error instanceof Error ? error.message : error);
+      shortcutStatus.textContent = errorMessage(error);
       reportAsyncError(error);
     }).finally(() => {
       shortcutSavePending = false;
@@ -763,7 +719,7 @@ async function persistSettings(): Promise<boolean> {
     showSaveStatus("Saved.");
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     addEvent("error", message);
     applyToForm(currentSettings);
     showSaveStatus(`Could not save: ${message}`, true);
@@ -772,7 +728,7 @@ async function persistSettings(): Promise<boolean> {
 }
 
 function reportAsyncError(error: unknown): void {
-  addEvent("error", error instanceof Error ? error.message : String(error));
+  addEvent("error", errorMessage(error));
 }
 
 function setModelDownloadStatus(status: string, percentage: number): void {
@@ -819,7 +775,7 @@ async function requestModelStatus(): Promise<void> {
     });
   } catch (error) {
     // Never leave Prepare disabled on "Checking": offer the check again.
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     addEvent("warning", message);
     modelDownload.dataset.state = "error";
     modelDownloadStatus.textContent = "Couldn't check the model";
@@ -846,8 +802,8 @@ async function beginModelPreload(): Promise<void> {
       request: { model },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    addEvent("error", error instanceof Error ? error.message : String(error));
+    const message = errorMessage(error);
+    addEvent("error", errorMessage(error));
     modelDownload.dataset.state = "error";
     modelDownloadStatus.textContent = "Download failed";
     modelDownloadStatus.title = message;
@@ -928,7 +884,11 @@ function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
   remoteHostPanel.hidden = location !== "remote-host";
   cloudPanel.hidden = location !== "cloud";
   if (location === "remote-host") {
-    remoteStatus.textContent = currentSettings.remoteUrl ? hostLabel(currentSettings.remoteUrl) : "Not connected";
+    // Keep a status line (e.g. "Connected · …") until the host URL changes.
+    if (currentSettings.remoteUrl !== shownRemoteUrl) {
+      shownRemoteUrl = currentSettings.remoteUrl;
+      remoteStatus.textContent = currentSettings.remoteUrl ? hostLabel(currentSettings.remoteUrl) : "Not connected";
+    }
     // Nothing to connect to yet: open on the list of hosts, not an empty form.
     if (!currentSettings.remoteUrl && !scannedOnce) void findTailnetHosts().catch(reportAsyncError);
   }
@@ -940,6 +900,9 @@ function updateTranscriptionLocationUi(location: TranscriptionLocation): void {
       : "Paste a token to start.";
   }
 }
+
+// The host URL the remote status line currently describes.
+let shownRemoteUrl: string | null = null;
 
 // "https://studio-mac.tail1234.ts.net:7861/" reads as "studio-mac.tail1234.ts.net:7861".
 function hostLabel(url: string): string {
@@ -960,7 +923,7 @@ async function testRemoteHost(statusEl: HTMLElement, buttonEl: HTMLButtonElement
     statusEl.textContent = `${prefix}${health.ok ? `Connected · ${health.mode}` : "Unavailable"}`;
     addEvent(health.ok ? "info" : "warning", `${label} ${health.ok ? "reachable" : "unavailable"}: ${health.backend}`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     statusEl.textContent = `${prefix}Unavailable`;
     addEvent("error", message);
   } finally {
@@ -1037,7 +1000,7 @@ async function findTailnetHosts(): Promise<void> {
       : "None found. Check the host is running, or enter its address.";
   } catch (error) {
     renderTailnetHosts([]);
-    tailnetStatus.textContent = error instanceof Error ? error.message : String(error);
+    tailnetStatus.textContent = errorMessage(error);
   } finally {
     setTailnetBusy(false);
   }
@@ -1056,7 +1019,7 @@ async function checkTypedHost(): Promise<void> {
     renderTailnetHosts([found]);
     tailnetStatus.textContent = "";
   } catch (error) {
-    tailnetStatus.textContent = error instanceof Error ? error.message : String(error);
+    tailnetStatus.textContent = errorMessage(error);
   } finally {
     setTailnetBusy(false);
   }
@@ -1102,7 +1065,7 @@ async function connectHost(host: DiscoveredHost, password: string | null): Promi
     for (const row of tailnetHosts.querySelectorAll<HTMLElement>(".tailnet-host")) row.setAttribute("aria-current", String(row.dataset.url === currentSettings.remoteUrl));
     addEvent("info", `Transcription host set to ${host.name} (${host.url})`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     tailnetStatus.textContent = message;
     if (password !== null) {
       tailnetPassword.select();
@@ -1393,9 +1356,6 @@ fnPushToTalk.addEventListener("change", () => void persistSettings().catch(repor
 
 // Both delivery integrations are macOS-only (CGEvent paste and the Fn event
 // tap); hide rather than disable them elsewhere so the form stays honest.
-function isMacOS(): boolean {
-  return navigator.platform.toLowerCase().includes("mac");
-}
 if (!isMacOS()) {
   insertAtCursorRow.hidden = true;
   insertAtCursorRow.closest<HTMLElement>(".settings-section")?.setAttribute("hidden", "");
@@ -1444,15 +1404,30 @@ void listen<ModelPrepareProgressEvent>("model-prepare-progress", (event) => {
 }).catch(reportAsyncError);
 
 void loadSettings().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  addEvent("error", error instanceof Error ? error.message : String(error));
+  const message = errorMessage(error);
+  addEvent("error", errorMessage(error));
   modelDownload.dataset.state = "error";
   modelDownloadStatus.textContent = "Settings failed to load";
   modelDownloadStatus.title = message;
 });
 
 // Model selection is also owned by the Models dashboard in this window.
+// An echo of this window's own save changes nothing, so it is ignored; any
+// other update re-applies the form without touching the field being typed in.
 void listen<Settings>("settings-updated", (event) => {
-  currentSettings = normalizeSettings(event.payload);
+  const next = normalizeSettings(event.payload);
+  if (sameSettings(next, currentSettings)) return;
+  currentSettings = next;
   applyToForm(currentSettings);
 });
+
+function sameSettings(a: Settings, b: Settings): boolean {
+  return stableJson(a) === stableJson(b);
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]]))
+      : item);
+}

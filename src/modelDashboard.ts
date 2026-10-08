@@ -204,7 +204,7 @@ function render(): void {
   }
   root.querySelector("#polishProvider")!.textContent = !settings.polishEnabled ? "Off" : settings.polishProvider === "local" ? "On this device" : "Fairspoken Cloud";
   const providerActions = root.querySelector("#polishProviderActions")!;
-  providerActions.replaceChildren(button("Off", () => choose({ polishEnabled: false }), !settings.polishEnabled));
+  providerActions.replaceChildren(button("Turn off", () => choose({ polishEnabled: false }), !settings.polishEnabled));
   if (cloudAvailable) providerActions.append(button("Use cloud", () => choose({ polishProvider: "cloud", polishEnabled: true }), !settings.cloudAuthToken || (settings.polishEnabled && settings.polishProvider === "cloud")));
   const polishList = root.querySelector("#polishModels")!; polishList.replaceChildren();
   for (const m of catalog.polish) {

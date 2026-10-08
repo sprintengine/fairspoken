@@ -1,9 +1,12 @@
 import "./appearance"; // the pill follows the app's light or dark choice
 import { replaceShortcuts, type BindingRole, type Bindings } from "./shortcutRegistration";
+import { isMacOS, normalizeShortcut, shortcutHint } from "./shortcuts";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { isRegistered, register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { addEvent, addEventWithId, eventSeverity, type EventLevel } from "./events";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
 
 // "starting" covers the window between the start request and the backend
 // confirming native capture — visible when the model or device is slow.
@@ -20,22 +23,10 @@ interface BackendLogEvent {
   message: string;
 }
 
-interface TranscriptPreviewEvent {
-  sessionId: number;
-  revision: number;
-  polished: boolean;
-  index: number;
-  text: string;
-  finalPreview: boolean;
-}
-
+// The pill only reacts to history events (the polish undo offer); the copied
+// messages themselves are listed by the transcript-shelf window.
 interface TranscriptHistoryItem {
   id: string;
-  createdAt: number;
-  text: string;
-  backend: string;
-  location: string;
-  durationSeconds: number;
   polished?: boolean;
   rawText?: string | null;
 }
@@ -83,9 +74,6 @@ const settingsEventBadge = required<HTMLElement>("settingsEventBadge");
 const pillHint = required<HTMLElement>("pillHint");
 const statusLabel = required<HTMLElement>("statusLabel");
 const timerEl = required<HTMLElement>("timer");
-const liveTranscriptBubble = required<HTMLElement>("liveTranscriptBubble");
-const liveTranscriptText = required<HTMLElement>("liveTranscriptText");
-const transcriptShelf = required<HTMLElement>("transcriptShelf");
 
 let appState: AppState = "idle";
 let timerInterval: ReturnType<typeof setInterval> | null = null;
@@ -98,10 +86,6 @@ let recordingSeconds = 0;
 let startRecordingRequestPending = false;
 let stopRecordingRequestPending = false;
 let cancelTranscriptionRequestPending = false;
-let transcriptHistory: TranscriptHistoryItem[] = [];
-let copiedTranscriptId: string | null = null;
-let shelfHideTimer: ReturnType<typeof setTimeout> | null = null;
-let shelfVisible = false;
 let shortcutSettings: ShortcutSettings = { ...DEFAULT_SHORTCUT_SETTINGS };
 let pushToTalkReleasePending = false;
 let shortcutRegistrationQueue: Promise<void> = Promise.resolve();
@@ -109,14 +93,6 @@ let activeBindings: Bindings = { recording: "", stack: "" };
 const POLISH_UNDO_WINDOW_MS = 8_000;
 let polishUndoOffer: { id: string } | null = null;
 let polishUndoTimer: ReturnType<typeof setTimeout> | null = null;
-
-const SHELF_VISIBLE_MS = 18_000;
-
-function required<T extends HTMLElement>(id: string): T {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node as T;
-}
 
 function setState(state: AppState, message?: string): void {
   if (copiedStatusTimer !== null && state !== "idle") {
@@ -274,7 +250,7 @@ function updatePillLayout(): void {
   appliedPillLayout = layout;
   document.body.dataset.pill = layout;
   void invoke("layout_pill_window", { state: layout }).catch((error) =>
-    addEvent("warning", `Could not lay out pill window: ${error instanceof Error ? error.message : String(error)}`),
+    addEvent("warning", `Could not lay out pill window: ${errorMessage(error)}`),
   );
 }
 
@@ -361,14 +337,6 @@ function formatTime(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-function waitForPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => resolve());
-    });
-  });
-}
-
 function showCopiedStatus(): void {
   // The polished state carries the undo affordance instead of the Copied
   // flash — but this function is the success path's ONLY transition out of
@@ -446,7 +414,7 @@ async function undoPolishedTranscript(): Promise<void> {
       }, 1400);
     }
   } catch (error) {
-    addEvent("warning", error instanceof Error ? error.message : String(error));
+    addEvent("warning", errorMessage(error));
     if (appState === "idle") setState("idle", "Ready");
   }
 }
@@ -456,145 +424,6 @@ function updateSettingsEventBadge(): void {
   settingsEventBadge.dataset.severity = severity ?? "none";
   settingsEventBadge.hidden = severity === null;
   settingsBtn.title = severity === "error" ? "Settings: errors recorded" : severity === "warning" ? "Settings: warnings recorded" : "Settings";
-}
-
-async function loadTranscriptHistory(): Promise<void> {
-  transcriptHistory = uniqueTranscriptItems(await invoke<TranscriptHistoryItem[]>("get_transcript_history"));
-  copiedTranscriptId = copiedTranscriptId ?? transcriptHistory[0]?.id ?? null;
-  renderTranscriptShelf();
-}
-
-function renderTranscriptShelf(): void {
-  transcriptShelf.replaceChildren();
-
-  if (!shelfVisible) {
-    return;
-  }
-
-  for (const item of transcriptHistory.slice(0, 8)) {
-    const clip = document.createElement("div");
-    clip.className = "transcript-clip";
-    clip.dataset.id = item.id;
-    clip.dataset.copied = String(item.id === copiedTranscriptId);
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "transcript-clip-copy";
-    button.title = item.text;
-    button.setAttribute("aria-label", item.id === copiedTranscriptId ? "Copied transcript clip" : "Copy transcript clip");
-    const text = document.createElement("span");
-    text.className = "transcript-clip-text";
-    text.textContent = item.text;
-    button.append(text);
-    button.addEventListener("click", () => {
-      void copyTranscriptItem(item.id);
-    });
-
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.className = "transcript-clip-close";
-    closeButton.setAttribute("aria-label", "Delete transcript clip");
-    closeButton.title = "Delete";
-    closeButton.textContent = "x";
-    closeButton.addEventListener("click", () => {
-      void deleteTranscriptItem(item.id);
-    });
-
-    clip.append(button, closeButton);
-    transcriptShelf.append(clip);
-  }
-}
-
-async function copyTranscriptItem(id: string): Promise<void> {
-  try {
-    const item = await invoke<TranscriptHistoryItem>("copy_transcript_history_item", { id });
-    copiedTranscriptId = item.id;
-    showTranscriptShelf();
-    renderTranscriptShelf();
-    showCopiedStatus();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    addEvent("error", message);
-    setState("error", shortErrorMessage(message));
-  }
-}
-
-async function deleteTranscriptItem(id: string): Promise<void> {
-  const clip = transcriptShelf.querySelector<HTMLElement>(`.transcript-clip[data-id="${CSS.escape(id)}"]`);
-  clip?.setAttribute("data-removing", "true");
-
-  window.setTimeout(async () => {
-    try {
-      await invoke("delete_transcript_history_item", { id });
-      transcriptHistory = transcriptHistory.filter((item) => item.id !== id);
-      if (copiedTranscriptId === id) {
-        copiedTranscriptId = transcriptHistory[0]?.id ?? null;
-      }
-      renderTranscriptShelf();
-    } catch (error) {
-      addEvent("error", error instanceof Error ? error.message : String(error));
-      clip?.removeAttribute("data-removing");
-    }
-  }, 170);
-}
-
-function addOrReplaceTranscriptItem(item: TranscriptHistoryItem): void {
-  transcriptHistory = uniqueTranscriptItems([item, ...transcriptHistory]).slice(0, 50);
-  copiedTranscriptId = item.id;
-  showTranscriptShelf();
-  renderTranscriptShelf();
-}
-
-function uniqueTranscriptItems(items: TranscriptHistoryItem[]): TranscriptHistoryItem[] {
-  const seen = new Set<string>();
-  const unique: TranscriptHistoryItem[] = [];
-  for (const item of items) {
-    const key = item.text.replace(/\s+/g, " ").trim().toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    unique.push(item);
-  }
-  return unique;
-}
-
-function resetLiveTranscript(): void {
-  liveTranscriptText.textContent = "";
-  liveTranscriptBubble.hidden = true;
-}
-
-function showLiveTranscript(text: string): void {
-  const preview = recentTranscriptText(text);
-  if (!preview) return;
-  if (shelfHideTimer !== null) {
-    clearTimeout(shelfHideTimer);
-    shelfHideTimer = null;
-  }
-  liveTranscriptText.textContent = preview;
-  liveTranscriptBubble.hidden = false;
-  liveTranscriptText.scrollTop = liveTranscriptText.scrollHeight;
-}
-
-function showTranscriptShelf(): void {
-  shelfVisible = true;
-  if (shelfHideTimer !== null) {
-    clearTimeout(shelfHideTimer);
-  }
-  shelfHideTimer = setTimeout(hideTranscriptShelf, SHELF_VISIBLE_MS);
-}
-
-function hideTranscriptShelf(): void {
-  shelfHideTimer = null;
-  shelfVisible = false;
-  renderTranscriptShelf();
-}
-
-function recentTranscriptText(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 320) return normalized;
-
-  const tail = normalized.slice(-320);
-  const sentenceStart = tail.search(/[.!?]\s+[A-Z0-9]/);
-  return sentenceStart >= 0 ? tail.slice(sentenceStart + 2).trim() : tail.trim();
 }
 
 async function loadBackendStatus(): Promise<void> {
@@ -628,13 +457,12 @@ async function startRecording(): Promise<boolean> {
     startRecordingRequestPending = false;
     cancelTranscriptionRequestPending = false;
     setState("recording");
-    resetLiveTranscript();
     scheduleMaxRecordingStop(maxRecordingSeconds);
     return true;
   } catch (error) {
     startRecordingRequestPending = false;
     stopRecordingRequestPending = false;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     addEvent("error", message);
     await refreshStateAfterStartError(message);
     return false;
@@ -681,9 +509,11 @@ async function stopAndTranscribe(): Promise<void> {
   stopRecordingRequestPending = true;
   cancelTranscriptionRequestPending = false;
   clearMaxRecordingTimer();
-  // The stop click plays from the backend once capture actually stops.
+  // The stop click plays from the backend once capture actually stops. The
+  // Transcribing state is set (and its pill layout requested) before the stop
+  // is sent; the frame paints while the request is in flight rather than
+  // delaying it by two animation frames.
   setState("transcribing");
-  await waitForPaint();
 
   try {
     const transcript = await invoke<string>("stop_and_transcribe");
@@ -693,22 +523,18 @@ async function stopAndTranscribe(): Promise<void> {
     }
     if (transcript) {
       addEvent("info", "Transcript copied to clipboard");
-      void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
-      resetLiveTranscript();
       showCopiedStatus();
     } else {
       addEvent("warning", "No transcript returned");
       setState("idle", "Ready");
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     if (message === "Transcription was cancelled") {
       addEvent("info", "Transcription cancelled");
-      resetLiveTranscript();
       setState("idle", "Ready");
     } else if (isRecoverableRecordingStopError(message)) {
       addEvent("warning", message);
-      resetLiveTranscript();
       setState("idle", "Ready");
     } else {
       addEvent("error", message);
@@ -728,7 +554,7 @@ async function cancelTranscription(): Promise<void> {
   try {
     await invoke("cancel_transcription");
   } catch (error) {
-    addEvent("warning", error instanceof Error ? error.message : String(error));
+    addEvent("warning", errorMessage(error));
   }
 }
 
@@ -736,7 +562,7 @@ async function toggleTranscriptStack(): Promise<void> {
   try {
     await emit("transcript-shelf-toggle");
   } catch (error) {
-    addEvent("warning", error instanceof Error ? error.message : String(error));
+    addEvent("warning", errorMessage(error));
   }
 }
 
@@ -767,31 +593,6 @@ function wirePillHover(): void {
   document.body.addEventListener("mouseleave", endHover);
 }
 
-function isMacOS(): boolean {
-  return navigator.platform.toLowerCase().includes("mac");
-}
-
-const MAC_SHORTCUT_GLYPHS: Record<string, string> = {
-  CommandOrControl: "⌘",
-  Command: "⌘",
-  Super: "⌘",
-  Control: "⌃",
-  Ctrl: "⌃",
-  Shift: "⇧",
-  Alt: "⌥",
-  Option: "⌥",
-};
-
-function shortcutHint(shortcut: string): string {
-  const parts = normalizeShortcut(shortcut)
-    .split("+")
-    .map((part) => part.replace(/^Digit/, "").replace(/^Key/, ""));
-  if (isMacOS()) {
-    return parts.map((part) => MAC_SHORTCUT_GLYPHS[part] ?? part).join("");
-  }
-  return parts.map((part) => (part === "CommandOrControl" ? "Ctrl" : part)).join("+");
-}
-
 function normalizeShortcutSettings(settings: Partial<ShortcutSettings>): ShortcutSettings {
   return {
     recordingShortcut: normalizeShortcut(settings.recordingShortcut ?? DEFAULT_SHORTCUT_SETTINGS.recordingShortcut),
@@ -799,14 +600,6 @@ function normalizeShortcutSettings(settings: Partial<ShortcutSettings>): Shortcu
     transcriptStackShortcut: normalizeShortcut(settings.transcriptStackShortcut ?? DEFAULT_SHORTCUT_SETTINGS.transcriptStackShortcut),
     interactionSounds: settings.interactionSounds !== false,
   };
-}
-
-function normalizeShortcut(shortcut: string): string {
-  return shortcut
-    .split("+")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join("+");
 }
 
 function shortcutCandidates(configured: string, defaults: string[]): string[] {
@@ -895,7 +688,7 @@ async function loadShortcutSettings(): Promise<ShortcutSettings> {
   try {
     return normalizeShortcutSettings(await invoke<ShortcutSettings>("get_settings"));
   } catch (error) {
-    addEvent("warning", `Could not load shortcut settings; using defaults: ${error instanceof Error ? error.message : String(error)}`);
+    addEvent("warning", `Could not load shortcut settings; using defaults: ${errorMessage(error)}`);
     return { ...DEFAULT_SHORTCUT_SETTINGS };
   }
 }
@@ -921,42 +714,25 @@ window.addEventListener("storage", (event) => {
 
 void listen<BackendLogEvent>("backend-event", (event) => {
   addEventWithId(event.payload.id, event.payload.level, event.payload.message);
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
-
-let previewSession = 0;
-let previewRevision = 0;
-let previewPolished = false;
-void listen<number>("transcript-session-started", event => {
-  if (event.payload > previewSession) { previewSession = event.payload; previewRevision = 0; previewPolished = false; }
-});
-void listen<TranscriptPreviewEvent>("transcript-preview", (event) => {
-  const p = event.payload;
-  if (p.sessionId !== previewSession || p.revision < previewRevision || (p.revision === previewRevision && previewPolished && !p.polished)) return;
-  previewRevision = p.revision; previewPolished = p.polished;
-  if (appState === "recording" || appState === "starting") showLiveTranscript(p.text);
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 void listen<TranscriptHistoryUpdatedEvent>("transcript-history-updated", (event) => {
-  addOrReplaceTranscriptItem(event.payload.item);
-  resetLiveTranscript();
   if (event.payload.item.polished && event.payload.item.rawText) {
     offerPolishUndo(event.payload.item.id);
   }
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
-void listen<TranscriptHistoryItem>("transcript-copied", (event) => {
-  copiedTranscriptId = event.payload.id;
-  renderTranscriptShelf();
+void listen("transcript-copied", () => {
   // Recopies can arrive from the home window at any time; only flash the
   // Copied capsule when the pill is not busy recording or transcribing.
   if (appState === "idle") {
     showCopiedStatus();
   }
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 void listen<ShortcutSettings>("settings-updated", (event) => {
   void registerGlobalShortcuts(event.payload);
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 // Emitted by the Rust CGEventTap when hold-Fn push-to-talk is enabled.
 void listen<{ pressed: boolean }>("fn-push-to-talk", (event) => {
@@ -965,13 +741,13 @@ void listen<{ pressed: boolean }>("fn-push-to-talk", (event) => {
   } else {
     void stopPushToTalkRecording();
   }
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 // Real capture levels for the recording meter (~25 Hz while recording).
 void listen<AudioLevelEvent>("audio-level", (event) => {
   meterTarget = meterLevelFromRms(event.payload.rms);
   if (meterTarget > 0) markVoiceHeard();
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 // The capture stream died mid-recording (e.g. microphone unplugged). Stop
 // through the normal pipeline so whatever audio was captured is preserved.
@@ -980,7 +756,7 @@ void listen<string>("recording-stream-error", (event) => {
   if (appState === "recording" || appState === "starting") {
     void stopAndTranscribe();
   }
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 // The backend watchdog committed (or failed) a recording the webview never
 // stopped; resync the pill instead of showing a stuck recording state.
@@ -989,23 +765,20 @@ void listen<RecordingAutoStoppedEvent>("recording-auto-stopped", (event) => {
   if (appState !== "recording" && appState !== "transcribing") return;
   stopRecordingRequestPending = false;
   cancelTranscriptionRequestPending = false;
-  resetLiveTranscript();
   if (event.payload.committed) {
-    void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
     showCopiedStatus();
   } else {
     setState("idle", "Ready");
   }
-}).catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+}).catch((error) => addEvent("warning", errorMessage(error)));
 
 void loadBackendStatus().catch((error) => {
-  addEvent("error", error instanceof Error ? error.message : String(error));
+  addEvent("error", errorMessage(error));
   setState("error", "Error");
 });
-void loadTranscriptHistory().catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
 void loadShortcutSettings()
   .then((settings) => registerGlobalShortcuts(settings))
-  .catch((error) => addEvent("warning", error instanceof Error ? error.message : String(error)));
+  .catch((error) => addEvent("warning", errorMessage(error)));
 wirePillHover();
 updatePillLayout();
 updateSettingsEventBadge();

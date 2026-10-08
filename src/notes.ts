@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { initializeNoteDebug, attachMetadataMenu, renderNoteMetadata, closeMetadataView } from "./noteMetadata";
+import { required } from "./dom";
+import { errorMessage } from "./errors";
 
 // The durable notes library: every dictation is auto-saved server-side, and
 // this screen lists, searches, edits, pins, copies, and deletes them.
@@ -24,14 +26,8 @@ let metadataId: string | null = null;
 let query = "";
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
-function required(id: string): HTMLElement {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`Missing #${id}`);
-  return node;
-}
-
 function reportError(error: unknown): void {
-  console.error("notes:", error instanceof Error ? error.message : String(error));
+  console.error("notes:", errorMessage(error));
 }
 
 function noteTitle(text: string): string {
