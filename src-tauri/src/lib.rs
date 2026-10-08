@@ -2399,68 +2399,6 @@ fn preview_interaction_sound(sound: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Dev-only spike command (context-awareness-ax Phase 0): dump what the AX
-/// tree exposes for the currently focused app into the backend event log, so
-/// per-app coverage (native vs Electron vs web areas vs terminals) can be
-/// recorded without a debugger. Reads are budgeted like the real feature.
-#[tauri::command]
-fn debug_dump_ax_context(app: AppHandle) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        match with_ax_timeout(macos_ax::focused_element_debug).flatten() {
-            Some(debug) => {
-                emit_backend_event(
-                    &app,
-                    "info",
-                    format!(
-                        "AX spike [{}]: role={:?}, value={} chars, selectedRange={:?}",
-                        debug.bundle_id,
-                        debug.role.as_deref().unwrap_or("(none)"),
-                        debug
-                            .value_chars
-                            .map(|chars| chars.to_string())
-                            .unwrap_or_else(|| "(none)".to_string()),
-                        debug.selected_range,
-                    ),
-                );
-            }
-            None => emit_backend_event(&app, "warning", "AX spike: no focused element readable"),
-        }
-
-        match with_ax_timeout(macos_ax::focused_caret_context).flatten() {
-            Some(context) => emit_backend_event(
-                &app,
-                "info",
-                format!(
-                    "AX spike caret: {} chars before caret, after={:?}",
-                    context.before.chars().count(),
-                    context.after_char,
-                ),
-            ),
-            None => emit_backend_event(&app, "info", "AX spike caret: no caret context"),
-        }
-
-        let terms = with_ax_timeout(macos_ax::harvest_screen_vocabulary)
-            .flatten()
-            .unwrap_or_default();
-        emit_backend_event(
-            &app,
-            "info",
-            format!(
-                "AX spike harvest ({} terms): {}",
-                terms.len(),
-                terms.join(", ")
-            ),
-        );
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        Err("Context awareness is macOS-only".to_string())
-    }
-}
-
 #[tauri::command]
 fn cancel_transcription(app: AppHandle, services: State<'_, AppServices>) -> Result<(), String> {
     services
@@ -3081,7 +3019,6 @@ pub fn run() {
             start_recording,
             stop_and_transcribe,
             cancel_transcription,
-            debug_dump_ax_context,
             preview_interaction_sound,
             stop_speed_test_capture,
             stop_voice_test_capture,

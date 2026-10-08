@@ -246,12 +246,6 @@ fn frontmost_pid_and_bundle() -> Option<(i32, String)> {
     Some((app.processIdentifier(), bundle_id))
 }
 
-/// Phase B: collect candidate vocabulary terms from the focused element and
-/// the frontmost window's AX tree. Returns `None` when reads are skipped
-/// entirely (password manager frontmost / no frontmost app).
-pub fn harvest_screen_vocabulary() -> Option<Vec<String>> {
-    harvest_screen_context().map(|(_, terms)| terms)
-}
 pub fn harvest_screen_context() -> Option<(Vec<String>, Vec<String>)> {
     let (pid, bundle_id) = frontmost_pid_and_bundle()?;
     if is_password_manager(&bundle_id) {
@@ -413,42 +407,6 @@ pub fn focus_context() -> Option<crate::format_context::FocusContext> {
         window_title,
         field,
         url,
-    })
-}
-
-/// Raw focused-element facts for the Phase-0 spike command.
-pub struct FocusedElementDebug {
-    pub bundle_id: String,
-    pub role: Option<String>,
-    pub value_chars: Option<usize>,
-    pub selected_range: Option<(isize, isize)>,
-}
-
-pub fn focused_element_debug() -> Option<FocusedElementDebug> {
-    let (_, bundle_id) = frontmost_pid_and_bundle()?;
-    if is_password_manager(&bundle_id) {
-        return Some(FocusedElementDebug {
-            bundle_id,
-            role: Some("(skipped: password manager)".to_string()),
-            value_chars: None,
-            selected_range: None,
-        });
-    }
-    let focused = focused_element()?;
-    let role = focused.role();
-    let value_chars = focused
-        .copy_attribute("AXValue")
-        .and_then(|v| v.downcast::<CFString>())
-        .map(|s| s.to_string().chars().count());
-    let selected_range = focused
-        .copy_attribute("AXSelectedTextRange")
-        .and_then(|value| read_cf_range(&value))
-        .map(|range| (range.location, range.length));
-    Some(FocusedElementDebug {
-        bundle_id,
-        role,
-        value_chars,
-        selected_range,
     })
 }
 
