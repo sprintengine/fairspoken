@@ -175,10 +175,10 @@ struct Harness {
     }
 
     /// Opens a connection whose bytes the test controls.
-    func connect(peer: String? = "127.0.0.1") -> (PipeTransport, Task<Void, Never>) {
+    func connect(peer: String? = "127.0.0.1", limits: HTTPServerLimits = HTTPServerLimits()) -> (PipeTransport, Task<Void, Never>) {
         let pipe = PipeTransport(peer: peer)
         let router = self.router
-        let task = Task { await HTTPConnection(transport: pipe).serve { await router.handle($0) } }
+        let task = Task { await HTTPConnection(transport: pipe, limits: limits).serve { await router.handle($0) } }
         return (pipe, task)
     }
 

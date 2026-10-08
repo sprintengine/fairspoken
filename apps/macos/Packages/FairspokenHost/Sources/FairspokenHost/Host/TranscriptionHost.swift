@@ -10,14 +10,17 @@ public final class TranscriptionHost: Sendable {
 
     /// Binds the listener and starts the workers (which preload their models).
     public static func start(configuration: HostConfiguration, configURL: URL?, backend: any HostSpeechBackend,
-                             dashboardHTML: [UInt8], serverVersion: String, heartbeat: Duration = .seconds(15)) async throws -> TranscriptionHost {
+                             dashboardHTML: [UInt8], serverVersion: String, heartbeat: Duration = .seconds(15),
+                             limits: HTTPServerLimits = HTTPServerLimits()) async throws -> TranscriptionHost {
         let runtime = HostRuntime(configuration: configuration, configURL: configURL, backend: backend, serverVersion: serverVersion)
         let router = HostRouter(runtime: runtime, dashboardHTML: dashboardHTML, heartbeat: heartbeat)
-        let listener = try HTTPListener(host: runtime.configuration.bindAddress, port: UInt16(runtime.configuration.port)) { request in
+        let listener = try HTTPListener(host: runtime.configuration.bindAddress, port: UInt16(runtime.configuration.port),
+                                        limits: limits) { request in
             await router.handle(request)
         }
         try await listener.start()
-        let loopback = await startLoopbackCompanion(for: runtime.configuration.bindAddress, port: listener.boundPort) { request in
+        let loopback = await startLoopbackCompanion(for: runtime.configuration.bindAddress, port: listener.boundPort,
+                                                    limits: limits) { request in
             await router.handle(request)
         }
         runtime.startWorkers()
@@ -27,10 +30,10 @@ public final class TranscriptionHost: Sendable {
     /// A host bound to one non-loopback address (a tailnet IP) also answers on `127.0.0.1` at the
     /// same port, so apps on this Mac reach it whichever address they saved. Best effort: if the
     /// loopback port is taken the host still serves its main address.
-    static func startLoopbackCompanion(for bindAddress: String, port: UInt16,
+    static func startLoopbackCompanion(for bindAddress: String, port: UInt16, limits: HTTPServerLimits,
                                        handler: @escaping @Sendable (HTTPServerRequest) async -> Void) async -> HTTPListener? {
         guard HostConfiguration.needsLoopbackCompanion(bindAddress),
-              let companion = try? HTTPListener(host: "127.0.0.1", port: port, handler: handler) else { return nil }
+              let companion = try? HTTPListener(host: "127.0.0.1", port: port, limits: limits, handler: handler) else { return nil }
         do {
             try await companion.start()
             return companion

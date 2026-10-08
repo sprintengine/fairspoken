@@ -19,6 +19,30 @@ public enum HTTPTransportError: Error, Sendable {
     case overflow
 }
 
+/// What a listener allows its peers. The timeouts cover waiting for a request head only: once
+/// a head has arrived, a streamed body (`/v1/transcriptions/stream`) or a long-lived response
+/// (`/v1/events`) takes as long as it takes.
+public struct HTTPServerLimits: Sendable {
+    /// How long a connection may sit with no request started: before the first, and between
+    /// requests on a kept-alive connection.
+    public var idleTimeout: Duration
+    /// How long a request head may take to arrive in full, from its first byte.
+    public var headerTimeout: Duration
+    /// Connections served at once; more are answered 503 and closed.
+    public var maxConnections: Int
+    /// How long a graceful close (the last response, then FIN) may take before the connection
+    /// is cancelled outright, for a peer that stops reading.
+    public var closeGracePeriod: Duration
+
+    public init(idleTimeout: Duration = .seconds(30), headerTimeout: Duration = .seconds(30), maxConnections: Int = 256,
+                closeGracePeriod: Duration = .seconds(5)) {
+        self.idleTimeout = idleTimeout
+        self.headerTimeout = headerTimeout
+        self.maxConnections = maxConnections
+        self.closeGracePeriod = closeGracePeriod
+    }
+}
+
 /// One request as seen by a handler: the head, a body reader and a response writer.
 /// Used by a single task at a time (the connection's serve loop and the handler it calls).
 public final class HTTPServerRequest: @unchecked Sendable {
@@ -158,10 +182,12 @@ final class HTTPConnection: @unchecked Sendable {
     static let maxBuffered = HTTPHeadParser.maxHeadBytes + receiveChunk
 
     let transport: any ByteStreamTransport
+    let limits: HTTPServerLimits
     var buffer = ByteBuffer()
 
-    init(transport: any ByteStreamTransport) {
+    init(transport: any ByteStreamTransport, limits: HTTPServerLimits = HTTPServerLimits()) {
         self.transport = transport
+        self.limits = limits
     }
 
     /// Reads more bytes into the buffer; false at end of stream.
@@ -189,6 +215,9 @@ final class HTTPConnection: @unchecked Sendable {
             } catch {
                 return
             }
+            // The listener stopped while this head was arriving: don't serve it with a router
+            // (and token) that are going away.
+            if Task.isCancelled { return }
             let framing: HTTPRequestHead.BodyFraming
             do { framing = try head.bodyFraming() } catch {
                 let status = error == .unsupportedTransferEncoding ? 501 : 400
@@ -214,11 +243,33 @@ final class HTTPConnection: @unchecked Sendable {
         }
     }
 
+    /// The next request head. Waiting for it is bounded by `idleTimeout` until a byte arrives,
+    /// then by `headerTimeout`; on expiry the transport is closed (a pending `receive()` can't
+    /// be cancelled any other way) and this throws `HTTPTransportError.timedOut`.
     private func readHead() async throws -> HTTPRequestHead? {
         var skipped = 0
-        while true {
-            if let head = try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped) { return head }
-            guard try await fill() else { return nil }
+        // A pipelined head already buffered needs no wait.
+        if let head = try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped) { return head }
+        let deadline = HeadDeadline { [transport] in transport.close() }
+        var started = !buffer.isEmpty || skipped > 0
+        deadline.arm(started ? limits.headerTimeout : limits.idleTimeout)
+        do {
+            while true {
+                guard try await fill() else {
+                    if !deadline.disarm() { throw HTTPTransportError.timedOut }
+                    return nil
+                }
+                if !started {
+                    started = true
+                    deadline.arm(limits.headerTimeout)
+                }
+                if let head = try HTTPHeadParser.parse(&buffer, skippedEmptyLineBytes: &skipped) {
+                    guard deadline.disarm() else { throw HTTPTransportError.timedOut }
+                    return head
+                }
+            }
+        } catch {
+            throw deadline.disarm() ? error : HTTPTransportError.timedOut
         }
     }
 
@@ -239,5 +290,54 @@ final class HTTPConnection: @unchecked Sendable {
             await group.next()
             group.cancelAll()
         }
+    }
+}
+
+/// A re-armable deadline that runs `onExpiry` once if it isn't disarmed in time.
+final class HeadDeadline: Sendable {
+    private struct State {
+        var generation = 0
+        var timer: Task<Void, Never>?
+        var expired = false
+    }
+
+    private let state = Mutex(State())
+    private let onExpiry: @Sendable () -> Void
+
+    init(onExpiry: @escaping @Sendable () -> Void) { self.onExpiry = onExpiry }
+
+    /// (Re)starts the clock at `timeout` from now.
+    func arm(_ timeout: Duration) {
+        state.withLock { s in
+            guard !s.expired else { return }
+            s.timer?.cancel()
+            s.generation += 1
+            let generation = s.generation
+            s.timer = Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                if !Task.isCancelled { self?.expire(generation) }
+            }
+        }
+    }
+
+    /// Stops the clock; false if it had already run out.
+    @discardableResult
+    func disarm() -> Bool {
+        state.withLock { s in
+            s.timer?.cancel()
+            s.timer = nil
+            s.generation += 1
+            return !s.expired
+        }
+    }
+
+    private func expire(_ generation: Int) {
+        let fire = state.withLock { s -> Bool in
+            guard s.generation == generation, !s.expired else { return false }
+            s.expired = true
+            s.timer = nil
+            return true
+        }
+        if fire { onExpiry() }
     }
 }

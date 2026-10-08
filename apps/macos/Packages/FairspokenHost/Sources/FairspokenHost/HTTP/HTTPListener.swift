@@ -7,9 +7,11 @@ final class NWTransport: ByteStreamTransport, @unchecked Sendable {
     private let connection: NWConnection
     let peerAddress: String?
     private let closed = Mutex(false)
+    private let closeGracePeriod: Duration
 
-    init(_ connection: NWConnection) {
+    init(_ connection: NWConnection, closeGracePeriod: Duration = .seconds(5)) {
         self.connection = connection
+        self.closeGracePeriod = closeGracePeriod
         if case .hostPort(let host, _) = connection.endpoint {
             peerAddress = NWTransport.format(host)
         } else {
@@ -66,10 +68,22 @@ final class NWTransport: ByteStreamTransport, @unchecked Sendable {
     func close() {
         let already = closed.withLock { c in defer { c = true }; return c }
         guard !already else { return }
-        // A graceful close (FIN after pending data) so the last response is delivered.
+        // A graceful close (FIN after pending data) so the last response is delivered...
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [connection] _ in
             connection.cancel()
         })
+        // ...unless the peer stops reading, which would hold that send (and the connection) forever.
+        let grace = closeGracePeriod.components
+        let seconds = Double(grace.seconds) + Double(grace.attoseconds) / 1e18
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [connection] in
+            connection.cancel()
+        }
+    }
+
+    /// Drops the connection at once, failing any pending receive or send (host shutdown).
+    func cancel() {
+        closed.withLock { $0 = true }
+        connection.cancel()
     }
 }
 
@@ -88,18 +102,28 @@ public final class HTTPListener: @unchecked Sendable {
         }
     }
 
+    /// The connections being served, each with the transport `stop()` cancels: a serve loop
+    /// blocked in `receive()` doesn't notice its task being cancelled.
+    private struct Registry {
+        var stopped = false
+        var connections: [ObjectIdentifier: (task: Task<Void, Never>, transport: NWTransport)] = [:]
+    }
+
     private let listener: NWListener
     private let queue = DispatchQueue(label: "ie.fairspoken.host.listener")
-    private let connections = Mutex<[ObjectIdentifier: Task<Void, Never>]>([:])
+    private let registry = Mutex(Registry())
     private let handler: @Sendable (HTTPServerRequest) async -> Void
     public let host: String
     public let port: UInt16
+    public let limits: HTTPServerLimits
 
     /// `host` is an IP address (`127.0.0.1`, `100.101.102.103`, `::1`), or `0.0.0.0` / `::`
     /// for every interface.
-    public init(host: String, port: UInt16, handler: @escaping @Sendable (HTTPServerRequest) async -> Void) throws {
+    public init(host: String, port: UInt16, limits: HTTPServerLimits = HTTPServerLimits(),
+                handler: @escaping @Sendable (HTTPServerRequest) async -> Void) throws {
         self.host = host
         self.port = port
+        self.limits = limits
         self.handler = handler
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -169,24 +193,56 @@ public final class HTTPListener: @unchecked Sendable {
     /// The port actually bound (useful with port 0 in tests).
     public var boundPort: UInt16 { listener.port?.rawValue ?? port }
 
+    /// Connections currently being served.
+    public var connectionCount: Int { registry.withLock { $0.connections.count } }
+
+    private enum Admission { case admitted, full, stopped }
+
     private func accept(_ connection: NWConnection) {
-        let transport = NWTransport(connection)
+        let transport = NWTransport(connection, closeGracePeriod: limits.closeGracePeriod)
         connection.start(queue: DispatchQueue(label: "ie.fairspoken.host.connection"))
         let id = ObjectIdentifier(transport)
         let handler = self.handler
-        let task = Task.detached { [weak self] in
-            await HTTPConnection(transport: transport).serve(handler)
-            _ = self?.connections.withLock { $0.removeValue(forKey: id) }
+        let limits = self.limits
+        let admission = registry.withLock { r -> Admission in
+            if r.stopped { return .stopped }
+            guard r.connections.count < limits.maxConnections else { return .full }
+            // Created under the lock, so the entry is in place before the task can remove it.
+            let task = Task.detached { [weak self] in
+                await HTTPConnection(transport: transport, limits: limits).serve(handler)
+                _ = self?.registry.withLock { $0.connections.removeValue(forKey: id) }
+            }
+            r.connections[id] = (task, transport)
+            return .admitted
         }
-        connections.withLock { $0[id] = task }
+        switch admission {
+        case .admitted:
+            break
+        case .stopped:
+            transport.cancel()
+        case .full:
+            Task.detached {
+                let body = HostJSON.error("Too many connections (limit \(limits.maxConnections))").bytes
+                try? await transport.send(HTTPStatus.head(503, headers: [
+                    ("Content-Type", "application/json"), ("Content-Length", String(body.count)), ("Connection", "close"),
+                ]) + body)
+                transport.close()
+            }
+        }
     }
 
+    /// Stops accepting and drops every live connection, kept-alive ones included, so nothing
+    /// more is served through this listener's handler.
     public func stop() {
         listener.cancel()
-        let tasks = connections.withLock { c -> [Task<Void, Never>] in
-            defer { c.removeAll() }
-            return Array(c.values)
+        let entries = registry.withLock { r in
+            r.stopped = true
+            defer { r.connections.removeAll() }
+            return Array(r.connections.values)
         }
-        tasks.forEach { $0.cancel() }
+        for entry in entries {
+            entry.task.cancel()
+            entry.transport.cancel()
+        }
     }
 }
