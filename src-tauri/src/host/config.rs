@@ -222,9 +222,16 @@ pub(super) fn overlay_persisted_config(
     }
 }
 
+/// Serializes this process's config writes (the request handlers, the
+/// loopback listener's, the updater's settings and the CLI): each builds its
+/// snapshot and writes it under this lock, so the file always ends up
+/// holding the latest snapshot, never an older one written last.
+static CONFIG_WRITE: Mutex<()> = Mutex::new(());
+
 pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<(), String> {
+    let _writing = lock_unpoisoned(&CONFIG_WRITE);
     let auth = live.auth();
-    write_persisted_config(
+    write_config_file(
         path,
         &PersistedHostConfig {
             max_active_streams: live.max_active_streams(),
@@ -244,6 +251,12 @@ pub(super) fn write_persisted_config(
     path: &Path,
     persisted: &PersistedHostConfig,
 ) -> Result<(), String> {
+    let _writing = lock_unpoisoned(&CONFIG_WRITE);
+    write_config_file(path, persisted)
+}
+
+/// Callers hold `CONFIG_WRITE`.
+fn write_config_file(path: &Path, persisted: &PersistedHostConfig) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("Failed to create host config directory: {err}"))?;
@@ -254,26 +267,41 @@ pub(super) fn write_persisted_config(
         .map_err(|err| format!("Failed to write host config: {err}"))
 }
 
-/// The config file can hold the token and pairing password, so it is
-/// readable by its owner only where the platform supports that.
-#[cfg(unix)]
+/// Replaces the file atomically: the contents go to a temporary file in the
+/// same directory, reach the disk, and are renamed over the old file, so a
+/// crash or a concurrent reader (the host starting, the Swift host) never
+/// sees a truncated or half-written config. The file can hold the token and
+/// pairing password, so it is readable by its owner only where the platform
+/// supports that.
 fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    // `mode` only applies to a new file; tighten one written by older builds.
-    file.set_permissions(fs::Permissions::from_mode(0o600))?;
-    file.write_all(contents)
-}
-
-#[cfg(not(unix))]
-fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    fs::write(path, contents)
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "config path has no file name")
+    })?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(file_name);
+    temp_name.push(format!(".{}.tmp", std::process::id()));
+    let temp = path.with_file_name(temp_name);
+    // Left over from a crash, or planted: never write through it.
+    let _ = fs::remove_file(&temp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let written = options.open(&temp).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()
+    });
+    if let Err(err) = written.and_then(|()| fs::rename(&temp, path)) {
+        let _ = fs::remove_file(&temp);
+        return Err(err);
+    }
+    // Make the rename itself durable; best effort.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        let _ = fs::File::open(dir).and_then(|dir| dir.sync_all());
+    }
+    Ok(())
 }
 
 /// Knobs an operator may change at runtime through `POST /v1/config`.
