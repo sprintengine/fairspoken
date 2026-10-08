@@ -158,8 +158,18 @@ window.addEventListener("blur", () => {
 });
 // After complete, only a fresh pointerenter counts as a hold: the box appears
 // next to the caret, which is usually where the pointer already is. Claim
-// pins the box until the user copies, presses Escape, or clicks away.
-setInterval(() => {
+// pins the box until the user copies, presses Escape, or clicks away. The
+// reconcile poll runs only while the box is on screen.
+let hoverPoll: ReturnType<typeof setInterval> | undefined;
+function syncHoverPoll(): void {
+  const showing = !!current && current.phase !== "idle" && !box.hidden;
+  if (showing && hoverPoll === undefined) hoverPoll = setInterval(reconcileHover, 500);
+  else if (!showing && hoverPoll !== undefined) {
+    clearInterval(hoverPoll);
+    hoverPoll = undefined;
+  }
+}
+function reconcileHover(): void {
   if (!current || current.phase === "idle" || box.hidden) return;
   if (claimed) {
     if (!hovering) updateInteraction(true);
@@ -172,7 +182,7 @@ setInterval(() => {
     return;
   }
   if (hovering) updateInteraction(false);
-}, 500);
+}
 text.addEventListener("scroll", () => {
   following = text.scrollHeight - text.clientHeight - text.scrollTop <= parseFloat(getComputedStyle(text).lineHeight);
 });
@@ -215,7 +225,7 @@ function paint(): void {
   fitPreview();
   text.scrollTop = tail ? text.scrollHeight : offset;
   following = tail;
-  if (announcement.textContent !== cleanText) announcement.textContent = cleanText;
+  scheduleAnnouncement();
   clearTimeout(cleanup);
   if (edits.length) {
     cleanup = setTimeout(() => {
@@ -223,6 +233,20 @@ function paint(): void {
       paint();
     }, Math.max(0, Math.min(...edits.map(edit => edit.expires)) - performance.now()));
   }
+}
+
+// The live region is atomic, so every change re-reads the whole text. Announce
+// once the text has settled for a moment, and at once when it is complete,
+// rather than on every streamed chunk and polish pass.
+const ANNOUNCE_SETTLE_MS = 1200;
+let announceTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleAnnouncement(): void {
+  clearTimeout(announceTimer);
+  const announce = () => {
+    if (announcement.textContent !== cleanText) announcement.textContent = cleanText;
+  };
+  if (current?.phase === "complete") announce();
+  else announceTimer = setTimeout(announce, ANNOUNCE_SETTLE_MS);
 }
 
 function polish(value: string): void {
@@ -313,6 +337,7 @@ function render(snapshot: Snapshot): void {
   const newSession = current?.sessionId !== snapshot.sessionId;
   if (newSession) {
     clearTimeout(cleanup);
+    clearTimeout(announceTimer);
     edits = [];
     cleanText = "";
     lastRaw = "";
@@ -324,9 +349,11 @@ function render(snapshot: Snapshot): void {
   const becameComplete = current?.phase !== "complete" && snapshot.phase === "complete";
   current = snapshot;
   box.hidden = snapshot.phase === "idle";
+  syncHoverPoll();
   setActivity(snapshot);
   if (snapshot.phase === "idle") {
     clearTimeout(cleanup);
+    clearTimeout(announceTimer);
     edits = [];
     cleanText = lastRaw = "";
     text.replaceChildren();

@@ -1,16 +1,9 @@
-import { listen } from "@tauri-apps/api/event";
-import { addEventWithId, clearEvents, readEvents, type AppEvent, type EventLevel } from "./events";
+import { clearEvents, readEvents, type AppEvent } from "./events";
 
 // The Activity screen: warnings and errors worth a user's attention. Info-level
 // breadcrumbs are not kept here — they go to the console (see events.ts), so this
 // surface stays signal, not a log firehose. Reference: Vercel's Activity feed —
 // a calm list where severity is carried by the 6px dot, not a text label or pill.
-
-interface BackendLogEvent {
-  id: string;
-  level: EventLevel;
-  message: string;
-}
 
 const list = document.getElementById("activityList");
 const summary = document.getElementById("activitySummary");
@@ -96,12 +89,7 @@ clearButton?.addEventListener("click", () => {
   render();
 });
 
-// Backend warnings/errors arrive here while the home window is open; addEventWithId
-// dedupes by id (the pill may record the same one) and drops info to the console.
-void listen<BackendLogEvent>("backend-event", (event) => {
-  addEventWithId(event.payload.id, event.payload.level, event.payload.message);
-}).catch(() => {
-  /* the backend event stream is best-effort; the feed still renders stored activity */
-});
-
+// Backend warnings and errors are recorded by the pill window (main.ts), which
+// runs for the app's whole life; this feed picks them up through the storage
+// event. Recording them here too raced the pill's read-modify-write of the log.
 render();

@@ -113,9 +113,6 @@ body {
 .nav-item svg { width: 16px; height: 16px; flex: none; opacity: .85; }
 .nav-spacer { flex: 1; }
 .sidebar-foot { padding: 8px; color: var(--text-muted); font-size: var(--fs-micro); display: flex; align-items: center; gap: 7px; }
-.dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
-.dot.good { background: var(--dot-good); }
-.dot.idle { background: var(--dot-idle); }
 
 /* ── Main ────────────────────────────────────────────────── */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -128,16 +125,6 @@ body {
 .content { padding: 20px var(--gutter); overflow: auto; flex: 1; min-height: 0; }
 .screen { display: none; }
 .screen.active { display: block; }
-
-/* ── Headings (sections + panels share one rhythm) ────────── */
-.section-head, .panel-head {
-  display: flex; align-items: center; gap: 12px;
-  padding: 0 0 10px;
-}
-.section-head { justify-content: space-between; }
-.section-head h2, .panel-head h2 { font-size: var(--fs-body); font-weight: 600; color: var(--text); }
-.panel-head .grow { flex: 1; }
-.panel-head .hint { color: var(--text-muted); font-size: var(--fs-micro); }
 
 /* ── Buttons ─────────────────────────────────────────────── */
 .btn {
@@ -162,12 +149,12 @@ body {
 .icon-btn:hover { background: var(--bg-row-hover); color: var(--text); }
 
 /* ── Inputs ──────────────────────────────────────────────── */
-.setting-select, .setting-input, .setting-textarea {
+.setting-select, .setting-input {
   background: var(--bg-input); border: 1px solid var(--border-strong); color: var(--text);
   border-radius: var(--r-sm); height: 28px; padding: 0 9px; font: inherit; font-size: 12.5px;
   width: 100%; outline: none;
 }
-.setting-select:focus-visible, .setting-input:focus-visible, .setting-textarea:focus-visible {
+.setting-select:focus-visible, .setting-input:focus-visible {
   border-color: var(--accent-strong); outline: 2px solid var(--focus); outline-offset: 0;
 }
 .setting-select {
@@ -175,7 +162,6 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9aa2' stroke-width='1.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 9px center;
 }
-.setting-textarea { height: auto; resize: vertical; min-height: 64px; padding: 6px 9px; line-height: 1.5; }
 /* `:not(.switch)` keeps plain checkboxes native while letting the .switch rule
    below win — a bare `input[type=checkbox]` selector outranks `.switch` and
    would otherwise force the switch back to a 16×16 box. */
@@ -236,30 +222,12 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .hero .value { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; }
 .hero .sub { color: var(--text-muted); font-size: var(--fs-meta); margin-top: 6px; max-width: 56ch; }
 
-/* Stat strip: flat columns separated by a single vertical hairline. */
-.tiles { display: grid; grid-template-columns: repeat(6, 1fr); margin-bottom: 30px; }
-.tile { padding: 0 18px; border-left: 1px solid var(--border); }
-.tile:first-child { padding-left: 0; border-left: none; }
-.tile .t-label { color: var(--text-secondary); font-size: var(--fs-meta); }
-.tile .t-value { font-size: var(--fs-stat); font-weight: 600; letter-spacing: -0.01em; margin-top: 4px; }
-.tile .t-meta { color: var(--text-muted); font-size: var(--fs-micro); margin-top: 4px; min-height: 14px; }
-
-#homeStats .panel { margin-bottom: 30px; }
-#homeStats .panel:last-child { margin-bottom: 0; }
-
 .chart { display: flex; align-items: flex-end; gap: 14px; height: 128px; padding: 4px 0 0; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; height: 100%; justify-content: flex-end; }
 .bar { width: 100%; max-width: 34px; min-height: 3px; border-radius: 4px 4px 2px 2px; background: var(--sem-color-bg-selected); }
 .bar.today { background: var(--accent); }
 .bar-day { color: var(--text-muted); font-size: var(--fs-micro); }
 .bar-col.is-today .bar-day { color: var(--text-secondary); }
-
-.act-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); }
-.act-row:first-child { border-top: none; }
-.act-text { flex: 1; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act-time { color: var(--text-muted); font-size: var(--fs-meta); font-family: var(--mono); }
-.act-words { color: var(--text-muted); font-size: var(--fs-meta); min-width: 66px; text-align: right; }
-.act-empty { padding: 14px 0; color: var(--text-muted); font-size: var(--fs-meta); }
 
 /* ── Settings ─────────────────────────────────────────────────
    Flat groups: a heading, breathing room, and hairline-separated rows.
@@ -403,11 +371,14 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .settings-card > .dict-rows-empty { padding: var(--sem-space-xl); border-top: 1px solid var(--sem-color-border-subtle); }
 .settings-card > .dict-row:first-child,
 .settings-card > .dict-rows-empty:first-child { border-top: 0; }
-.dict-row { display: grid; grid-template-columns: auto 1fr auto 1fr auto; align-items: center; gap: var(--sem-space-sm); }
+/* The trailing column is fixed so every row's fields line up whether or not
+   the row carries a "Learned" chip; its contents sit at the right edge. */
+.dict-row { display: grid; grid-template-columns: auto 1fr auto 1fr 5.5rem; align-items: center; gap: var(--sem-space-sm); }
+.dict-row > :last-child { justify-self: end; }
 .dict-rows-empty { margin: 0; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
 .dict-arrow { color: var(--sem-color-text-muted); }
 .dict-row .setting-input { min-width: 0; }
-.dict-row-end { display: inline-flex; align-items: center; gap: var(--sem-space-xs); }
+.dict-row-end { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--sem-space-xs); }
 .learned-chip {
   display: inline-flex; align-items: center; padding: 0 var(--sem-space-xs);
   border: 1px solid var(--sem-color-border-subtle); border-radius: var(--sem-radius-control);
@@ -417,6 +388,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .settings-card > .dict-suggestion:first-child { border-top: 0; }
 .dict-suggestion { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: var(--sem-space-sm); }
 .dict-suggestion-text { min-width: 0; }
+.dict-suggestion-text .dict-arrow { margin: 0 var(--sem-space-xs); }
 .dict-suggestion-reason { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
 .training-warning { color: var(--warning); }
 .dict-row.format-mapping-row { grid-template-columns: minmax(0, 1fr) auto auto auto; }
@@ -441,7 +413,9 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
   align-items: baseline; gap: var(--sem-space-md); padding: var(--sem-space-xl); margin: 0;
 }
 #activityList > .empty { min-height: 0; height: auto; padding: var(--sem-space-4xl) var(--sem-space-xl); }
-.activity-dot { width: var(--sem-space-xs); height: var(--sem-space-xs); border-radius: 50%; align-self: center; background: var(--sem-color-text-muted); }
+/* Pinned to the first line so a message that wraps keeps its dot beside its
+   opening words. */
+.activity-dot { width: var(--sem-space-xs); height: var(--sem-space-xs); border-radius: 50%; align-self: start; margin-top: 0.45em; background: var(--sem-color-text-muted); }
 .activity-row.warning .activity-dot { background: var(--sem-color-status-warn); }
 .activity-row.error .activity-dot { background: var(--sem-color-status-danger); }
 .activity-time { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); font-family: var(--sem-font-family-mono); font-variant-numeric: tabular-nums; }

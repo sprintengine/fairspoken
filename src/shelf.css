@@ -72,13 +72,18 @@
   color: var(--crystal-ink);
   box-shadow: inset 0 1px 0 var(--crystal-edge), var(--crystal-shadow-float);
   pointer-events: auto;
-  opacity: 0.55;
+  opacity: 0.8;
   transition: opacity 180ms ease, border-color 180ms ease;
 }
+/* The shelf window is transparent, so a dark clip sits on whatever desktop is
+   behind it. The dark glass fill (9% white) vanishes over a light desktop and
+   leaves light text on light; give dark clips a dense fill of their own. */
+[data-mode="dark"] .live-transcript-bubble,
+[data-mode="dark"] .transcript-clip { background: rgba(22, 25, 29, 0.9); }
 .live-transcript-bubble {
   padding: 10px 12px;
   border-color: var(--crystal-tint-strong);
-  opacity: 0.8;
+  opacity: 0.9;
 }
 .shelf-window:hover .transcript-clip,
 .shelf-window:focus-within .transcript-clip,
@@ -218,7 +223,7 @@
   min-width: 120px;
   padding: 4px;
   border-radius: 12px;
-  background: var(--crystal-surface-strong);
+  background: var(--crystal-surface-overlay);
   -webkit-backdrop-filter: var(--crystal-glass-filter);
   backdrop-filter: var(--crystal-glass-filter);
   border: 1px solid var(--crystal-hairline);

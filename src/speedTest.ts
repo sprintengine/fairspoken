@@ -214,6 +214,9 @@ export function createSpeedTest(opts: {
   let typingResult: TypingResult | null = null;
   let best: SpeedTestRecord | null = null;
   let unlistenPreview: UnlistenFn | null = null;
+  // Bumped by stop(); a listen() that resolves for an older generation is
+  // released at once instead of leaking a listener.
+  let previewGeneration = 0;
   let previewText = "";
   let previewTextEl: HTMLElement | null = null;
   let previewScoreEl: HTMLElement | null = null;
@@ -228,8 +231,23 @@ export function createSpeedTest(opts: {
   function onKeydown(event: KeyboardEvent): void {
     if (event.key !== "Escape") return;
     if (state === "typing") renderIntro();
-    else if (state === "speaking") renderTyped();
+    else if (state === "speaking") cancelSpeaking();
     else if (state === "intro") onExit();
+  }
+
+  // Stop the real recorder through the side-effect-free capture and discard the
+  // result. Leaving it running would let the backend watchdog later commit the
+  // test passage as a real dictation (clipboard, paste, history).
+  function discardCapture(): void {
+    void invoke("stop_speed_test_capture").catch(() => {
+      /* nothing to commit either way */
+    });
+  }
+
+  function cancelSpeaking(): void {
+    clearTicker();
+    discardCapture();
+    renderTyped();
   }
 
   // ── intro ──
@@ -626,12 +644,15 @@ export function createSpeedTest(opts: {
   // so a dictation or voice-test preview can't leak into the speed test.
   async function attachPreview(): Promise<void> {
     if (unlistenPreview) return;
+    const generation = ++previewGeneration;
     try {
-      unlistenPreview = await listen<{ text: string }>("transcript-preview", (event) => {
+      const unlisten = await listen<{ text: string }>("transcript-preview", (event) => {
         if (state !== "speaking" && state !== "transcribing") return;
         previewText = event.payload.text;
         updatePreviewView();
       });
+      if (generation !== previewGeneration) unlisten();
+      else unlistenPreview = unlisten;
     } catch {
       /* live preview is best-effort; the leg still completes without it */
     }
@@ -778,10 +799,15 @@ export function createSpeedTest(opts: {
   function stop(): void {
     clearTicker();
     document.removeEventListener("keydown", onKeydown);
+    previewGeneration += 1;
     if (unlistenPreview) {
       unlistenPreview();
       unlistenPreview = null;
     }
+    // Navigating away mid-read: stop the recorder side-effect-free so the audio
+    // is never committed. During `transcribing` a stop is already in flight.
+    if (state === "speaking") discardCapture();
+    state = "intro";
     resetPreview();
   }
 

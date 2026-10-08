@@ -16,8 +16,6 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
   justify-content: flex-start;
   padding: 0 var(--sem-space-xl) 0 calc(var(--sem-size-control-lg) + var(--sem-space-4xl) + var(--sem-space-xl));
 }
-.wordmark { gap: var(--sem-space-xs); color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); letter-spacing: var(--sem-font-tracking-tight); }
-.wordmark-mark { width: var(--sem-icon-size-sm); height: var(--sem-icon-size-sm); }
 .workspace { grid-template-columns: calc(var(--sem-size-control-lg) + 2 * var(--sem-space-sm)) minmax(0, 1fr); padding: 0 var(--sem-space-sm) var(--sem-space-sm) 0; }
 .sidebar { padding: var(--sem-space-sm); border: 0; background: transparent; overflow: visible; }
 .nav, .sidebar-foot { display: flex; flex-direction: column; gap: var(--sem-space-sm); padding: 0; }
@@ -48,8 +46,7 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
 .profile-heading { display: flex; align-items: center; gap: var(--sem-space-xl); margin-bottom: var(--sem-space-3xl); }
 .profile-heading svg { width: var(--sem-size-control-lg); height: var(--sem-size-control-lg); color: var(--sem-color-text-muted); }
 .profile-heading h2 { font-size: var(--sem-font-size-title); font-weight: var(--sem-font-weight-emphasis); }
-.profile-heading p, .profile-summary { color: var(--sem-color-text-muted); }
-.profile-summary { margin-bottom: var(--sem-space-3xl); }
+.profile-heading p { color: var(--sem-color-text-muted); }
 
 /* Existing product controllers generate .btn and .icon-btn at runtime. Adapt
    their states to the kit's button anatomy without replacing those hooks. */
@@ -74,10 +71,10 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
 .btn:disabled { opacity: .45; box-shadow: none; cursor: not-allowed; }
 .row-control .btn { height: var(--sem-size-control-sm); padding: 0 var(--sem-space-sm); }
 .icon-btn { width: var(--sem-size-control-sm); height: var(--sem-size-control-sm); border-radius: var(--sem-radius-control); }
-.btn:focus-visible, .icon-btn:focus-visible, .nav-item:focus-visible, .setting-select:focus-visible, .setting-input:focus-visible, .setting-textarea:focus-visible, .seg button:focus-visible, .shortcut:focus-visible {
+.btn:focus-visible, .icon-btn:focus-visible, .nav-item:focus-visible, .setting-select:focus-visible, .setting-input:focus-visible, .seg button:focus-visible, .shortcut:focus-visible {
   outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset);
 }
-.setting-select, .setting-input, .setting-textarea { font-size: var(--sem-font-size-body); border-radius: var(--sem-radius-control); min-height: var(--sem-size-control-sm); }
+.setting-select, .setting-input { font-size: var(--sem-font-size-body); border-radius: var(--sem-radius-control); min-height: var(--sem-size-control-sm); }
 .setting-select { appearance: auto; -webkit-appearance: auto; background-image: none; padding: 0 var(--sem-space-sm); color-scheme: inherit; }
 :root[data-mode="light"] { color-scheme: light; }
 :root[data-mode="dark"] { color-scheme: dark; }

@@ -19,6 +19,8 @@ let download: Download | null = null;
 let speechDownload: string | null = null;
 let loading = false;
 let reloadRequested = false;
+// A Refresh pressed during an in-flight load still owes a Hugging Face refresh.
+let refreshRequested = false;
 const variants = new Map<string, string>();
 const speechProgress = new Map<string, { percentage: number; message: string; done: boolean }>();
 const rows = new Map<string, { status: HTMLElement; progress: HTMLProgressElement }>();
@@ -109,7 +111,9 @@ function variantPicker(family: string, name: string, choices: { value: string; l
       const option = node as HTMLElement;
       option.classList.toggle("ds-select-option--active", index === active);
       option.setAttribute("aria-selected", String(choices[index].value === trigger.dataset.value));
-      option.querySelector<HTMLElement>(".ds-select-check")!.hidden = choices[index].value !== trigger.dataset.value;
+      // An SVG has no `hidden` property; the presentation attribute hides the
+      // tick while keeping its slot, so labels stay aligned.
+      option.querySelector(".ds-select-check")!.setAttribute("visibility", choices[index].value === trigger.dataset.value ? "visible" : "hidden");
     });
     const current = list.children[active] as HTMLElement | undefined;
     if (current) { trigger.setAttribute("aria-activedescendant", current.id); current.scrollIntoView({ block: "nearest" }); }
@@ -222,7 +226,7 @@ function render(): void {
   if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
 }
 async function load(refresh = false): Promise<void> {
-  if (loading) { reloadRequested = true; return; }
+  if (loading) { reloadRequested = true; refreshRequested = refreshRequested || refresh; return; }
   loading = true;
   try {
     const values = await Promise.all([invoke<Settings>("get_settings"), invoke<Catalog>("get_local_model_catalog", { refresh }), invoke<SpeechModel[]>("get_dictation_models"), invoke<boolean>("get_cloud_available").catch(() => false)]);
@@ -235,7 +239,11 @@ async function load(refresh = false): Promise<void> {
     if (refresh) say(catalog.metadataError ?? "Compatible model information refreshed from Hugging Face.", !!catalog.metadataError);
   } finally {
     loading = false;
-    if (reloadRequested) { reloadRequested = false; void load().catch(e => say(String(e), true)); }
+    if (reloadRequested) {
+      const refreshNext = refreshRequested;
+      reloadRequested = refreshRequested = false;
+      void load(refreshNext).catch(e => say(String(e), true));
+    }
   }
 }
 root.querySelector<HTMLButtonElement>("#refreshModels")!.addEventListener("click", event => {
@@ -253,11 +261,24 @@ void listen<{ model: string; percentage: number; message: string; done: boolean;
   if (e.done) { speechDownload = null; if (e.error) say(e.error, true); void load().catch(e => say(String(e), true)); }
 }).catch(e => say(String(e), true));
 void listen<Settings>("settings-updated", event => { settings = event.payload; void load().catch(e => say(String(e), true)); }).catch(e => say(String(e), true));
-// Only refresh memory state while the model screen is visible; don't rebuild focused controls.
-window.setInterval(() => {
-  if (!catalog || !root.classList.contains("active") || root.contains(document.activeElement) || busyDownload()) return;
-  void load().catch(() => {});
-}, 5000);
+// Refresh memory state only while the Models screen is on screen in a visible
+// window; the poll stops when either goes away. Don't rebuild focused controls.
+let memoryPoll: ReturnType<typeof setInterval> | undefined;
+function syncMemoryPoll(): void {
+  const visible = root.classList.contains("active") && document.visibilityState === "visible";
+  if (visible && memoryPoll === undefined) {
+    memoryPoll = setInterval(() => {
+      if (!catalog || root.contains(document.activeElement) || busyDownload()) return;
+      void load().catch(() => {});
+    }, 5000);
+  } else if (!visible && memoryPoll !== undefined) {
+    clearInterval(memoryPoll);
+    memoryPoll = undefined;
+  }
+}
+document.addEventListener("home-screen-changed", syncMemoryPoll);
+document.addEventListener("visibilitychange", syncMemoryPoll);
+syncMemoryPoll();
 void load().catch(e => say(String(e), true));
 
 type HubModel = { id: string; author?: string; name?: string; downloads: number; likes: number; pipelineTag: string | null; libraryName: string | null; languages: string[]; license: string | null; description?: string | null; gated: boolean; source: string };
