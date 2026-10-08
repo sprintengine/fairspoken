@@ -181,8 +181,9 @@ in the app's own UI rather than Sparkle's windows.
 - **When:** about 30 s after launch, then every 6 hours (`SUScheduledCheckInterval` 21600), and on
   demand. Headless Fairspoken Server (`--headless`) never checks: update the app it runs from.
 - **Channels:** `stable` and `nightly`, saved as `updateChannel` in the app's defaults. With none
-  saved, a build follows its own version (`-nightly.` in `CFBundleShortVersionString` → nightly).
-  Changing it checks at once. Nightly allows the appcast's `<sparkle:channel>nightly</sparkle:channel>`
+  saved, a build resolves it from its own version (`-nightly.` in `CFBundleShortVersionString` →
+  nightly) and saves that on first launch, so a nightly install stays on nightly after it installs a
+  promoted stable build. Changing it checks at once. Nightly allows the appcast's `<sparkle:channel>nightly</sparkle:channel>`
   items; stable only the default channel. Sparkle never downgrades, so a nightly switched to Stable
   stays put until the next stable release (Settings says so).
 - **Feeds** (one appcast per app, both channels in it, on the rolling `update-feeds` release):
