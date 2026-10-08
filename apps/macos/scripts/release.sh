@@ -21,7 +21,7 @@
 # keychain search list. $FS_KEYCHAIN limits the search (and codesign) to one keychain; CI sets it
 # to the temporary keychain it imports the CSC_LINK certificate into.
 #
-# Notarization credentials, the first that is complete:
+# Notarization credentials (read by scripts/notarize.sh), the first that is complete:
 #   APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID    CI: the repository secrets
 #   the notarytool keychain profile $NOTARY_PROFILE (default fairspoken-notary). Create it once:
 #     xcrun notarytool store-credentials fairspoken-notary --apple-id <apple id> --team-id <TEAM_ID>
@@ -129,47 +129,13 @@ else
 fi
 
 # --- Notarization credentials, checked before the build rather than after it ------------------
+# scripts/notarize.sh holds the sign-in check and the submit-and-wait, with Apple's retry rules;
+# the release workflow's host leg uses the same script.
 if [[ "$MODE" == "notarize" ]]; then
-  if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
-    NOTARY_AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
-    echo "Notarizing with the APPLE_ID credentials."
-  else
-    NOTARY_AUTH=(--keychain-profile "${NOTARY_PROFILE:-fairspoken-notary}")
-    echo "Notarizing with the notarytool keychain profile ${NOTARY_PROFILE:-fairspoken-notary}."
-  fi
-  # Apple's answer names the cause (wrong password, unknown team, agreement not accepted); keep it.
-  # A 5xx is Apple's notary service having a bad minute, so that alone is retried.
-  for attempt in 1 2 3 4; do
-    NOTARY_CHECK="$(xcrun notarytool history "${NOTARY_AUTH[@]}" 2>&1 >/dev/null)" && break
-    echo "$NOTARY_CHECK" >&2
-    if [[ "$attempt" == 4 ]] || ! grep -q 'HTTP status code: 5[0-9][0-9]' <<<"$NOTARY_CHECK"; then
-      die "notarytool cannot sign in. Create the profile (see --help), set APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID, or pass --no-notarize."
-    fi
-    echo "Apple's notary service failed (attempt $attempt of 4); retrying in $((attempt * 30)) s." >&2
-    sleep $((attempt * 30))
-  done
+  scripts/notarize.sh check
 fi
 
-notarize() {
-  local file="$1" result status id
-  result="$WORK/notary-$(basename "$file").json"
-  echo "Notarizing $(basename "$file") (this waits for Apple)..."
-  # No submission id means the upload itself failed (Apple's 5xx); a verdict on a submission is final.
-  for attempt in 1 2 3; do
-    xcrun notarytool submit "$file" "${NOTARY_AUTH[@]}" --wait --timeout 45m --output-format json >"$result" || true
-    id="$(plutil -extract id raw -o - "$result" 2>/dev/null || true)"
-    [[ -n "$id" || "$attempt" == 3 ]] && break
-    echo "The notary upload got no submission id (attempt $attempt of 3); retrying in $((attempt * 60)) s." >&2
-    sleep $((attempt * 60))
-  done
-  status="$(plutil -extract status raw -o - "$result" 2>/dev/null || echo "no answer")"
-  if [[ "$status" != "Accepted" ]]; then
-    cat "$result" >&2 || true
-    [[ -n "$id" ]] && xcrun notarytool log "$id" "${NOTARY_AUTH[@]}" >&2 || true
-    die "notarization of $(basename "$file") ended: $status"
-  fi
-  echo "Notarized $(basename "$file") ($id)."
-}
+notarize() { scripts/notarize.sh submit "$1" "$WORK/notary-$(basename "$1").json"; }
 
 # --- Build ------------------------------------------------------------------------------------
 scripts/build.sh release --app "$APP_KIND" "MARKETING_VERSION=$VERSION" "CURRENT_PROJECT_VERSION=$BUILD_NUMBER" "${SIGN_SETTINGS[@]}"

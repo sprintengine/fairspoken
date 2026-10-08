@@ -36,7 +36,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import { feedsCoverRelease, FEEDS_RELEASE_BODY, FEEDS_RELEASE_TITLE, FEEDS_TAG, feedUrl, planFeeds, renderFeeds, verifyPublicFeeds } from './feeds.mjs'
-import { isOnMain, resolveNightly, resolvePromotion, resolveTagRelease } from './main-release.mjs'
+import { isOnMain, isOnMainFirstParent, resolveNightly, resolvePromotion, resolveTagRelease } from './main-release.mjs'
 import { ed25519Problem, minisignProblem } from './minisign.mjs'
 import { failedAttemptGate, lastNightly, nightlyGate } from './nightly-gate.mjs'
 import {
@@ -212,6 +212,16 @@ async function resolve() {
     // route). package.json is not consulted: it stays at the development
     // baseline, and the build stamps the tag's version.
     if (env('REF_TYPE') !== 'tag') throw new Error('A push to a branch publishes nothing. Release from a tag or a dispatch.')
+    // Only a commit on main's first-parent history (docs/releasing.md, the
+    // hotfix route). The resolve job checks out with fetch-depth 0, so
+    // origin/main is main's head as of this run.
+    const mainSha = execFileSync('git', ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'], { cwd: repoRoot, encoding: 'utf8' }).trim()
+    if (!isOnMainFirstParent({ sha, mainSha, cwd: repoRoot })) {
+      throw new Error(
+        `${env('REF_NAME')} tags ${sha}, which is not on main's first-parent history (main is ${mainSha}). ` +
+          'A hotfix tag must name a commit merged to main; merge the fix first, then tag its merge commit.',
+      )
+    }
     version = resolveTagRelease({
       refName: env('REF_NAME'),
       latestStable: stable,
@@ -601,6 +611,7 @@ async function replaceAsset(token, release, name, text) {
 function logRender({ plan, rendered }) {
   if (plan.pruned.length > 0) console.log(`Left out (about to be pruned): ${plan.pruned.join(', ')}`)
   for (const [name, tags] of Object.entries(rendered.sources)) console.log(`${name} <- ${tags.join(', ') || '(no items)'}`)
+  for (const name of rendered.withdrawn) console.log(`${name} <- (no release carries it: withdrawn)`)
   for (const warning of rendered.warnings) warn(warning)
 }
 
@@ -642,6 +653,13 @@ async function updateFeeds(outDir) {
   for (const [name, text] of Object.entries(rendered.files)) {
     await replaceAsset(token, feedsRelease, name, text)
     console.log(`Uploaded ${feedUrl({ repo: repoOfEndpoint(), name })}`)
+  }
+  // A feed no release carries any more is deleted, not left serving the last
+  // release that did (renderFeeds: `withdrawn`).
+  for (const asset of await listAssets(token, feedsRelease.id)) {
+    if (!rendered.withdrawn.includes(asset.name)) continue
+    await deleteAsset(token, asset.id)
+    console.log(`Deleted ${asset.name}: no published release carries it.`)
   }
 }
 

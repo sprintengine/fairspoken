@@ -106,6 +106,22 @@ export function resolveTagRelease({ refName, latestStable = null, publishedTags 
   return version
 }
 
+// A pushed hotfix tag must name a commit main itself moved through: one on
+// main's FIRST-PARENT history, i.e. a squash merge or a merge commit, never a
+// commit from inside a merged branch (which may not even build on its own) or
+// a commit main has never seen. Anyone who can push a tag could otherwise
+// publish any commit as a stable every install takes. `mainSha` is main's head
+// as the resolve job fetched it; an unknown commit is simply not on it.
+export function isOnMainFirstParent({ sha, mainSha, cwd = process.cwd() }) {
+  try {
+    const history = execFileSync('git', ['rev-list', '--first-parent', mainSha], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const full = execFileSync('git', ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return history.split('\n').includes(full)
+  } catch {
+    return false
+  }
+}
+
 // Stable only ships a commit main has: a nightly whose commit was force-pushed
 // away, or that was cut from anywhere but main, is refused.
 export function isOnMain({ sha, mainSha, cwd = process.cwd() }) {

@@ -248,11 +248,14 @@ jobs:
       TAG: ${{ needs.validate.outputs.tag }}
       TARGET: ${{ matrix.target }}
       BUNDLES: ${{ matrix.bundles }}
-      # Signs the desktop updater payloads and the host archive; the public
-      # half is plugins.updater.pubkey in tauri.conf.json, and every signature
-      # is checked against it before it leaves this runner.
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # TAURI_SIGNING_PRIVATE_KEY (and its password) signs the desktop updater
+      # payloads and the host archive; the public half is
+      # plugins.updater.pubkey in tauri.conf.json, and every signature is
+      # checked against it before it leaves this runner. It is NOT set here
+      # for the whole job: `npm ci`, `cargo install` and every build script of
+      # every crate would see it. Only the three steps that sign get it --
+      # Package app (Windows), Package app (Linux) and Sign transcription host
+      # archive -- each in its own step env.
 
     steps:
       - name: Checkout
@@ -312,10 +315,33 @@ jobs:
       # every binary it signs -- no certificate file, no hardware token. All
       # six secrets sign; none leaves the installer unsigned (SmartScreen warns
       # on first run); a partial set never gets here (validate fails first).
+      #
+      # The CLI is installed in a step of its own, which sees no secret (only
+      # whether the Azure group is set), so compiling it and its dependencies
+      # from crates.io never runs with a signing key in the environment. It is
+      # pinned to an exact version with its own Cargo.lock: an unpinned install
+      # would take whatever was published last into the signing path. 0.11.0
+      # is 0.10.0 plus a deprecation notice (upstream moved to
+      # artifact-signing-cli); moving to that is a change of its own.
+      - name: Install the Windows signing tool
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          HAS_AZURE_TRUSTED_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' }}
+          TRUSTED_SIGNING_CLI_VERSION: "0.11.0"
+        run: |
+          if [ "$HAS_AZURE_TRUSTED_SIGNING" = "true" ]; then
+            cargo install trusted-signing-cli --version "$TRUSTED_SIGNING_CLI_VERSION" --locked
+          else
+            echo "No Azure Trusted Signing secrets: nothing to install."
+          fi
+
       - name: Package app (Windows)
         if: runner.os == 'Windows'
         shell: bash
         env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -330,7 +356,6 @@ jobs:
           config='{"bundle":{"createUpdaterArtifacts":true}}'
           if [ "$present" -eq "${#names[@]}" ]; then
             echo "Windows signing enabled (Azure Trusted Signing)."
-            cargo install trusted-signing-cli --locked
             # shellcheck disable=SC2016 # the ${...} are node's template literals, not the shell's
             config=$(node -e '
               const e = process.env
@@ -353,6 +378,9 @@ jobs:
       - name: Package app (Linux)
         if: runner.os == 'Linux' && matrix.bundles != ''
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           npx tauri build --bundles "$BUNDLES" --config '{"bundle":{"createUpdaterArtifacts":true}}'
           for deb in src-tauri/target/release/bundle/deb/*.deb; do
@@ -413,17 +441,12 @@ jobs:
             echo "Set all of them to sign and notarize, or none to ship ad-hoc signed." >&2
             exit 1
           fi
+          # The keychain import and the notarization, with Apple's retry rules
+          # (an upload with no submission id is resubmitted; a verdict is
+          # final), are apps/macos/scripts/notarize.sh, shared with the
+          # macos-app job and release.sh.
           keychain="$RUNNER_TEMP/host-signing.keychain-db"
-          keychain_password="$(openssl rand -hex 24)"
-          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/host-signing.p12"
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 3600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/host-signing.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
-          rm -f "$RUNNER_TEMP/host-signing.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
-          # shellcheck disable=SC2046 # one keychain path per word
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          apps/macos/scripts/notarize.sh import-keychain "$keychain" 3600
           identity="$(security find-identity -v -p codesigning "$keychain" | sed -nE 's/^ *[0-9]+\) [0-9A-F]+ "(Developer ID Application: .*)"$/\1/p' | head -1)"
           if [ -z "$identity" ]; then
             echo "CSC_LINK holds no Developer ID Application identity." >&2
@@ -432,21 +455,11 @@ jobs:
           codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$identity" "$HOST_BINARY"
           codesign --verify --strict --verbose=2 "$HOST_BINARY"
           ditto -c -k "$HOST_BINARY" "$RUNNER_TEMP/host-notarize.zip"
-          # No submission id means the upload itself failed (Apple's 5xx); retry
-          # that, but a verdict on a submission is final.
-          for attempt in 1 2 3; do
-            xcrun notarytool submit "$RUNNER_TEMP/host-notarize.zip" --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-              --wait --timeout 45m --output-format json > "$RUNNER_TEMP/host-notarize.json" || true
-            if plutil -extract id raw -o - "$RUNNER_TEMP/host-notarize.json" >/dev/null 2>&1 || [ "$attempt" = 3 ]; then break; fi
-            echo "The notary upload got no submission id (attempt $attempt of 3); retrying in $((attempt * 60)) s." >&2
-            sleep $((attempt * 60))
-          done
-          status="$(plutil -extract status raw -o - "$RUNNER_TEMP/host-notarize.json" 2>/dev/null || echo "no answer")"
+          notarized=0
+          apps/macos/scripts/notarize.sh submit "$RUNNER_TEMP/host-notarize.zip" "$RUNNER_TEMP/host-notarize.json" || notarized=$?
           security delete-keychain "$keychain"
-          if [ "$status" != "Accepted" ]; then
-            cat "$RUNNER_TEMP/host-notarize.json" >&2 || true
-            echo "Notarization of the transcription host ended: ${status}" >&2
+          if [ "$notarized" -ne 0 ]; then
+            echo "Notarization of the transcription host failed (above)." >&2
             exit 1
           fi
           echo "Transcription host signed as ${identity} and notarized."
@@ -491,6 +504,9 @@ jobs:
       # of host-manifest.json written: url, sha256, signature, format.
       - name: Sign transcription host archive
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/release/release.mjs sign-host "${{ matrix.hostTarget }}" release-assets
 
       # A host for a headless server must not need a desktop. Printed rather
@@ -614,17 +630,9 @@ jobs:
             exit 1
           fi
           keychain="$RUNNER_TEMP/app-signing.keychain-db"
-          keychain_password="$(openssl rand -hex 24)"
-          printf '%s' "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/app-signing.p12"
-          security create-keychain -p "$keychain_password" "$keychain"
+          # The same import as the host leg (apps/macos/scripts/notarize.sh).
           # Locks after three hours idle: longer than the job may run.
-          security set-keychain-settings -lut 10800 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/app-signing.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
-          rm -f "$RUNNER_TEMP/app-signing.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
-          # shellcheck disable=SC2046 # one keychain path per word
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          apps/macos/scripts/notarize.sh import-keychain "$keychain" 10800
           echo "FS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
           echo "mode=notarize" >> "$GITHUB_OUTPUT"
           echo "Developer ID certificate imported; the apps will be signed and notarized."
