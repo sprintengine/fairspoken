@@ -190,11 +190,8 @@ impl EventHub {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HubState> {
-        // Critical sections only push/retain the subscriber list, so a
-        // poisoned lock still holds a usable value.
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        // Critical sections only push/retain the subscriber list.
+        super::lock_unpoisoned(&self.state)
     }
 }
 

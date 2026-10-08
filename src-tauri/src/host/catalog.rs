@@ -95,6 +95,38 @@ pub(super) struct ModelSnapshot {
     pub(super) assigned_workers: Vec<usize>,
 }
 
+/// The disk-backed parts of a stats snapshot, read before the metrics lock
+/// is taken: checking every model's files must never hold up the workers
+/// and request handlers that wait on that lock.
+pub(super) struct ModelInventory {
+    /// Each worker's assigned model and whether its files are present.
+    pub(super) workers: Vec<(SttModel, bool)>,
+    pub(super) models: Vec<ModelSnapshot>,
+}
+
+impl ModelInventory {
+    pub(super) fn read(models: &ModelService, worker_models: Vec<SttModel>) -> Self {
+        let snapshots = model_snapshots(models, &worker_models);
+        let workers = worker_models
+            .into_iter()
+            .map(|model| {
+                // A cheap existence check, shared with the catalog row;
+                // load/checksum failures surface through the worker state.
+                let installed = snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.id == model.model_id())
+                    .map(|snapshot| snapshot.installed)
+                    .unwrap_or_else(|| models.files_present(model));
+                (model, installed)
+            })
+            .collect();
+        Self {
+            workers,
+            models: snapshots,
+        }
+    }
+}
+
 pub(super) fn model_snapshots(
     models: &ModelService,
     worker_models: &[SttModel],
@@ -144,7 +176,7 @@ fn installed_bytes(path: &Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{model_snapshots, CATALOG};
+    use super::{model_snapshots, ModelInventory, CATALOG};
     use crate::models::{ModelService, SttModel};
 
     #[test]
@@ -170,5 +202,24 @@ mod tests {
             .iter()
             .all(|model| model.assigned_workers.is_empty()));
         assert!(snapshots.iter().all(|model| model.size_bytes > 0));
+    }
+
+    #[test]
+    fn inventory_reports_each_worker_with_its_catalog_install_state() {
+        let models = ModelService::default();
+        let inventory =
+            ModelInventory::read(&models, vec![SttModel::Parakeet, SttModel::ParakeetUltra]);
+
+        assert_eq!(inventory.workers.len(), 2);
+        for (model, installed) in &inventory.workers {
+            let listed = inventory
+                .models
+                .iter()
+                .find(|snapshot| snapshot.id == model.model_id())
+                .expect("assigned model listed");
+            assert_eq!(*installed, listed.installed);
+            assert_eq!(*installed, models.files_present(*model));
+        }
+        assert_eq!(inventory.workers[1].0, SttModel::ParakeetUltra);
     }
 }

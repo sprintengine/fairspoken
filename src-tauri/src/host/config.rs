@@ -1,4 +1,5 @@
 use super::pairing::{deserialize_password_change, validate_pairing_password, HostAuth};
+use super::lock_unpoisoned;
 use super::update::UpdatePrefs;
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
@@ -308,45 +309,39 @@ impl HostLiveConfig {
     }
 
     pub(super) fn auth(&self) -> HostAuth {
-        lock(&self.auth).clone()
+        lock_unpoisoned(&self.auth).clone()
     }
 
     pub(super) fn set_auth(&self, auth: HostAuth) {
-        *lock(&self.auth) = auth;
+        *lock_unpoisoned(&self.auth) = auth;
     }
 
     pub(super) fn token(&self) -> Option<String> {
-        lock(&self.auth).token.clone()
+        lock_unpoisoned(&self.auth).token.clone()
     }
 
     pub(super) fn pairing_enabled(&self) -> bool {
-        lock(&self.auth).pairing_enabled()
+        lock_unpoisoned(&self.auth).pairing_enabled()
     }
 
     pub(super) fn name(&self) -> String {
-        lock(&self.name).0.clone()
+        lock_unpoisoned(&self.name).0.clone()
     }
 
     fn saved_name(&self) -> Option<String> {
-        lock(&self.name).1.clone()
+        lock_unpoisoned(&self.name).1.clone()
     }
 
     pub(super) fn set_name(&self, display: String, saved: Option<String>) {
-        *lock(&self.name) = (display, saved);
+        *lock_unpoisoned(&self.name) = (display, saved);
     }
 
     pub(super) fn update_prefs(&self) -> UpdatePrefs {
-        self.update_prefs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        lock_unpoisoned(&self.update_prefs).clone()
     }
 
     pub(super) fn set_update_prefs(&self, prefs: UpdatePrefs) {
-        *self
-            .update_prefs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = prefs;
+        *lock_unpoisoned(&self.update_prefs) = prefs;
     }
 
     pub(super) fn max_active_streams(&self) -> u32 {
@@ -362,11 +357,7 @@ impl HostLiveConfig {
     }
 
     pub(super) fn worker_models_lock(&self) -> MutexGuard<'_, Vec<SttModel>> {
-        // The critical sections only read or swap the Vec, so a poisoned lock
-        // still holds a usable value.
-        self.worker_models
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock_unpoisoned(&self.worker_models)
     }
 
     pub(super) fn worker_model(&self, worker_index: usize) -> SttModel {
@@ -491,14 +482,6 @@ pub(super) fn apply_config_update(
         live.set_auth(auth);
     }
     Ok(())
-}
-
-/// The critical sections only read or replace the value, so a poisoned lock
-/// still holds a usable one.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn env_usize(name: &str, default: usize) -> usize {

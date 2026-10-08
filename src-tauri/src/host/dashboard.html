@@ -35,7 +35,7 @@
     --hairline-strong: rgba(16, 24, 32, 0.15);
     --ink: #15191D;
     --ink-2: #5B6670;
-    --ink-3: #8A949C;
+    --ink-3: #6B7680;
     --accent: #B2453E;
     --accent-tint: rgba(178, 69, 62, 0.07);
     --accent-ring: rgba(178, 69, 62, 0.28);
@@ -72,7 +72,7 @@
     --hairline-strong: rgba(255, 255, 255, 0.15);
     --ink: #E8ECEF;
     --ink-2: #9AA4AD;
-    --ink-3: #6B747C;
+    --ink-3: #858E96;
     --accent: #F07F76;
     --accent-tint: rgba(240, 127, 118, 0.10);
     --accent-ring: rgba(240, 127, 118, 0.34);
@@ -344,7 +344,7 @@
     transition: background 140ms var(--ease), border-color 140ms var(--ease), filter 140ms var(--ease);
   }
   .btn:hover { border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
-  .btn:focus-visible, .icon-btn:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+  .btn:focus-visible, .icon-btn:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .btn[disabled] { opacity: 0.45; cursor: default; }
   .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 4px 12px -4px var(--accent-ring); }
   .btn.primary:hover { filter: brightness(1.06); }
@@ -372,7 +372,7 @@
   .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 160ms var(--ease); }
   .switch:checked { background: var(--accent); }
   .switch:checked::after { transform: translateX(16px); }
-  .switch:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .form-error { color: var(--error); font-size: 12.5px; }
   .form-error:empty { display: none; }
@@ -496,7 +496,7 @@
     transition: background 140ms var(--ease), color 140ms var(--ease);
   }
   .seg button[aria-checked="true"] { background: var(--surface-strong); color: var(--ink); box-shadow: inset 0 1px 0 var(--edge), 0 1px 3px rgba(16, 24, 32, 0.14); }
-  .seg button:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .seg[aria-disabled="true"] button { cursor: default; opacity: 0.6; }
   .upd-hint { color: var(--ink-3); font-size: 12.5px; }
   .upd-hint:empty { display: none; }
@@ -748,7 +748,7 @@
       <div class="table-wrap" id="clientTable"><p class="placeholder">No clients yet.</p></div>
     </section>
 
-    <section class="card glass" aria-labelledby="recentTitle">
+    <section class="card glass live" aria-labelledby="recentTitle">
       <div class="card-head"><h2 id="recentTitle">Recent</h2><span class="grow"></span><span class="count" id="recentCount"></span></div>
       <div class="table-wrap" id="recentTable"><p class="placeholder">Connecting…</p></div>
       <div class="table-more" id="recentMore" hidden><button class="btn quiet" id="recentMoreBtn" type="button">Show all</button></div>
@@ -1919,9 +1919,13 @@
         text.append("Enter the server password to continue.");
         notice.append(text, unlockForm());
       } else {
-        text.innerHTML = "Token required. Open <code>/?token=…</code> with the server's <code>FAIRSPOKEN_HOST_TOKEN</code>.";
+        // One inner span: as direct children of the flex container the text
+        // runs would each lose their edge spaces around the <code>s.
+        text.innerHTML = "<span>Token required. Open <code>/?token=…</code> with the server's <code>FAIRSPOKEN_HOST_TOKEN</code>.</span>";
         notice.appendChild(text);
       }
+      const recent = $("recentTable");
+      if (recent.querySelector(".placeholder")) recent.replaceChildren(h("p", "placeholder", "Locked"));
       return;
     }
     const stats = S.stats;
@@ -2083,8 +2087,16 @@
       viz.layout();
     });
   };
-  // Clocks (elapsed, last seen, uptime) advance once a second.
-  setInterval(() => { if (S.stats && !document.hidden) renderAll(); }, 1000);
+  // Clocks (elapsed, last seen, uptime, the throughput window) advance once a
+  // second; panels showing only data wait for the next change (renderAll).
+  setInterval(() => {
+    const stats = S.stats;
+    if (!stats || document.hidden || renderQueued) return;
+    renderChrome(stats);
+    renderKpis(stats);
+    renderClients(stats);
+    viz.layout();
+  }, 1000);
 
   /* ══════════════════ Events ══════════════════ */
   const applySnapshot = (stats, { animateDiff = false } = {}) => {
@@ -2257,12 +2269,14 @@
 
   let source = null, pollTimer = 0, retryTimer = 0;
   const startPolling = () => {
+    // Try the event stream again periodically; polling stays as the floor.
+    // Re-armed on every fallback, also when already polling, or a second
+    // failed retry would leave the page polling for good.
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connectEvents, 30000);
     if (pollTimer) return;
     fetchStats(false);
     pollTimer = setInterval(() => fetchStats(true), 2000);
-    // Try the event stream again periodically; polling stays as the floor.
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(connectEvents, 30000);
   };
   const stopPolling = () => { clearInterval(pollTimer); pollTimer = 0; };
 
