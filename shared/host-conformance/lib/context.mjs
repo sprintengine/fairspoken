@@ -71,7 +71,12 @@ export class Context {
       useGpu: s.useGpu,
       workerModels: s.workers.map((w) => w.assignedModel),
     };
-    this.originalPairingPassword = s.pairingEnabled === false ? null : s.pairingEnabled === true && this.pairingPassword ? this.pairingPassword : undefined;
+    // A password the environment sets is not the run's to restore (edits answer 409).
+    this.originalPairingPassword =
+      s.pairingPasswordSource === 'env' ? undefined
+        : s.pairingEnabled === false ? null
+        : s.pairingEnabled === true && this.pairingPassword ? this.pairingPassword
+        : undefined;
   }
 
   /** POST /v1/config, marking the configuration as changed. */

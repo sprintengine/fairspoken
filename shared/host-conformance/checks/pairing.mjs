@@ -226,10 +226,17 @@ export default [
   },
   {
     name: 'config.pairing-password',
-    description: 'POST /v1/config pairingPassword: 6–128 characters or 400 with nothing changed; a string turns pairing on, null and "" turn it off; answers report pairingEnabled only',
+    description: 'POST /v1/config pairingPassword: 6–128 characters or 400 with nothing changed; a string turns pairing on, null and "" turn it off; answers report pairingEnabled only; 409 while the environment sets the password',
     async run(ctx) {
       ctx.requireToken();
       const before = await ctx.stats();
+      if (before.pairingPasswordSource === 'env') {
+        // FAIRSPOKEN_HOST_PAIRING_PASSWORD owns the password: edits are refused and change nothing.
+        const res = await ctx.postConfig({ pairingPassword: `conf-${randomBytes(6).toString('hex')}` });
+        expectError(res, 409, 'POST /v1/config pairingPassword while the environment sets it');
+        eq((await ctx.stats()).pairingEnabled, true, 'pairingEnabled after the refused edit');
+        return;
+      }
       if (before.pairingEnabled && !ctx.pairingPassword) skip('the host has a pairing password; pass it with --pairing-password so the check can restore it');
       const original = before.pairingEnabled ? ctx.pairingPassword : null;
       const password = `conf-${randomBytes(6).toString('hex')}`;
