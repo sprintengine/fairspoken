@@ -41,6 +41,50 @@ struct JobQueueTests {
         #expect(queue.tryEnqueue(job(2)) == .closed)
         #expect(await queue.next(timeout: .seconds(5)) == nil)
     }
+
+    @Test func waitsEndedByAJobAWakeOrCloseCancelTheirTimers() async throws {
+        let queue = JobQueue(capacity: 4)
+        for i in UInt64(0)..<20 {
+            let waiter = Task { await queue.next(timeout: .seconds(60)) }
+            try await Task.sleep(for: .milliseconds(2))
+            #expect(queue.tryEnqueue(job(i)) == .accepted)
+            #expect(await waiter.value?.id == i)
+        }
+        let woken = (0..<5).map { _ in Task { await queue.next(timeout: .seconds(60)) } }
+        try await Task.sleep(for: .milliseconds(20))
+        queue.wakeIdleWorkers()
+        for w in woken { #expect(await w.value == nil) }
+        let closed = (0..<5).map { _ in Task { await queue.next(timeout: .seconds(60)) } }
+        try await Task.sleep(for: .milliseconds(20))
+        _ = queue.close()
+        for w in closed { #expect(await w.value == nil) }
+        // Without cancellation 30 timers would sleep out their full minute.
+        #expect(await settles { queue.pendingTimers == 0 })
+    }
+
+    @Test func racingTimeoutsAndJobsResumeEachWaiterExactlyOnce() async {
+        let queue = JobQueue(capacity: 1_000)
+        var received = 0
+        for i in 0..<300 {
+            async let got = queue.next(timeout: .microseconds(i % 50))
+            _ = queue.tryEnqueue(job(UInt64(i)))
+            if await got != nil { received += 1 }
+        }
+        // A job whose waiter timed out first stays queued for the next taker.
+        while await queue.next(timeout: .milliseconds(20)) != nil { received += 1 }
+        #expect(received == 300)
+        #expect(await settles { queue.pendingTimers == 0 })
+    }
+}
+
+/// Polls `condition` for up to two seconds.
+func settles(_ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(2)
+    while ContinuousClock.now < deadline {
+        if condition() { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return condition()
 }
 
 @Suite("SSE fan-out")
@@ -84,6 +128,39 @@ struct EventHubTests {
         #expect(slow.isClosed)
         #expect(hub.subscriberCount == 1)
         #expect(!fast.isClosed)
+    }
+
+    @Test func waitsEndedByAFrameOrCloseCancelTheirHeartbeatTimers() async throws {
+        let hub = EventHub()
+        let sub = try hub.subscribe()
+        for i in 0..<20 {
+            let pending = Task { await sub.next(timeout: .seconds(60)) }
+            try await Task.sleep(for: .milliseconds(2))
+            hub.publish("f\(i)")
+            #expect(await pending.value == .frame("f\(i)"))
+        }
+        let pending = Task { await sub.next(timeout: .seconds(60)) }
+        try await Task.sleep(for: .milliseconds(20))
+        sub.cancel()
+        #expect(await pending.value == .closed)
+        // Without cancellation 21 timers would sleep out their full minute.
+        #expect(await settles { sub.pendingTimers == 0 })
+    }
+
+    @Test func racingHeartbeatsAndFramesResumeTheWriterExactlyOnce() async throws {
+        let hub = EventHub()
+        let sub = try hub.subscribe()
+        var frames = 0
+        for i in 0..<300 {
+            async let next = sub.next(timeout: .microseconds(i % 50))
+            hub.publish("f\(i)")
+            if case .frame = await next { frames += 1 }
+        }
+        // A frame that lost the race to a heartbeat stays buffered for the next call.
+        while case .frame = await sub.next(timeout: .milliseconds(20)) { frames += 1 }
+        #expect(frames == 300)
+        #expect(!sub.isClosed)
+        #expect(await settles { sub.pendingTimers == 0 })
     }
 
     @Test func eventFramesMatchTheRustWireFormat() {

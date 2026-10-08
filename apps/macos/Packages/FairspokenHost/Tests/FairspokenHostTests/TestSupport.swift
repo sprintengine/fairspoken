@@ -122,6 +122,17 @@ enum TestAudio {
     static func chunked(_ bytes: [UInt8]) -> [UInt8] { HTTPStatus.chunk(bytes) }
 }
 
+/// A value a handler sets and the test reads once the connection is done.
+final class Box<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
 /// A clock the pairing limiter reads, moved by hand.
 final class ManualClock: @unchecked Sendable {
     private let lock = NSLock()

@@ -80,27 +80,64 @@ struct TranscriptionJob: Sendable {
     var result: JobResult
 }
 
+/// Timeouts for waits that usually end some other way (a job or a frame arrives first). Each
+/// is a sleeping task that whoever ends the wait cancels, so a busy host doesn't pile up
+/// sleepers until their timeouts lapse.
+final class WaitTimers: Sendable {
+    private let live = Atomic<Int>(0)
+
+    /// Timers still sleeping (or just finishing).
+    var pending: Int { live.load(ordering: .relaxed) }
+
+    /// Calls `fire` after `timeout` unless the returned task is cancelled first.
+    func start(after timeout: Duration, _ fire: @escaping @Sendable () -> Void) -> Task<Void, Never> {
+        live.add(1, ordering: .relaxed)
+        return Task { [self] in
+            defer { live.subtract(1, ordering: .relaxed) }
+            try? await Task.sleep(for: timeout)
+            if !Task.isCancelled { fire() }
+        }
+    }
+}
+
 /// Bounded FIFO of jobs waiting for a worker (the Rust host's `sync_channel(queue_capacity)`):
 /// an idle worker takes a job straight away; otherwise up to `capacity` wait.
 final class JobQueue: Sendable {
     enum EnqueueResult { case accepted, full, closed }
 
+    /// An idle worker. Whoever removes it from `State.waiters` (under the lock) resumes it,
+    /// exactly once, and cancels its timer.
+    private struct Waiter {
+        var token: UInt64
+        var cont: CheckedContinuation<TranscriptionJob?, Never>
+        var timer: Task<Void, Never>
+
+        func resume(returning job: TranscriptionJob?) {
+            timer.cancel()
+            cont.resume(returning: job)
+        }
+    }
+
     private struct State {
         var jobs: [TranscriptionJob] = []
-        var waiters: [(token: UInt64, cont: CheckedContinuation<TranscriptionJob?, Never>)] = []
+        var waiters: [Waiter] = []
         var nextToken: UInt64 = 0
         var closed = false
     }
 
     let capacity: Int
     private let state = Mutex(State())
+    private let timers = WaitTimers()
 
     init(capacity: Int) { self.capacity = capacity }
 
+    /// Idle-poll timers not yet finished.
+    var pendingTimers: Int { timers.pending }
+
     func tryEnqueue(_ job: TranscriptionJob) -> EnqueueResult {
-        let (result, waiter) = state.withLock { s -> (EnqueueResult, CheckedContinuation<TranscriptionJob?, Never>?) in
+        let (result, waiter) = state.withLock { s -> (EnqueueResult, Waiter?) in
             if s.closed { return (.closed, nil) }
-            if !s.waiters.isEmpty { return (.accepted, s.waiters.removeFirst().cont) }
+            if !s.waiters.isEmpty { return (.accepted, s.waiters.removeFirst()) }
             guard s.jobs.count < capacity else { return (.full, nil) }
             s.jobs.append(job)
             return (.accepted, nil)
@@ -112,44 +149,43 @@ final class JobQueue: Sendable {
     /// The next job, or nil after `timeout` (so idle workers re-check their model) or once closed.
     func next(timeout: Duration) async -> TranscriptionJob? {
         await withCheckedContinuation { (cont: CheckedContinuation<TranscriptionJob?, Never>) in
-            let (immediate, token) = state.withLock { s -> (TranscriptionJob??, UInt64) in
-                if !s.jobs.isEmpty { return (.some(s.jobs.removeFirst()), 0) }
-                if s.closed { return (.some(nil), 0) }
+            let immediate = state.withLock { s -> TranscriptionJob?? in
+                if !s.jobs.isEmpty { return .some(s.jobs.removeFirst()) }
+                if s.closed { return .some(nil) }
                 s.nextToken += 1
-                s.waiters.append((s.nextToken, cont))
-                return (nil, s.nextToken)
+                let token = s.nextToken
+                // Started under the lock, so it is stored before anyone can take the waiter.
+                let timer = timers.start(after: timeout) { [weak self] in self?.expire(token) }
+                s.waiters.append(Waiter(token: token, cont: cont, timer: timer))
+                return nil
             }
-            if let immediate {
-                cont.resume(returning: immediate)
-                return
-            }
-            Task { [weak self] in
-                try? await Task.sleep(for: timeout)
-                guard let self else { return }
-                let expired = self.state.withLock { s -> CheckedContinuation<TranscriptionJob?, Never>? in
-                    guard let i = s.waiters.firstIndex(where: { $0.token == token }) else { return nil }
-                    return s.waiters.remove(at: i).cont
-                }
-                expired?.resume(returning: nil)
-            }
+            if let immediate { cont.resume(returning: immediate) }
         }
+    }
+
+    private func expire(_ token: UInt64) {
+        let expired = state.withLock { s -> Waiter? in
+            guard let i = s.waiters.firstIndex(where: { $0.token == token }) else { return nil }
+            return s.waiters.remove(at: i)
+        }
+        expired?.resume(returning: nil)
     }
 
     /// Wakes every idle worker now (a config change or a finished download).
     func wakeIdleWorkers() {
-        let waiters = state.withLock { s -> [CheckedContinuation<TranscriptionJob?, Never>] in
+        let waiters = state.withLock { s -> [Waiter] in
             defer { s.waiters.removeAll() }
-            return s.waiters.map(\.cont)
+            return s.waiters
         }
         waiters.forEach { $0.resume(returning: nil) }
     }
 
     /// Stops the queue; jobs still waiting are returned so they can be failed.
     func close() -> [TranscriptionJob] {
-        let (jobs, waiters) = state.withLock { s -> ([TranscriptionJob], [CheckedContinuation<TranscriptionJob?, Never>]) in
+        let (jobs, waiters) = state.withLock { s -> ([TranscriptionJob], [Waiter]) in
             s.closed = true
             defer { s.jobs.removeAll(); s.waiters.removeAll() }
-            return (s.jobs, s.waiters.map(\.cont))
+            return (s.jobs, s.waiters)
         }
         waiters.forEach { $0.resume(returning: nil) }
         return jobs

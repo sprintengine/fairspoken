@@ -15,6 +15,8 @@ public protocol ByteStreamTransport: AnyObject, Sendable {
 public enum HTTPTransportError: Error, Sendable {
     case closed
     case timedOut
+    /// The peer sent more than the connection buffers without it being consumed.
+    case overflow
 }
 
 /// One request as seen by a handler: the head, a body reader and a response writer.
@@ -131,14 +133,13 @@ public final class HTTPServerRequest: @unchecked Sendable {
         try await connection.transport.send(bytes)
     }
 
-    /// Waits until the peer closes its side or sends anything (after a streamed response a
-    /// well-behaved client sends nothing more), so an SSE writer notices a closed tab at once.
+    /// Waits until the peer closes its side, so an SSE writer notices a closed tab at once.
+    /// The connection is not reused after a streamed response, so anything the peer still
+    /// sends is dropped rather than buffered.
     public func waitForPeerClose() async {
         while true {
             do {
-                guard let bytes = try await connection.transport.receive() else { return }
-                if bytes.isEmpty { continue }
-                connection.buffer.append(bytes)
+                guard try await connection.transport.receive() != nil else { return }
             } catch {
                 return
             }
@@ -148,6 +149,14 @@ public final class HTTPServerRequest: @unchecked Sendable {
 
 /// Serves HTTP/1.x requests on one transport, one at a time (keep-alive supported).
 final class HTTPConnection: @unchecked Sendable {
+    /// Most bytes one `receive()` returns over TCP (what `NWTransport` asks for).
+    static let receiveChunk = 256 * 1024
+    /// Unread bytes past which the connection stops receiving. Every reader consumes what it
+    /// can before asking for more (a head is at most `maxHeadBytes`, a chunk-size or trailer
+    /// line a few KiB, body bytes are handed out as they land), so the buffer never holds more
+    /// than this plus one receive unless something stops draining it.
+    static let maxBuffered = HTTPHeadParser.maxHeadBytes + receiveChunk
+
     let transport: any ByteStreamTransport
     var buffer = ByteBuffer()
 
@@ -157,6 +166,7 @@ final class HTTPConnection: @unchecked Sendable {
 
     /// Reads more bytes into the buffer; false at end of stream.
     func fill() async throws -> Bool {
+        guard buffer.readableCount <= Self.maxBuffered else { throw HTTPTransportError.overflow }
         guard let bytes = try await transport.receive() else { return false }
         buffer.append(bytes)
         return true
