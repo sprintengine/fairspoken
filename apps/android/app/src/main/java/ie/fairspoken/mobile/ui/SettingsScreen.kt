@@ -111,8 +111,7 @@ private fun Section(title: String) {
 @Composable
 private fun HostsCard(app: FairspokenApp, backdrop: Backdrop, health: HostHealth, onAddHost: () -> Unit) {
     val hosts by app.store.hosts.collectAsState()
-    val activeUrl by app.store.activeUrl.collectAsState()
-    val active = hosts.firstOrNull { it.url == activeUrl } ?: hosts.firstOrNull()
+    val active by app.store.activeHost.collectAsState()
     GlassCard(backdrop, Modifier.fillMaxWidth(), padding = PaddingValues(8.dp), spacing = 2.dp) {
         hosts.forEach { host ->
             HostRow(host, host.url == active?.url, health[host.url]) { app.store.select(host.url) }
@@ -123,7 +122,7 @@ private fun HostsCard(app: FairspokenApp, backdrop: Backdrop, health: HostHealth
         ) {
             PillButton("Add host", onClick = onAddHost)
             Spacer(Modifier.weight(1f))
-            if (active != null) PillButton("Forget") { app.store.remove(active.url) }
+            active?.let { host -> PillButton("Forget") { app.store.remove(host.url) } }
         }
     }
 }

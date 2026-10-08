@@ -31,7 +31,8 @@ sealed interface DictationState {
 /**
  * One dictation at a time, shared by the in-app tester, the voice keyboard
  * and the floating dock. Audio streams to the active host while the user
- * speaks; stopping only closes the upload.
+ * speaks; stopping only closes the upload. The surface that starts a
+ * dictation owns it: only it can stop or cancel it.
  */
 class Dictation(
     private val context: Context,
@@ -48,9 +49,12 @@ class Dictation(
 
     private var capture: AudioCapture? = null
     private var upload: StreamingUpload? = null
+    private var owner: Any? = null
     private var deliver: ((String) -> Unit)? = null
     private var startedAt = 0L
+    private var stoppedAt = 0L
     private var settleJob: Job? = null
+    private var limitJob: Job? = null
 
     val isBusy: Boolean
         get() = _state.value is DictationState.Listening || _state.value is DictationState.Transcribing
@@ -58,8 +62,10 @@ class Dictation(
     val isListening: Boolean
         get() = _state.value is DictationState.Listening
 
-    /** Starts listening; [onText] gets the transcript if the dictation succeeds. */
-    fun start(onText: (String) -> Unit): Boolean {
+    fun isListeningFor(owner: Any): Boolean = isListening && this.owner === owner
+
+    /** Starts listening for [owner]; [onText] gets the transcript if the dictation succeeds. */
+    fun start(owner: Any, onText: (String) -> Unit): Boolean {
         if (isBusy) return false
         settleJob?.cancel()
         val host = store.active ?: return fail("Pair a host first")
@@ -80,7 +86,7 @@ class Dictation(
             onFailure = {
                 scope.launch {
                     if (capture !== newCapture) return@launch
-                    cancel()
+                    cancelSession()
                     fail("The microphone stopped")
                 }
             },
@@ -91,25 +97,53 @@ class Dictation(
         }
         upload = newUpload
         capture = newCapture
+        this.owner = owner
         deliver = onText
         startedAt = SystemClock.elapsedRealtime()
         _state.value = DictationState.Listening(startedAt)
+        // Heard from the start: the host may refuse (busy, token, too long) while the user still speaks.
+        newUpload.onResult { result -> scope.launch { onResult(newUpload, result) } }
+        // Stop just short of the host's limit, so what was said is transcribed instead of refused.
+        client.recordingLimitSeconds(host.url)?.let { limit ->
+            limitJob = scope.launch {
+                delay(limit * 1_000L - LIMIT_MARGIN_MS)
+                if (upload === newUpload) finishListening()
+            }
+        }
         return true
     }
 
-    /** Stops listening and transcribes what was said. */
-    fun stop() {
+    /** Stops listening and transcribes what was said, if [owner] started it. */
+    fun stop(owner: Any) {
+        if (this.owner === owner) finishListening()
+    }
+
+    fun toggle(owner: Any, onText: (String) -> Unit) {
+        when (_state.value) {
+            is DictationState.Listening -> stop(owner)
+            is DictationState.Transcribing -> Unit
+            else -> start(owner, onText)
+        }
+    }
+
+    /** Drops the dictation [owner] started, listening or transcribing. */
+    fun cancel(owner: Any) {
+        if (this.owner === owner && isBusy) cancelSession()
+    }
+
+    private fun finishListening() {
         val currentUpload = upload ?: return
         val currentCapture = capture ?: return
         if (_state.value !is DictationState.Listening) return
+        limitJob?.cancel()
         _level.value = 0f
         capture = null
         if (SystemClock.elapsedRealtime() - startedAt < MIN_RECORDING_MS) {
             currentCapture.stop { saveDebugAudio() }
-            cancel()
+            cancelSession()
             return
         }
-        val stoppedAt = SystemClock.elapsedRealtime()
+        stoppedAt = SystemClock.elapsedRealtime()
         _state.value = DictationState.Transcribing
         currentCapture.stop {
             // On the audio thread, after its last frame, so the upload never ends before the tail.
@@ -125,46 +159,54 @@ class Dictation(
                 }
             }
         }
-        currentUpload.onResult { result ->
-            scope.launch {
-                if (upload !== currentUpload) return@launch
-                upload = null
-                result.fold(
-                    onSuccess = { transcript ->
-                        val engine = when (transcript.superMode) {
-                            "used" -> "super mode"
-                            else -> transcript.backend.ifBlank { "host" }
-                        }
-                        val stats = DictationStats(transcript.audioSeconds, SystemClock.elapsedRealtime() - stoppedAt, engine)
-                        if (transcript.text.isBlank()) {
-                            fail("Didn't catch that")
-                        } else {
-                            _state.value = DictationState.Done(transcript.text, stats)
-                            deliver?.invoke(transcript.text)
-                            settle()
-                        }
-                    },
-                    onFailure = { fail(it.message ?: "Transcription failed") },
-                )
-            }
-        }
     }
 
-    fun toggle(onText: (String) -> Unit) {
-        when (_state.value) {
-            is DictationState.Listening -> stop()
-            is DictationState.Transcribing -> Unit
-            else -> start(onText)
+    private fun onResult(from: StreamingUpload, result: Result<Transcript>) {
+        if (upload !== from) return
+        upload = null
+        // Answered while still listening: the host refused mid-recording, so the microphone stops now.
+        capture?.let { early ->
+            capture = null
+            _level.value = 0f
+            stoppedAt = SystemClock.elapsedRealtime()
+            early.stop { saveDebugAudio() }
         }
+        result.fold(
+            onSuccess = { transcript ->
+                val engine = when (transcript.superMode) {
+                    "used" -> "super mode"
+                    else -> transcript.backend.ifBlank { "host" }
+                }
+                val stats = DictationStats(transcript.audioSeconds, SystemClock.elapsedRealtime() - stoppedAt, engine)
+                if (transcript.text.isBlank()) {
+                    fail("Didn't catch that")
+                } else {
+                    val onText = deliver
+                    endSession()
+                    _state.value = DictationState.Done(transcript.text, stats)
+                    onText?.invoke(transcript.text)
+                    settle()
+                }
+            },
+            onFailure = { fail(it.message ?: "Transcription failed") },
+        )
     }
 
-    fun cancel() {
+    private fun cancelSession() {
         capture?.stop()
         capture = null
         upload?.cancel()
         upload = null
         _level.value = 0f
+        endSession()
         _state.value = DictationState.Idle
+    }
+
+    /** The session is over: nobody owns what comes next, and no stale callback is kept. */
+    private fun endSession() {
+        limitJob?.cancel()
+        owner = null
+        deliver = null
     }
 
     private fun saveDebugAudio() {
@@ -172,6 +214,7 @@ class Dictation(
     }
 
     private fun fail(message: String): Boolean {
+        endSession()
         _state.value = DictationState.Failed(message)
         settle(3_000)
         return false
@@ -188,5 +231,7 @@ class Dictation(
 
     private companion object {
         const val MIN_RECORDING_MS = 300L
+        /** The host's `maxRecordingSeconds` is at least 10, so this always leaves time to talk. */
+        const val LIMIT_MARGIN_MS = 1_000L
     }
 }
