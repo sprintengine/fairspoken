@@ -1,4 +1,4 @@
-use crate::audio::{AudioFrame, Recording};
+use crate::audio::{AudioFrame, Downsampler, Recording, STREAM_SAMPLE_RATE};
 use crate::settings::{cloud_url, Settings, TranscriptionLocation, CLOUD_UNAVAILABLE};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -384,9 +384,15 @@ fn write_stream_frame(frame: &AudioFrame, target: &mut Vec<u8>) {
     }
 }
 
+/// The streaming request body: captured frames, brought down to 16 kHz (the
+/// rate hosts transcribe at, a third of the bytes of 48 kHz capture) and
+/// encoded as protocol frames. Each frame carries its rate, so a host takes
+/// 16 kHz as it would any other; capture at or below 16 kHz goes as it is.
 struct AudioFrameReader {
     rx: Receiver<AudioFrame>,
     pending: Cursor<Vec<u8>>,
+    downsampler: Option<Downsampler>,
+    ended: bool,
 }
 
 impl AudioFrameReader {
@@ -394,7 +400,32 @@ impl AudioFrameReader {
         Self {
             rx,
             pending: Cursor::new(Vec::new()),
+            downsampler: None,
+            ended: false,
         }
+    }
+
+    fn to_stream_rate(&mut self, frame: AudioFrame) -> AudioFrame {
+        if self
+            .downsampler
+            .as_ref()
+            .is_none_or(|downsampler| downsampler.input_rate() != frame.sample_rate)
+        {
+            self.downsampler = Downsampler::new(frame.sample_rate);
+        }
+        match &mut self.downsampler {
+            Some(downsampler) => AudioFrame {
+                pcm_i16: downsampler.process(&frame.pcm_i16),
+                sample_rate: STREAM_SAMPLE_RATE,
+            },
+            None => frame,
+        }
+    }
+
+    fn encode(&mut self, frame: &AudioFrame) {
+        let mut encoded = Vec::with_capacity(8 + frame.pcm_i16.len() * 2);
+        write_stream_frame(frame, &mut encoded);
+        self.pending = Cursor::new(encoded);
     }
 }
 
@@ -405,14 +436,33 @@ impl Read for AudioFrameReader {
             if read > 0 {
                 return Ok(read);
             }
+            if self.ended {
+                return Ok(0);
+            }
 
             match self.rx.recv() {
                 Ok(frame) => {
-                    let mut encoded = Vec::with_capacity(8 + frame.pcm_i16.len() * 2);
-                    write_stream_frame(&frame, &mut encoded);
-                    self.pending = Cursor::new(encoded);
+                    let frame = self.to_stream_rate(frame);
+                    // A few capture samples may not complete an output yet.
+                    if !frame.pcm_i16.is_empty() {
+                        self.encode(&frame);
+                    }
                 }
-                Err(_) => return Ok(0),
+                Err(_) => {
+                    // The recording ended: send the filter's last outputs.
+                    self.ended = true;
+                    if let Some(tail) = self
+                        .downsampler
+                        .as_mut()
+                        .map(Downsampler::flush)
+                        .filter(|tail| !tail.is_empty())
+                    {
+                        self.encode(&AudioFrame {
+                            pcm_i16: tail,
+                            sample_rate: STREAM_SAMPLE_RATE,
+                        });
+                    }
+                }
             }
         }
     }
@@ -684,6 +734,54 @@ mod tests {
         };
 
         assert_eq!(remote_connect_timeout(&settings), Duration::from_secs(15));
+    }
+
+    /// Everything the request body would carry for these frames, decoded.
+    fn streamed(frames: Vec<AudioFrame>) -> Vec<AudioFrame> {
+        use std::io::Read;
+        let (tx, rx) = std::sync::mpsc::channel();
+        for frame in frames {
+            tx.send(frame).unwrap();
+        }
+        drop(tx);
+        let mut body = Vec::new();
+        super::AudioFrameReader::new(rx)
+            .read_to_end(&mut body)
+            .unwrap();
+        let mut reader = body.as_slice();
+        let mut decoded = Vec::new();
+        while let Some(frame) = read_stream_frame(&mut reader).unwrap() {
+            decoded.push(frame);
+        }
+        decoded
+    }
+
+    #[test]
+    fn capture_above_16_khz_streams_at_16_khz() {
+        // 100 callbacks of 10 ms at 48 kHz.
+        let frames = (0..100)
+            .map(|_| AudioFrame {
+                pcm_i16: vec![1_000; 480],
+                sample_rate: 48_000,
+            })
+            .collect();
+        let sent = streamed(frames);
+        assert!(sent.iter().all(|frame| frame.sample_rate == 16_000));
+        let samples: Vec<i16> = sent.into_iter().flat_map(|frame| frame.pcm_i16).collect();
+        assert_eq!(samples.len(), 16_000);
+        assert!(samples[1_000..15_000].iter().all(|s| (s - 1_000).abs() <= 1));
+
+        // Already at the stream rate: sent untouched.
+        let native = AudioFrame {
+            pcm_i16: vec![1, -2, 3],
+            sample_rate: 16_000,
+        };
+        let sent = streamed(vec![native.clone()]);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            (sent[0].sample_rate, &sent[0].pcm_i16),
+            (16_000, &native.pcm_i16)
+        );
     }
 
     #[test]
