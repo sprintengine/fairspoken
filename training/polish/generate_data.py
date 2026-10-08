@@ -279,6 +279,7 @@ QUOTED = ["not today", "I will be there at five", "ship it when it is ready", "c
           "no parking", "I need more time", "access denied", "can we talk later"]
 QUOTE_TAILS = ["and hung up", "and walked out", "every time I run it", "so there is no rush",
                "and left it at that", "", "", ""]
+QUOTE_TAIL_SHARE = sum(map(bool, QUOTE_TAILS)) / len(QUOTE_TAILS)
 LISTS = [  # (intro, items)
     ("we have three goals for the sprint", ["fix the login bug", "write the onboarding docs", "ship the beta"]),
     ("there are three things we need to do", ["update the database schema", "migrate the existing users", "deploy the new API"]),
@@ -389,10 +390,26 @@ def held_out(key, percent=20):
     return zlib.crc32(key.encode()) % 100 < percent
 
 
+def _first(items, key):
+    return min(items, key=lambda i: zlib.crc32(key(i).encode()))
+
+
 def split_pool(items, key=lambda x: x if isinstance(x, str) else x[0], percent=20):
+    """Disjoint train and test pools. When the hash leaves one side empty, one
+    item moves across (it is never in both); a pool too small for that raises."""
     train = [i for i in items if not held_out(key(i), percent)]
     test = [i for i in items if held_out(key(i), percent)]
-    return train, test or train[:1]
+    if not test and len(train) >= 2:
+        first = _first(train, key)
+        train.remove(first)
+        test.append(first)
+    if not train and len(test) >= 2:
+        first = _first(test, key)
+        test.remove(first)
+        train.append(first)
+    if not train or not test:
+        raise ValueError(f"cannot split {len(items)} item(s) into disjoint train and test pools")
+    return train, test
 
 
 def _words(text):
@@ -409,26 +426,36 @@ def in_prompt_examples(template):
 
 def split_templates(templates):
     """Held-out templates, stratified so every behaviour (doses, UK spellings,
-    abbreviations, plain text) has templates in both splits. A template the
-    prompt's worked examples already show stays in train."""
+    abbreviations, plain text) with two or more templates has templates in
+    both splits. No template is in both: a behaviour with a single template
+    is trained on only, and a template the prompt's worked examples already
+    show stays in train."""
     def stratum(t):
         for slot in ("{dose}", "{uk", "{abbr", "{drug", "{dev"):
             if slot in t:
                 return slot
         return "other"
+    crc = lambda t: zlib.crc32(t.encode())
     train, test = [], []
     for key in sorted({stratum(t) for t in templates}):
         group = [t for t in templates if stratum(t) == key]
+        if len(group) == 1:
+            train += group
+            continue
         forced = {t for t in group if in_prompt_examples(t)}
         tr = [t for t in group if t in forced or not held_out(t)]
         te = [t for t in group if t not in forced and held_out(t)]
         free = [t for t in tr if t not in forced]
-        if not te and len(free) >= 2:
-            first = min(free, key=lambda t: zlib.crc32(t.encode()))
+        if not te and free:
+            first = min(free, key=crc)
             tr.remove(first)
             te.append(first)
-        train += tr or te
-        test += te or [t for t in tr if t not in forced] or tr
+        if not tr:
+            first = min(te, key=crc)
+            te.remove(first)
+            tr.append(first)
+        train += tr
+        test += te
     return train, test
 
 
@@ -679,9 +706,10 @@ class Builder:
 
     def quote_sentence(self, kinds):
         r = self.rng
-        subj = r.choice(QUOTE_SUBJECTS).replace("{name}", r.choice(self.p["names"]))
-        quoted = r.choice(QUOTED)
-        tail = r.choice(QUOTE_TAILS)
+        subj = r.choice(self.p["quote_subjects"]).replace("{name}", r.choice(self.p["names"]))
+        quoted = r.choice(self.p["quoted"])
+        # No tail is structure, not content, so both splits keep it (at QUOTE_TAILS' share).
+        tail = r.choice(self.p["quote_tails"]) if r.random() < QUOTE_TAIL_SHARE else ""
         explicit = r.random() < 0.5
         toks = []
         sw = subj.split(" ")
@@ -852,9 +880,11 @@ class Generator:
         drugs = list(DRUGS) + [t for p in packs for t in p["terms"] if p["kind"] == "drug"]
         self.pools = {
             "dev": pick(dev), "drug": pick(drugs), "abbr": pick([a for a in CLINICAL_ABBR if a[0] not in CONDITIONS]),
-            "cond": [a for a in CLINICAL_ABBR if a[0] in CONDITIONS],
+            "cond": pick([a for a in CLINICAL_ABBR if a[0] in CONDITIONS]),
             "iname": pick(IRISH_NAMES), "iplace": pick(IRISH_PLACES), "names": NAMES,
             "lists": pick(LISTS), "simple_lists": pick(SIMPLE_LISTS),
+            "quote_subjects": pick(QUOTE_SUBJECTS), "quoted": pick(QUOTED),
+            "quote_tails": pick([t for t in QUOTE_TAILS if t]),
         }
         self.all_terms = [t[0] for t in dev + drugs + CLINICAL_ABBR + IRISH_NAMES + IRISH_PLACES]
         self.templates = {name: split_templates(t)[1 if test else 0] for name, t in {

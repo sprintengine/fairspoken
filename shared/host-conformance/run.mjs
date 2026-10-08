@@ -8,6 +8,7 @@
 import { parseArgs } from 'node:util';
 import { CheckFailure, SkipError } from './lib/assert.mjs';
 import { Context } from './lib/context.mjs';
+import { closeOpenConnections } from './lib/http.mjs';
 import basic from './checks/basic.mjs';
 import auth from './checks/auth.mjs';
 import httpChecks from './checks/http.mjs';
@@ -150,6 +151,7 @@ async function main() {
   out(`host ${args.url}  token ${ctx.token ? 'yes' : 'no'}  pairing password ${ctx.pairingPassword ? 'yes' : 'no'}  speech ${process.platform === 'darwin' ? 'say' : 'synthetic'}  checks ${plan.length}`);
   const results = [];
   let restoreFailed = null;
+  let stoppedBy = null; // the check that timed out, after which nothing else runs
   let interrupted = false;
   const onSignal = async () => {
     if (interrupted) process.exit(130);
@@ -176,17 +178,27 @@ async function main() {
       }
     }
     for (const c of plan) {
+      if (stoppedBy) {
+        const result = { name: c.name, status: 'SKIP', ms: 0, message: `not run: ${stoppedBy} timed out and the run stopped`, notes: [] };
+        results.push(result);
+        out(`SKIP  ${c.name.padEnd(34)} ${'0.0'.padStart(6)} s  ${result.message}`);
+        continue;
+      }
       ctx.notes = [];
       ctx.cleanupFailures = [];
       const started = performance.now();
       let status;
       let message = '';
       let timer;
+      let timedOut = false;
       try {
         await Promise.race([
           c.run(ctx),
           new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new CheckFailure(`check did not finish within ${CHECK_TIMEOUT_MS / 60000} min`)), CHECK_TIMEOUT_MS);
+            timer = setTimeout(() => {
+              timedOut = true;
+              reject(new CheckFailure(`check did not finish within ${CHECK_TIMEOUT_MS / 60000} min`));
+            }, CHECK_TIMEOUT_MS);
           }),
         ]);
         status = 'PASS';
@@ -200,6 +212,16 @@ async function main() {
         }
       } finally {
         clearTimeout(timer);
+      }
+      if (timedOut) {
+        // The check's promise cannot be cancelled. Cut its connections and
+        // refuse its later requests so it stops at its next call, and run
+        // nothing after it that it could overlap.
+        stoppedBy = c.name;
+        ctx.host.abort(`${c.name} timed out; the run stopped`);
+        const closed = closeOpenConnections();
+        ctx.audit = null;
+        if (closed) ctx.note(`closed ${closed} connection(s) the check left open`);
       }
       const ms = performance.now() - started;
       const result = { name: c.name, status, ms: Math.round(ms), message, notes: [...ctx.notes] };
@@ -221,7 +243,7 @@ async function main() {
   }
 
   const count = (s) => results.filter((r) => r.status === s).length;
-  const summary = { pass: count('PASS'), fail: count('FAIL'), skip: count('SKIP'), restoreFailed };
+  const summary = { pass: count('PASS'), fail: count('FAIL'), skip: count('SKIP'), restoreFailed, stoppedBy };
   if (args.json) {
     console.log(JSON.stringify({ url: args.url, results, summary, latenciesMs: ctx.shared.latencies ?? null }, null, 2));
   } else {

@@ -68,6 +68,28 @@ class Generator(unittest.TestCase):
             share = sum(r["meta"]["raw"] == r["meta"]["expected"] for r in test) / len(test)
             self.assertGreater(share, 0.25)
 
+    def test_train_and_test_are_disjoint(self):
+        groups = {"general": generate_data.GENERAL, "exclaim": generate_data.EXCLAIM, "question": generate_data.QUESTIONS,
+                  "command": generate_data.COMMANDS, "dev": generate_data.DEV, "clinical": generate_data.CLINICAL,
+                  "names": generate_data.NAMES_PLACES}
+        for name, templates in groups.items():
+            train, test = generate_data.split_templates(templates)
+            self.assertFalse(set(train) & set(test), name)
+            self.assertEqual(sorted(train + test), sorted(templates), name)
+            self.assertTrue(test, name)
+        for profile in ("base", "ie-general-practice"):
+            tr = generate_data.Generator(7, "train", profile, [])
+            te = generate_data.Generator(7, "test", profile, [])
+            for name in groups:
+                self.assertFalse(set(tr.templates[name]) & set(te.templates[name]), (profile, name))
+            for name, pool in tr.pools.items():
+                if name == "names":  # first names are filler, not a held-out behaviour
+                    continue
+                self.assertTrue(te.pools[name], (profile, name))
+                self.assertFalse(set(map(str, pool)) & set(map(str, te.pools[name])), (profile, name))
+            self.assertFalse(set(map(str, tr.near_miss)) & set(map(str, te.near_miss)), profile)
+        self.assertRaises(ValueError, generate_data.split_pool, ["only one"])
+
     def test_bench_overlap_dropped(self):
         bench = generate_data.bench_raws()
         self.assertIn(generate_data.norm("the build is green and I merged the pull request this morning"), bench)
