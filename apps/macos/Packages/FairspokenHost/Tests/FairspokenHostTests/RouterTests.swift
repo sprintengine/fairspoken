@@ -206,8 +206,12 @@ struct RouterTests {
         let (third, _) = await streamRequest(h, frames: frames(seconds: 0.2))
         #expect(third?.status == 429)
         #expect(third?.json["error"] as? String == "Server is at active stream capacity")
-        for (pipe, task) in open {
+        // End both uploads before waiting on either: whichever stream claimed the
+        // worker must finish first, and that may be open[1], not open[0].
+        for (pipe, _) in open {
             pipe.write("0\r\n\r\n")
+        }
+        for (pipe, task) in open {
             await task.value
             #expect(ParsedResponse.parse(pipe.outputText)?.status == 200)
         }
