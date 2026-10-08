@@ -130,13 +130,9 @@ impl SpeedTestService {
     }
 
     fn save(&self) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create speed test directory: {err}"))?;
-        }
         let payload = serde_json::to_string_pretty(&self.data)
             .map_err(|err| format!("Failed to serialize speed test results: {err}"))?;
-        fs::write(&self.path, payload)
+        crate::app_dirs::write_atomic(&self.path, payload.as_bytes())
             .map_err(|err| format!("Failed to write speed test results: {err}"))
     }
 }

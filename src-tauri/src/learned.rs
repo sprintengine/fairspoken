@@ -20,8 +20,7 @@ use crate::edit_diff::Mishearing;
 use crate::settings::{EntryOrigin, Settings, TranscriptCorrection};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -113,7 +112,7 @@ impl LearnedStore {
             items: self.items.clone(),
         })
         .map_err(|err| format!("Failed to serialize learned words: {err}"))?;
-        write_private_atomically(&self.path, payload.as_bytes())
+        crate::app_dirs::write_atomic(&self.path, payload.as_bytes())
             .map_err(|err| format!("Failed to write learned words: {err}"))
     }
 
@@ -408,32 +407,6 @@ fn involves_medicine(heard: &str, intended: &str) -> bool {
     (looks_medical(heard) && looks_medical(intended))
         || is_look_alike_medicine(heard)
         || is_look_alike_medicine(intended)
-}
-
-fn write_private_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let write = || -> std::io::Result<()> {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)
-    };
-    let result = write();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
 }
 
 fn default_path() -> PathBuf {

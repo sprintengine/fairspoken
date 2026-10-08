@@ -2,7 +2,6 @@ use crate::models::{SttModel, WhisperModel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -371,33 +370,12 @@ impl SettingsService {
 
     pub fn save(&mut self, settings: Settings) -> Result<(), String> {
         let next = normalize(settings);
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create settings directory: {err}"))?;
-        }
-
         let payload = serde_json::to_string_pretty(&next)
             .map_err(|err| format!("Failed to serialize settings: {err}"))?;
-        let temporary = self.path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-        let write = || -> std::io::Result<()> {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                // Replacing the file must not broaden access to stored API tokens.
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary)?;
-            file.write_all(payload.as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temporary, &self.path)
-        };
-        if let Err(error) = write() {
-            let _ = fs::remove_file(&temporary);
-            return Err(format!("Failed to write settings: {error}"));
-        }
+        // Replacing the file must not broaden access to stored API tokens;
+        // write_atomic keeps it user-only.
+        crate::app_dirs::write_atomic(&self.path, payload.as_bytes())
+            .map_err(|err| format!("Failed to write settings: {err}"))?;
         self.current = next;
         Ok(())
     }

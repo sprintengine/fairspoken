@@ -191,6 +191,7 @@ impl ModelService {
         }
     }
 
+    #[cfg(test)]
     pub fn prepare(&self, model: SttModel) -> Result<ModelStatus, String> {
         self.prepare_with_progress(model, |_| {})
     }

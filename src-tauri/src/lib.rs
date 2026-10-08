@@ -184,12 +184,13 @@ fn restart_to_update(app: AppHandle) -> Result<(), String> {
     updates::restart(&app)
 }
 #[tauri::command]
-fn get_update_channel(app: AppHandle) -> updates::Channel {
-    updates::channel(&app)
-}
-#[tauri::command]
-fn set_update_channel(app: AppHandle, channel: updates::Channel) -> Result<updates::UpdateStatus, String> {
-    updates::set_channel(&app, channel)
+async fn set_update_channel(
+    app: AppHandle,
+    channel: updates::Channel,
+) -> Result<updates::UpdateStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || updates::set_channel(&app, channel))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(Clone, Serialize)]
@@ -270,23 +271,43 @@ fn save_settings_inner(
         .operation
         .try_lock()
         .map_err(|_| "Wait for the current dictation to finish".to_string())?;
+    save_settings_locked(&app, settings, shortcut_patch, &services)
+}
+
+/// The settings to persist: the caller's edit (or shortcut patch) applied to
+/// the latest stored settings for everything the Settings screen does not own.
+/// The dictionary (vocabulary, corrections, snippets) belongs to the
+/// Dictionary screen and the edit watcher, which can write it at any moment,
+/// and registered chords change only through a shortcut patch.
+fn settings_to_save(
+    settings: Option<Settings>,
+    shortcut_patch: Option<ShortcutPatch>,
+    latest: &Settings,
+) -> Settings {
+    let mut settings = merge_settings_shortcuts(settings, shortcut_patch, latest);
+    settings.vocabulary_hints = latest.vocabulary_hints.clone();
+    settings.transcript_corrections = latest.transcript_corrections.clone();
+    settings.snippets = latest.snippets.clone();
+    settings.learned_vocabulary_hints = latest.learned_vocabulary_hints.clone();
+    settings.learn_from_edits = latest.learn_from_edits;
+    settings.enabled_packs = latest.enabled_packs.clone();
+    settings
+}
+
+/// `save_settings_inner` for a caller already holding the operation lock.
+fn save_settings_locked(
+    app: &AppHandle,
+    settings: Option<Settings>,
+    shortcut_patch: Option<ShortcutPatch>,
+    services: &AppServices,
+) -> Result<(), String> {
     let current_settings = services
         .settings
         .lock()
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
 
-    let mut settings = merge_settings_shortcuts(settings, shortcut_patch, &current_settings);
-
-    // The dictionary (vocabulary, corrections, snippets) is owned by the
-    // Dictionary screen via save_dictionary; the Settings screen must not be
-    // able to clear it, so preserve those fields regardless of the payload.
-    settings.vocabulary_hints = current_settings.vocabulary_hints.clone();
-    settings.transcript_corrections = current_settings.transcript_corrections.clone();
-    settings.snippets = current_settings.snippets.clone();
-    settings.learned_vocabulary_hints = current_settings.learned_vocabulary_hints.clone();
-    settings.learn_from_edits = current_settings.learn_from_edits;
-    settings.enabled_packs = current_settings.enabled_packs.clone();
+    let settings = settings_to_save(settings, shortcut_patch.clone(), &current_settings);
 
     // Only newly chosen cloud options are refused, so a stale Cloud setting
     // never blocks saving unrelated changes.
@@ -311,6 +332,22 @@ fn save_settings_inner(
         return Err("Settings cannot be changed while recording is active".to_string());
     }
 
+    let polish_config_changed = settings.polish_enabled != current_settings.polish_enabled
+        || settings.polish_provider != current_settings.polish_provider
+        || settings.polish_model != current_settings.polish_model
+        || settings.polish_local_model_path != current_settings.polish_local_model_path
+        || settings.polish_local_model_prompt != current_settings.polish_local_model_prompt
+        || settings.polish_local_adapters != current_settings.polish_local_adapters;
+    // Only a local polish choice being made now is validated, so a model file
+    // that went missing later never blocks saving unrelated changes. Checked
+    // before anything is unloaded, so a refused save changes nothing.
+    if polish_config_changed
+        && settings.polish_enabled
+        && settings.polish_provider == settings::PolishProvider::Local
+    {
+        services.local_models.served(&settings)?;
+    }
+
     if current_settings.requires_transcription_unload(&settings) {
         services
             .transcription
@@ -319,16 +356,7 @@ fn save_settings_inner(
             .unload();
     }
 
-    if settings.polish_enabled && settings.polish_provider == settings::PolishProvider::Local {
-        services.local_models.served(&settings)?;
-    }
-    if !settings.polish_enabled
-        || settings.polish_provider != current_settings.polish_provider
-        || settings.polish_model != current_settings.polish_model
-        || settings.polish_local_model_path != current_settings.polish_local_model_path
-        || settings.polish_local_model_prompt != current_settings.polish_local_model_prompt
-        || settings.polish_local_adapters != current_settings.polish_local_adapters
-    {
+    if !settings.polish_enabled || polish_config_changed {
         services.local_models.unload();
     }
     let normalized = {
@@ -336,13 +364,15 @@ fn save_settings_inner(
             .settings
             .lock()
             .map_err(|_| "Settings service lock failed".to_string())?;
-        service.save(settings)?;
+        // The edit watcher may have learned words since the snapshot above.
+        let latest = service.current();
+        service.save(settings_to_save(Some(settings), shortcut_patch, &latest))?;
         service.current()
     };
 
     let _ = app.emit("settings-updated", &normalized);
     #[cfg(target_os = "macos")]
-    sync_fn_push_to_talk(&app, services.inner(), normalized.fn_push_to_talk);
+    sync_fn_push_to_talk(app, services, normalized.fn_push_to_talk);
     Ok(())
 }
 
@@ -375,6 +405,18 @@ fn merge_settings_shortcuts(
         next.transcript_stack_shortcut = current.transcript_stack_shortcut.clone();
         next
     }
+}
+
+/// Runs a command body on a blocking worker. Tauri runs synchronous commands
+/// on the main thread, where a file write (with fsync) or a network call
+/// stalls every window until it finishes.
+async fn run_blocking<T: Send + 'static>(
+    app: AppHandle,
+    body: impl FnOnce(&AppHandle, &AppServices) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || body(&app, &app.state::<AppServices>()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -541,10 +583,11 @@ struct DictionaryUpdate {
 }
 
 #[tauri::command]
-fn save_dictionary(
-    update: DictionaryUpdate,
-    services: State<'_, AppServices>,
-) -> Result<(), String> {
+async fn save_dictionary(app: AppHandle, update: DictionaryUpdate) -> Result<(), String> {
+    run_blocking(app, move |_, services| save_dictionary_inner(update, services)).await
+}
+
+fn save_dictionary_inner(update: DictionaryUpdate, services: &AppServices) -> Result<(), String> {
     let _operation = services
         .operation
         .try_lock()
@@ -627,19 +670,6 @@ struct TranscriptHistoryUpdatedEvent {
 }
 
 #[tauri::command]
-fn get_model_status(
-    model: SttModel,
-    services: State<'_, AppServices>,
-) -> Result<ModelStatus, String> {
-    Ok(services.models.status(model))
-}
-
-#[tauri::command]
-fn prepare_model(model: SttModel, services: State<'_, AppServices>) -> Result<ModelStatus, String> {
-    services.models.prepare(model)
-}
-
-#[tauri::command]
 fn get_transcription_model_status(
     request: TranscriptionModelRequest,
     services: State<'_, AppServices>,
@@ -652,21 +682,6 @@ fn get_transcription_model_status(
     Ok(services
         .models
         .status(request.model.unwrap_or(settings.model)))
-}
-
-#[tauri::command]
-fn prepare_transcription_model(
-    request: TranscriptionModelRequest,
-    services: State<'_, AppServices>,
-) -> Result<ModelStatus, String> {
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
-    services
-        .models
-        .prepare(request.model.unwrap_or(settings.model))
 }
 
 #[tauri::command]
@@ -775,15 +790,16 @@ fn emit_model_prepare_event(
 }
 
 #[tauri::command]
-fn test_remote_transcription_host(
-    services: State<'_, AppServices>,
-) -> Result<RemoteHealth, String> {
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
-    check_remote_transcription_host(&settings)
+async fn test_remote_transcription_host(app: AppHandle) -> Result<RemoteHealth, String> {
+    run_blocking(app, |_, services| {
+        let settings = services
+            .settings
+            .lock()
+            .map_err(|_| "Settings service lock failed".to_string())?
+            .current();
+        check_remote_transcription_host(&settings)
+    })
+    .await
 }
 
 /// Scans the tailnet for transcription hosts (Tailscale CLI + `/v1/hello`).
@@ -814,6 +830,22 @@ async fn connect_transcription_host(
     password: Option<String>,
 ) -> Result<Settings, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let services = app.state::<AppServices>();
+        // Pairing makes the host issue a device token, so the reasons a save
+        // would be refused are checked first and the lock is held throughout:
+        // a refused save must not leave an orphan device on the host.
+        let _operation = services
+            .operation
+            .try_lock()
+            .map_err(|_| "Wait for the current dictation to finish".to_string())?;
+        if services
+            .audio
+            .lock()
+            .map_err(|_| "Audio service lock failed".to_string())?
+            .is_recording()
+        {
+            return Err("Settings cannot be changed while recording is active".to_string());
+        }
         let token = match password {
             Some(password) => {
                 let client_name =
@@ -823,7 +855,6 @@ async fn connect_transcription_host(
             }
             None => String::new(),
         };
-        let services = app.state::<AppServices>();
         let mut next = services
             .settings
             .lock()
@@ -832,7 +863,7 @@ async fn connect_transcription_host(
         next.remote_url = url;
         next.remote_auth_token = token;
         next.transcription_location = TranscriptionLocation::RemoteHost;
-        save_settings_inner(app.clone(), Some(next), None, app.state::<AppServices>())?;
+        save_settings_locked(&app, Some(next), None, &services)?;
         services
             .settings
             .lock()
@@ -954,50 +985,59 @@ fn hide_transcript_shelf_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_notes(services: State<'_, AppServices>) -> Result<Vec<Note>, String> {
-    let retention_minutes = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current()
-        .note_retention_minutes;
-    let mut notes = services
-        .notes
-        .lock()
-        .map_err(|_| "Notes service lock failed".to_string())?;
-    notes.sweep_expired(retention_minutes)?;
-    Ok(notes.list())
+async fn get_notes(app: AppHandle) -> Result<Vec<Note>, String> {
+    // Listing sweeps expired notes, which rewrites the library.
+    run_blocking(app, |_, services| {
+        let retention_minutes = services
+            .settings
+            .lock()
+            .map_err(|_| "Settings service lock failed".to_string())?
+            .current()
+            .note_retention_minutes;
+        let mut notes = services
+            .notes
+            .lock()
+            .map_err(|_| "Notes service lock failed".to_string())?;
+        notes.sweep_expired(retention_minutes)?;
+        Ok(notes.list())
+    })
+    .await
 }
 
 #[tauri::command]
-fn update_note(id: String, text: String, services: State<'_, AppServices>) -> Result<Note, String> {
-    services
-        .notes
-        .lock()
-        .map_err(|_| "Notes service lock failed".to_string())?
-        .update_text(&id, &text)
+async fn update_note(app: AppHandle, id: String, text: String) -> Result<Note, String> {
+    run_blocking(app, move |_, services| {
+        services
+            .notes
+            .lock()
+            .map_err(|_| "Notes service lock failed".to_string())?
+            .update_text(&id, &text)
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_note_pinned(
-    id: String,
-    pinned: bool,
-    services: State<'_, AppServices>,
-) -> Result<Note, String> {
-    services
-        .notes
-        .lock()
-        .map_err(|_| "Notes service lock failed".to_string())?
-        .set_pinned(&id, pinned)
+async fn set_note_pinned(app: AppHandle, id: String, pinned: bool) -> Result<Note, String> {
+    run_blocking(app, move |_, services| {
+        services
+            .notes
+            .lock()
+            .map_err(|_| "Notes service lock failed".to_string())?
+            .set_pinned(&id, pinned)
+    })
+    .await
 }
 
 #[tauri::command]
-fn delete_note(id: String, services: State<'_, AppServices>) -> Result<(), String> {
-    services
-        .notes
-        .lock()
-        .map_err(|_| "Notes service lock failed".to_string())?
-        .delete(&id)
+async fn delete_note(app: AppHandle, id: String) -> Result<(), String> {
+    run_blocking(app, move |_, services| {
+        services
+            .notes
+            .lock()
+            .map_err(|_| "Notes service lock failed".to_string())?
+            .delete(&id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1033,20 +1073,6 @@ fn get_transcript_history(
 }
 
 #[tauri::command]
-fn clear_transcript_history(
-    app: AppHandle,
-    services: State<'_, AppServices>,
-) -> Result<(), String> {
-    services
-        .transcript_history
-        .lock()
-        .map_err(|_| "Transcript history service lock failed".to_string())?
-        .clear()?;
-    emit_backend_event(&app, "info", "Transcript history cleared");
-    Ok(())
-}
-
-#[tauri::command]
 fn copy_transcript_history_item(
     app: AppHandle,
     id: String,
@@ -1071,32 +1097,35 @@ fn copy_transcript_history_item(
 /// not an in-place replacement: synthetic ⌘Z+⌘V and AX replacement were both
 /// rejected as fragile.
 #[tauri::command]
-fn copy_original_transcript(
+async fn copy_original_transcript(
     app: AppHandle,
     id: String,
-    services: State<'_, AppServices>,
 ) -> Result<TranscriptHistoryItem, String> {
-    let item = services
-        .transcript_history
-        .lock()
-        .map_err(|_| "Transcript history service lock failed".to_string())?
-        .find(&id)
-        .ok_or_else(|| "Transcript history item was not found".to_string())?;
-    let raw_text = item
-        .raw_text
-        .clone()
-        .ok_or_else(|| "No original transcript is stored for this dictation".to_string())?;
+    // Marking the dictation edited rewrites the usage stats.
+    run_blocking(app, move |app, services| {
+        let item = services
+            .transcript_history
+            .lock()
+            .map_err(|_| "Transcript history service lock failed".to_string())?
+            .find(&id)
+            .ok_or_else(|| "Transcript history item was not found".to_string())?;
+        let raw_text = item
+            .raw_text
+            .clone()
+            .ok_or_else(|| "No original transcript is stored for this dictation".to_string())?;
 
-    services
-        .clipboard
-        .write_text(&transcript_clipboard_text(&raw_text))?;
-    mark_dictation_edited(&services, &item.id);
-    emit_backend_event(
-        &app,
-        "info",
-        "Original transcript copied — paste to replace",
-    );
-    Ok(item)
+        services
+            .clipboard
+            .write_text(&transcript_clipboard_text(&raw_text))?;
+        mark_dictation_edited(services, &item.id);
+        emit_backend_event(
+            app,
+            "info",
+            "Original transcript copied — paste to replace",
+        );
+        Ok(item)
+    })
+    .await
 }
 
 /// Zero-edit metric signal — best-effort, never fails the calling action.
@@ -1107,17 +1136,17 @@ fn mark_dictation_edited(services: &AppServices, history_id: &str) {
 }
 
 #[tauri::command]
-fn delete_transcript_history_item(
-    id: String,
-    services: State<'_, AppServices>,
-) -> Result<(), String> {
-    services
-        .transcript_history
-        .lock()
-        .map_err(|_| "Transcript history service lock failed".to_string())?
-        .delete(&id)?;
-    mark_dictation_edited(&services, &id);
-    Ok(())
+async fn delete_transcript_history_item(app: AppHandle, id: String) -> Result<(), String> {
+    run_blocking(app, move |_, services| {
+        services
+            .transcript_history
+            .lock()
+            .map_err(|_| "Transcript history service lock failed".to_string())?
+            .delete(&id)?;
+        mark_dictation_edited(services, &id);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1709,36 +1738,34 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     {
         return Err("Transcription was cancelled".into());
     }
-    let stored_item = services
-        .transcript_history
-        .lock()
-        .map_err(|_| "Transcript history service lock failed".to_string())?
-        .add(NewTranscriptHistoryItem {
-            text: transcript.clone(),
-            backend: raw_transcription.backend,
-            super_mode: raw_transcription.super_mode,
-            location: location_id(settings.transcription_location).to_string(),
-            duration_seconds: stats.duration_seconds,
-            polished,
-            // "Undo AI edit" must yield what the user would have gotten with
-            // polish OFF — the raw transcript WITH their deterministic rules
-            // applied — not the bare ASR output (which would silently undo
-            // corrections the AI never made).
-            raw_text: polished
-                .then(|| apply_transcript_post_processing(&raw_transcript, &settings).text),
-            timings: Some(transcript_history::DictationTimings {
-                transcribe_ms,
-                // Only the local chunk worker keeps this counter.
-                speech_model_ms: if settings.transcription_location == TranscriptionLocation::Local {
-                    transcription::speech_model_busy_ms()
-                } else {
-                    0
-                },
-                polish_ms,
-                total_ms: released_at.elapsed().as_millis() as u64,
-            }),
-            format: format_record,
-        })?;
+    // Written after the text is delivered, but timed now: total_ms ends when
+    // the text is ready for insertion.
+    let history_entry = NewTranscriptHistoryItem {
+        text: transcript.clone(),
+        backend: raw_transcription.backend,
+        super_mode: raw_transcription.super_mode,
+        location: location_id(settings.transcription_location).to_string(),
+        duration_seconds: stats.duration_seconds,
+        polished,
+        // "Undo AI edit" must yield what the user would have gotten with
+        // polish OFF — the raw transcript WITH their deterministic rules
+        // applied — not the bare ASR output (which would silently undo
+        // corrections the AI never made).
+        raw_text: polished
+            .then(|| apply_transcript_post_processing(&raw_transcript, &settings).text),
+        timings: Some(transcript_history::DictationTimings {
+            transcribe_ms,
+            // Only the local chunk worker keeps this counter.
+            speech_model_ms: if settings.transcription_location == TranscriptionLocation::Local {
+                transcription::speech_model_busy_ms()
+            } else {
+                0
+            },
+            polish_ms,
+            total_ms: released_at.elapsed().as_millis() as u64,
+        }),
+        format: format_record,
+    };
 
     #[cfg(target_os = "macos")]
     let will_insert_at_cursor = settings.insert_at_cursor && !transcript.is_empty();
@@ -1778,12 +1805,6 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             .map_or("other", |target| app_categories::categorize(&target.bundle_id).id()),
     );
     services.clipboard.write_text(&clipboard_text)?;
-    let _ = app.emit(
-        "transcript-history-updated",
-        TranscriptHistoryUpdatedEvent {
-            item: stored_item.clone(),
-        },
-    );
 
     #[cfg(target_os = "macos")]
     {
@@ -1819,29 +1840,56 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
     #[cfg(not(target_os = "macos"))]
     emit_backend_event(app, "info", "Transcript copied to clipboard");
 
-    // Usage stats are best-effort: a stats write must never fail the dictation
-    // the user just completed.
+    // The stores below are written only once the text is delivered, and are
+    // best-effort: the dictation already succeeded and is on the clipboard.
+    let stored_item = services
+        .transcript_history
+        .lock()
+        .map_err(|_| "Transcript history service lock failed".to_string())
+        .and_then(|mut history| history.add(history_entry));
+    match &stored_item {
+        Ok(item) => {
+            let _ = app.emit(
+                "transcript-history-updated",
+                TranscriptHistoryUpdatedEvent { item: item.clone() },
+            );
+        }
+        Err(err) => emit_backend_event(
+            app,
+            "warning",
+            format!("Could not save the transcript to history: {err}"),
+        ),
+    }
+
+    // One stats write per dictation: the totals plus, for a dictation kept in
+    // history, the zero-edit record later edit signals (undo, delete, new
+    // correction, quick re-dictation) attribute to.
     let word_count = transcript.split_whitespace().count() as u64;
-    if let Err(err) = record_usage_stats(services, word_count, stats.duration_seconds) {
+    let completed = stored_item
+        .as_ref()
+        .ok()
+        .map(|item| (item.id.as_str(), polished, transcript.chars().count() as u32));
+    if let Err(err) = services
+        .usage_stats
+        .lock()
+        .map_err(|_| "Usage stats service lock failed".to_string())
+        .and_then(|mut usage_stats| {
+            usage_stats.record_dictation(
+                word_count,
+                stats.duration_seconds,
+                completed,
+                current_epoch_seconds(),
+            )
+        })
+    {
         emit_backend_event(
             app,
             "warning",
             format!("Could not update usage stats: {err}"),
         );
     }
-    // Zero-edit metric: register the completion so later edit signals (undo,
-    // delete, new correction, quick re-dictation) can attribute to it.
-    if let Ok(mut usage_stats) = services.usage_stats.lock() {
-        let _ = usage_stats.record_dictation_completed(
-            &stored_item.id,
-            polished,
-            transcript.chars().count() as u32,
-            current_epoch_seconds(),
-        );
-    }
 
-    // History notification precedes insertion and the stats write. Refresh
-    // dashboards only after this dictation is included in the durable totals.
+    // Refresh dashboards only after this dictation is in the durable totals.
     let _ = app.emit("usage-stats-updated", ());
 
     // Save to the durable notes library (also best-effort), then notify the
@@ -2223,14 +2271,14 @@ fn finish_transcription_raw(
 }
 
 fn stop_side_effect_free_test_capture(
-    app: AppHandle,
-    services: State<'_, AppServices>,
+    app: &AppHandle,
+    services: &AppServices,
 ) -> Result<SpeedTestCapture, String> {
     let _operation = services
         .operation
         .try_lock()
         .map_err(|_| "Dictation is already finishing".to_string())?;
-    invalidate_previews(&services);
+    invalidate_previews(services);
     services
         .transcription_cancel_requested
         .store(false, Ordering::SeqCst);
@@ -2241,11 +2289,11 @@ fn stop_side_effect_free_test_capture(
         .map_err(|_| "Settings service lock failed".to_string())?
         .current();
 
-    let recording = stop_and_validate_recording(&app, &services, &settings)?;
+    let recording = stop_and_validate_recording(app, services, &settings)?;
     let stats = recording.stats();
 
     let started = std::time::Instant::now();
-    let transcript = finish_transcription_raw(&app, &services, &recording, &settings)?.text;
+    let transcript = finish_transcription_raw(app, services, &recording, &settings)?.text;
     let transcribe_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
 
     Ok(build_capture_result(
@@ -2261,22 +2309,16 @@ fn stop_side_effect_free_test_capture(
 /// notes, usage stats, or speed-test result persistence — so a benchmark run
 /// never pollutes real data.
 #[tauri::command]
-fn stop_speed_test_capture(
-    app: AppHandle,
-    services: State<'_, AppServices>,
-) -> Result<SpeedTestCapture, String> {
-    stop_side_effect_free_test_capture(app, services)
+async fn stop_speed_test_capture(app: AppHandle) -> Result<SpeedTestCapture, String> {
+    run_blocking(app, stop_side_effect_free_test_capture).await
 }
 
 /// The voice accuracy test capture. This intentionally shares the same
 /// side-effect-free path as the speed test while exposing a command name that
 /// does not imply speed-test result persistence.
 #[tauri::command]
-fn stop_voice_test_capture(
-    app: AppHandle,
-    services: State<'_, AppServices>,
-) -> Result<SpeedTestCapture, String> {
-    stop_side_effect_free_test_capture(app, services)
+async fn stop_voice_test_capture(app: AppHandle) -> Result<SpeedTestCapture, String> {
+    run_blocking(app, stop_side_effect_free_test_capture).await
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2296,9 +2338,9 @@ struct SpeedTestOutcome {
 }
 
 #[tauri::command]
-fn save_speed_test_result(
+async fn save_speed_test_result(
+    app: AppHandle,
     input: SpeedTestResultInput,
-    services: State<'_, AppServices>,
 ) -> Result<SpeedTestOutcome, String> {
     let record = SpeedTestRecord {
         typing_wpm: input.typing_wpm,
@@ -2307,12 +2349,15 @@ fn save_speed_test_result(
         accuracy: input.accuracy,
         recorded_at: current_epoch_seconds(),
     };
-    let (summary, is_best) = services
-        .speed_test
-        .lock()
-        .map_err(|_| "Speed test service lock failed".to_string())?
-        .record(record)?;
-    Ok(SpeedTestOutcome { summary, is_best })
+    run_blocking(app, move |_, services| {
+        let (summary, is_best) = services
+            .speed_test
+            .lock()
+            .map_err(|_| "Speed test service lock failed".to_string())?
+            .record(record)?;
+        Ok(SpeedTestOutcome { summary, is_best })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2325,21 +2370,20 @@ fn get_speed_test_summary(services: State<'_, AppServices>) -> Result<SpeedTestS
 }
 
 #[tauri::command]
-fn set_measured_typing_wpm(
-    app: AppHandle,
-    wpm: f64,
-    services: State<'_, AppServices>,
-) -> Result<UsageStatsSummary, String> {
-    let summary = {
-        let mut service = services
-            .usage_stats
-            .lock()
-            .map_err(|_| "Usage stats service lock failed".to_string())?;
-        service.set_measured_typing_wpm(wpm)?;
-        service.summary(current_epoch_seconds())
-    };
-    let _ = app.emit("usage-stats-updated", &summary);
-    Ok(summary)
+async fn set_measured_typing_wpm(app: AppHandle, wpm: f64) -> Result<UsageStatsSummary, String> {
+    run_blocking(app, move |app, services| {
+        let summary = {
+            let mut service = services
+                .usage_stats
+                .lock()
+                .map_err(|_| "Usage stats service lock failed".to_string())?;
+            service.set_measured_typing_wpm(wpm)?;
+            service.summary(current_epoch_seconds())
+        };
+        let _ = app.emit("usage-stats-updated", &summary);
+        Ok(summary)
+    })
+    .await
 }
 
 fn save_note(services: &AppServices, text: String, duration_seconds: f32) -> Result<Note, String> {
@@ -2351,18 +2395,6 @@ fn save_note(services: &AppServices, text: String, duration_seconds: f32) -> Res
             text,
             duration_seconds,
         })
-}
-
-fn record_usage_stats(
-    services: &AppServices,
-    words: u64,
-    recording_seconds: f32,
-) -> Result<(), String> {
-    services
-        .usage_stats
-        .lock()
-        .map_err(|_| "Usage stats service lock failed".to_string())?
-        .record(words, recording_seconds, current_epoch_seconds())
 }
 
 fn current_epoch_seconds() -> u64 {
@@ -3030,10 +3062,7 @@ pub fn run() {
             save_dictionary,
             vocabulary_packs::list_vocabulary_packs,
             vocabulary_packs::search_vocabulary_pack,
-            get_model_status,
-            prepare_model,
             get_transcription_model_status,
-            prepare_transcription_model,
             begin_prepare_transcription_model,
             test_remote_transcription_host,
             discover_tailnet_hosts,
@@ -3050,7 +3079,6 @@ pub fn run() {
             delete_note,
             copy_note,
             get_transcript_history,
-            clear_transcript_history,
             copy_transcript_history_item,
             copy_original_transcript,
             delete_transcript_history_item,
@@ -3068,7 +3096,6 @@ pub fn run() {
             check_for_updates,
             download_and_install_update,
             restart_to_update,
-            get_update_channel,
             set_update_channel,
             learned::get_learned_suggestions,
             learned::accept_learned_suggestion,
@@ -3137,5 +3164,41 @@ mod shortcut_patch_tests {
             current.transcript_stack_shortcut
         );
         assert!(!merged.interaction_sounds);
+    }
+
+    #[test]
+    fn a_settings_save_keeps_words_learned_after_its_snapshot() {
+        let snapshot = Settings::default();
+        let edited = Settings {
+            interaction_sounds: false,
+            ..snapshot.clone()
+        };
+        // The edit watcher saved a learned word while the save was running.
+        let latest = Settings {
+            vocabulary_hints: vec!["Niamh".into()],
+            learned_vocabulary_hints: vec!["Niamh".into()],
+            transcript_corrections: vec![TranscriptCorrection {
+                from: "knee of".into(),
+                to: "Niamh".into(),
+                ..TranscriptCorrection::default()
+            }],
+            ..snapshot.clone()
+        };
+        let saved = settings_to_save(Some(edited), None, &latest);
+        assert!(!saved.interaction_sounds);
+        assert_eq!(saved.vocabulary_hints, ["Niamh"]);
+        assert_eq!(saved.learned_vocabulary_hints, ["Niamh"]);
+        assert_eq!(saved.transcript_corrections[0].to, "Niamh");
+
+        let patched = settings_to_save(
+            Some(snapshot),
+            Some(ShortcutPatch {
+                recording_shortcut: Some("Control+K".into()),
+                transcript_stack_shortcut: None,
+            }),
+            &latest,
+        );
+        assert_eq!(patched.recording_shortcut, "Control+K");
+        assert_eq!(patched.vocabulary_hints, ["Niamh"]);
     }
 }
