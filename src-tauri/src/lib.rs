@@ -141,6 +141,16 @@ struct AppServices {
     fn_push_to_talk_tap_started: AtomicBool,
 }
 
+impl AppServices {
+    /// A copy of the current settings.
+    fn settings_snapshot(&self) -> Result<Settings, String> {
+        self.settings
+            .lock()
+            .map(|service| service.current())
+            .map_err(|_| "Settings service lock failed".to_string())
+    }
+}
+
 #[derive(Serialize)]
 struct BackendStatus {
     state: &'static str,
@@ -247,11 +257,7 @@ async fn get_note_metadata(
 
 #[tauri::command]
 fn get_settings(services: State<'_, AppServices>) -> Result<Settings, String> {
-    services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())
-        .map(|service| service.current())
+    services.settings_snapshot()
 }
 
 /// Whether this build has a Fairspoken Cloud endpoint; without one the UI
@@ -301,11 +307,7 @@ fn save_settings_locked(
     shortcut_patch: Option<ShortcutPatch>,
     services: &AppServices,
 ) -> Result<(), String> {
-    let current_settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let current_settings = services.settings_snapshot()?;
 
     let settings = settings_to_save(settings, shortcut_patch.clone(), &current_settings);
 
@@ -449,11 +451,7 @@ async fn get_local_model_catalog(
 ) -> Result<local_models::Catalog, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let services = app.state::<AppServices>();
-        let settings = services
-            .settings
-            .lock()
-            .map_err(|e| e.to_string())?
-            .current();
+        let settings = services.settings_snapshot()?;
         Ok(services.local_models.catalog(&settings, refresh))
     })
     .await
@@ -512,20 +510,8 @@ async fn remove_local_model(app: AppHandle, model: String) -> Result<(), String>
 
 #[tauri::command]
 fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
-    let ids = [
-        "parakeet-tdt-0.6b-v3",
-        "parakeet-ultra",
-        "parakeet-tdt-0.6b-v2",
-        "tiny",
-        "base",
-        "small",
-        "medium",
-        "large-v2",
-        "large-v3",
-        "large-v3-turbo",
-    ];
-    ids.iter()
-        .filter_map(|id| SttModel::from_model_id(id))
+    SttModel::all()
+        .into_iter()
         .map(|m| ModelStatus {
             model: m,
             cached: services.models.files_present(m),
@@ -592,11 +578,7 @@ fn save_dictionary_inner(update: DictionaryUpdate, services: &AppServices) -> Re
         .operation
         .try_lock()
         .map_err(|_| "Wait for the current settings operation to finish".to_string())?;
-    let mut settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let mut settings = services.settings_snapshot()?;
     // Zero-edit metric signal: adding a correction or dictionary term right
     // after a dictation means the user just taught the app a fix for it.
     let taught_a_fix = update.vocabulary_hints.len() > settings.vocabulary_hints.len()
@@ -677,11 +659,7 @@ fn get_transcription_model_status(
     request: TranscriptionModelRequest,
     services: State<'_, AppServices>,
 ) -> Result<ModelStatus, String> {
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let settings = services.settings_snapshot()?;
     Ok(services
         .models
         .status(request.model.unwrap_or(settings.model)))
@@ -701,11 +679,7 @@ fn begin_prepare_transcription_model(
         return Err("A model is already being prepared".to_string());
     }
 
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let settings = services.settings_snapshot()?;
     let model = request.model.unwrap_or(settings.model);
     let model_id = model.model_id().to_string();
     let models = services.models.clone();
@@ -795,11 +769,7 @@ fn emit_model_prepare_event(
 #[tauri::command]
 async fn test_remote_transcription_host(app: AppHandle) -> Result<RemoteHealth, String> {
     run_blocking(app, |_, services| {
-        let settings = services
-            .settings
-            .lock()
-            .map_err(|_| "Settings service lock failed".to_string())?
-            .current();
+        let settings = services.settings_snapshot()?;
         check_remote_transcription_host(&settings)
     })
     .await
@@ -858,20 +828,12 @@ async fn connect_transcription_host(
             }
             None => String::new(),
         };
-        let mut next = services
-            .settings
-            .lock()
-            .map_err(|_| "Settings service lock failed".to_string())?
-            .current();
+        let mut next = services.settings_snapshot()?;
         next.remote_url = url;
         next.remote_auth_token = token;
         next.transcription_location = TranscriptionLocation::RemoteHost;
         save_settings_locked(&app, Some(next), None, &services)?;
-        services
-            .settings
-            .lock()
-            .map_err(|_| "Settings service lock failed".to_string())
-            .map(|service| service.current())
+        services.settings_snapshot()
     })
     .await
     .map_err(|e| e.to_string())?
@@ -991,12 +953,7 @@ fn hide_transcript_shelf_window(app: AppHandle) -> Result<(), String> {
 async fn get_notes(app: AppHandle) -> Result<Vec<Note>, String> {
     // Listing sweeps expired notes, which rewrites the library.
     run_blocking(app, |_, services| {
-        let retention_minutes = services
-            .settings
-            .lock()
-            .map_err(|_| "Settings service lock failed".to_string())?
-            .current()
-            .note_retention_minutes;
+        let retention_minutes = services.settings_snapshot()?.note_retention_minutes;
         let mut notes = services
             .notes
             .lock()
@@ -1178,11 +1135,7 @@ fn start_recording_inner(app: AppHandle, services: State<'_, AppServices>) -> Re
     services
         .transcription_cancel_requested
         .store(false, Ordering::SeqCst);
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let settings = services.settings_snapshot()?;
 
     let trace = note_debug::Trace::new(services.debug_capture_enabled.load(Ordering::SeqCst));
     *services.debug_trace.lock().map_err(|e| e.to_string())? = trace.clone();
@@ -1535,11 +1488,7 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
 
     let trace = services.debug_trace.lock().ok().and_then(|mut t| t.take());
     let format_decision = format_context::end_recording(&services.format_session);
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let settings = services.settings_snapshot()?;
     // Re-apply this session's screen-harvested vocabulary (set at recording
     // start) so the finish path sees the same hints the session started with.
     let settings = settings.with_session_vocabulary(
@@ -2287,11 +2236,7 @@ fn stop_side_effect_free_test_capture(
         .transcription_cancel_requested
         .store(false, Ordering::SeqCst);
 
-    let settings = services
-        .settings
-        .lock()
-        .map_err(|_| "Settings service lock failed".to_string())?
-        .current();
+    let settings = services.settings_snapshot()?;
 
     let recording = stop_and_validate_recording(app, services, &settings)?;
     let stats = recording.stats();
@@ -2886,19 +2831,19 @@ fn start_transcript_preview_forwarder(
     tx
 }
 
-/// Apply the note-retention setting while the app sits idle, so expired
-/// notes disappear without waiting for the notes screen to reload them.
-fn start_note_retention_sweeper(app: AppHandle) {
+/// Once a minute while the app runs: frees a local polish model left idle,
+/// and applies the note-retention setting so expired notes disappear without
+/// waiting for the notes screen to reload them.
+fn start_housekeeping(app: AppHandle) {
     thread::Builder::new()
-        .name("note-retention-sweeper".to_string())
+        .name("housekeeping".to_string())
         .spawn(move || loop {
             thread::sleep(Duration::from_secs(60));
             let services = app.state::<AppServices>();
             services.local_models.unload_if_idle();
             let retention_minutes = services
-                .settings
-                .lock()
-                .map(|service| service.current().note_retention_minutes)
+                .settings_snapshot()
+                .map(|settings| settings.note_retention_minutes)
                 .unwrap_or(0);
             if retention_minutes == 0 {
                 continue;
@@ -3026,7 +2971,7 @@ pub fn run() {
             if let Err(err) = layout_pill_window(handle.clone(), "idle".to_string()) {
                 emit_backend_event(handle, "warning", format!("Could not position pill: {err}"));
             }
-            start_note_retention_sweeper(handle.clone());
+            start_housekeeping(handle.clone());
             training_capture::start_retention_sweeper(handle.clone());
             vocabulary_packs::warm_in_background(
                 app.state::<AppServices>()

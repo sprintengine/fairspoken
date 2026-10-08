@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -149,10 +148,7 @@ pub struct UsageStatsService {
 impl Default for UsageStatsService {
     fn default() -> Self {
         let path = default_usage_stats_path();
-        let data = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<UsageStatsData>(&raw).ok())
-            .unwrap_or_default();
+        let data = crate::app_dirs::read_json_or_back_up::<UsageStatsData>(&path).unwrap_or_default();
         Self { data, path }
     }
 }
@@ -547,6 +543,7 @@ fn default_usage_stats_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn data_with_days(days: &[(u64, u64)]) -> UsageStatsData {
         let mut data = UsageStatsData::default();
