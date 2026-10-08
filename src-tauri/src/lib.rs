@@ -371,11 +371,30 @@ fn save_settings_locked(
         service.save(settings_to_save(Some(settings), shortcut_patch, &latest))?;
         service.current()
     };
+    if current_settings.requires_transcription_unload(&normalized) {
+        spawn_transcription_warm_up(app.clone());
+    }
 
     let _ = app.emit("settings-updated", &normalized);
     #[cfg(target_os = "macos")]
     sync_fn_push_to_talk(app, services, normalized.fn_push_to_talk);
     Ok(())
+}
+
+/// Loads the speech model off the calling thread, so the first dictation
+/// after launch or a model change does not wait for it.
+fn spawn_transcription_warm_up(app: AppHandle) {
+    let _ = std::thread::Builder::new()
+        .name("speech-model-warm-up".into())
+        .spawn(move || {
+            let services = app.state::<AppServices>();
+            let Ok(settings) = services.settings.lock().map(|service| service.current()) else {
+                return;
+            };
+            if let Ok(mut transcription) = services.transcription.lock() {
+                transcription.warm_up(&settings, &services.models);
+            };
+        });
 }
 
 #[derive(Clone, serde::Deserialize)]
@@ -2972,6 +2991,7 @@ pub fn run() {
                 emit_backend_event(handle, "warning", format!("Could not position pill: {err}"));
             }
             start_housekeeping(handle.clone());
+            spawn_transcription_warm_up(handle.clone());
             training_capture::start_retention_sweeper(handle.clone());
             vocabulary_packs::warm_in_background(
                 app.state::<AppServices>()

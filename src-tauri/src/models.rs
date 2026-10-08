@@ -177,6 +177,12 @@ impl Default for ModelService {
 }
 
 impl ModelService {
+    /// Models stored under `base_dir`, for tests.
+    #[cfg(test)]
+    pub(crate) fn at(base_dir: PathBuf) -> Self {
+        Self { base_dir }
+    }
+
     pub fn status(&self, model: SttModel) -> ModelStatus {
         let (dir, files) = self.storage(model);
         let mut cached = true;
