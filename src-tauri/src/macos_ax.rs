@@ -475,23 +475,6 @@ pub fn ax_insert_text(text: &str) -> Result<(), i32> {
     }
 }
 
-/// Phase A/C: read the focused element's text around the caret. Returns
-/// `None` on anything ambiguous — no focused text element, a secure field, a
-/// password manager, or an unreadable selection range — so the caller falls
-/// back to today's exact paste behavior.
-pub fn focused_caret_context() -> Option<CaretContext> {
-    let (_, bundle_id) = frontmost_pid_and_bundle()?;
-    if is_password_manager(&bundle_id) {
-        return None;
-    }
-
-    let focused = focused_element()?;
-    if is_secure_field(&focused) {
-        return None;
-    }
-    caret_context(&focused)
-}
-
 /// The caret read for an element already cleared of the exclusions.
 fn caret_context(focused: &AxElement) -> Option<CaretContext> {
     let range = read_cf_range(&focused.copy_attribute("AXSelectedTextRange")?)?;
