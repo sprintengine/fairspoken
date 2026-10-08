@@ -1587,6 +1587,11 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
             // nothing sealed yet, fall back to the text around the caret.
             if job.context.is_empty() {
                 job.context = caret_before.unwrap_or_default().to_string();
+                // A pass given this lead-in may differ from the preview pass
+                // that had none, so its output is not reused.
+                if !job.context.is_empty() {
+                    job.reuse = None;
+                }
             }
             job
         });
@@ -1598,12 +1603,21 @@ fn perform_stop_and_transcribe(app: &AppHandle, services: &AppServices) -> Resul
         .as_ref()
         .map(|t| t.span("final", &polish_input, frontmost_app.as_ref()));
     if let Some(trace) = &trace {
-        trace.event("final-polish-scope", serde_json::json!({"mode":if tail_job.as_ref().is_some_and(|job| !job.raw.is_empty()) { "tail" } else if tail_job.is_some() { "already-sealed" } else { "whole-transcript" },"tailChars":polish_input.len(),"transcriptChars":raw_transcript.len(),"note":"Streaming polish seals at the last sentence end behind the ASR freeze point (the last silence gap, or everything except the last three ASR chunks)."}));
+        trace.event("final-polish-scope", serde_json::json!({"mode":if tail_job.as_ref().is_some_and(|job| job.reuse.is_some()) { "reused-tail" } else if tail_job.as_ref().is_some_and(|job| !job.raw.is_empty()) { "tail" } else if tail_job.is_some() { "already-sealed" } else { "whole-transcript" },"tailChars":polish_input.len(),"transcriptChars":raw_transcript.len(),"note":"Streaming polish seals at the last sentence end behind the ASR freeze point (the last silence gap, or everything except the last three ASR chunks)."}));
     }
     set_polish_activity(app, cursor_session, true);
     let polish_started = std::time::Instant::now();
     let decision = match &tail_job {
         Some(job) if job.raw.is_empty() => polish::PolishDecision::Disabled,
+        // The last preview pass polished exactly this tail; `pass_text`
+        // repairs its edges for release without another model call.
+        Some(polish_stream::TailJob {
+            reuse: Some(outcome),
+            ..
+        }) => polish::PolishDecision::Polished(polish::PolishOutcome {
+            duration_ms: 0,
+            ..outcome.clone()
+        }),
         Some(job) => run_polish_pass(
             services,
             job,
@@ -2790,8 +2804,12 @@ fn start_transcript_preview_forwarder(
                             .lock()
                             .ok()
                             .and_then(|mut stream| {
+                                let outcome = match &result {
+                                    polish::PolishDecision::Polished(outcome) => Some(outcome),
+                                    _ => None,
+                                };
                                 stream
-                                    .apply(generation, &job, &text)
+                                    .apply_pass(generation, &job, &text, outcome)
                                     .then(|| stream.composed())
                             })
                             .filter(|_| pending.is_current(rev));

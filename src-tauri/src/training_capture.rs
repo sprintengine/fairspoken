@@ -84,17 +84,26 @@ impl CaptureStore {
 
     /// Writes the dictation's folder, then appends it to the index.
     pub fn record(&self, entry: &CaptureEntry, samples: &[i16]) -> Result<(), String> {
+        // The root first, so `create_dir_all` never leaves it world-readable;
+        // this also tightens a root an older build created 0755.
+        create_private_dir(&self.root)
+            .map_err(|err| format!("Could not create {:?}: {err}", self.root))?;
         let folder = self.root.join(&entry.id);
         create_private_dir(&folder).map_err(|err| format!("Could not create {folder:?}: {err}"))?;
         write_wav(&folder.join(AUDIO_FILE), samples)?;
         write_json(&folder.join(META_FILE), entry)?;
         let mut line = serde_json::to_string(entry).map_err(|err| err.to_string())?;
         line.push('\n');
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        private_mode(&mut options);
+        options
             .open(self.index_path())
-            .and_then(|mut index| index.write_all(line.as_bytes()))
+            .and_then(|mut index| {
+                // `mode` only applies on creation; tighten an older 0644 index.
+                restrict_to_owner(&index)?;
+                index.write_all(line.as_bytes())
+            })
             .map_err(|err| format!("Could not update the training-data index: {err}"))
     }
 
@@ -117,7 +126,7 @@ impl CaptureStore {
             payload.push('\n');
         }
         let temporary = self.root.join(format!("{INDEX_FILE}.{}.tmp", uuid::Uuid::new_v4()));
-        fs::write(&temporary, payload)
+        write_private(&temporary, payload.as_bytes())
             .and_then(|_| fs::rename(&temporary, self.index_path()))
             .map_err(|err| {
                 let _ = fs::remove_file(&temporary);
@@ -284,7 +293,40 @@ fn write_wav(path: &Path, samples: &[i16]) -> Result<(), String> {
 
 fn write_json(path: &Path, entry: &CaptureEntry) -> Result<(), String> {
     let payload = serde_json::to_string_pretty(entry).map_err(|err| err.to_string())?;
-    fs::write(path, payload).map_err(|err| format!("Could not write {path:?}: {err}"))
+    write_private(path, payload.as_bytes()).map_err(|err| format!("Could not write {path:?}: {err}"))
+}
+
+/// Owner-only (0600) for newly created files: they hold the text of kept
+/// dictations, which may include patient information.
+fn private_mode(options: &mut fs::OpenOptions) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = options;
+}
+
+fn restrict_to_owner(file: &fs::File) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
+}
+
+/// Writes `bytes` to `path` (created or truncated) as an owner-only file.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    private_mode(&mut options);
+    let mut file = options.open(path)?;
+    restrict_to_owner(&file)?;
+    file.write_all(bytes)
 }
 
 fn directory_size(path: &Path) -> u64 {
@@ -497,6 +539,30 @@ mod tests {
         assert_eq!(store.entries().len(), 2);
         assert_eq!(store.summary().count, 2);
         assert!(store.summary().bytes > 16_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kept_dictations_are_readable_by_the_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("training-data");
+        // An index left world-readable by an earlier build is tightened.
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(root.join(INDEX_FILE), "").unwrap();
+        fs::set_permissions(root.join(INDEX_FILE), fs::Permissions::from_mode(0o644)).unwrap();
+        let store = CaptureStore::new(root.clone());
+        store.record(&entry("a", 100), &[0; 10]).unwrap();
+
+        assert_eq!(mode(&root), 0o700);
+        assert_eq!(mode(&root.join("a")), 0o700);
+        assert_eq!(mode(&root.join(INDEX_FILE)), 0o600);
+        assert_eq!(mode(&root.join("a").join(META_FILE)), 0o600);
+        // A rewritten index stays private.
+        assert!(store.attach_edit("a", "Ask Claude Code.").unwrap());
+        assert_eq!(mode(&root.join(INDEX_FILE)), 0o600);
     }
 
     #[test]

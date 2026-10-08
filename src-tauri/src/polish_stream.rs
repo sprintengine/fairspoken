@@ -44,18 +44,27 @@ const SEAL_PASS_MAX_BYTES: usize = 600;
 /// wait at release stays bounded.
 const FINAL_PASS_MAX_BYTES: usize = 600;
 
+use crate::polish::PolishOutcome;
+
 #[derive(Debug, Default)]
 pub struct PolishStream {
     /// The session this state belongs to; a mismatch means a stale writer.
     session: u64,
-    /// Polished text for the raw prefix covered by `sealed_raw_len`.
+    /// Polished text for the raw prefix `sealed_raw`.
     sealed: String,
-    /// Bytes of the cumulative raw transcript the sealed text covers.
-    sealed_raw_len: usize,
+    /// The exact prefix of the cumulative raw transcript the sealed text
+    /// covers. A transcript that does not start with it was rebuilt (a final
+    /// re-transcription after dropped frames, say), and stitching the sealed
+    /// text onto it would duplicate or lose words at the seam.
+    sealed_raw: String,
     /// Latest polished rendering of the volatile tail.
     tail: String,
     /// Raw text `tail` was produced from, so a repeat pass can be skipped.
     tail_raw: String,
+    /// The model's own output for `tail_raw`, before fragment-edge repair,
+    /// when the pass was polished. Release reuses it rather than polishing
+    /// the same tail again.
+    tail_outcome: Option<PolishOutcome>,
     /// Whether any pass actually rewrote its tail. Passes that fail or trip a
     /// guardrail contribute the raw text, so output alone does not mean the
     /// transcript was polished.
@@ -72,10 +81,21 @@ pub struct TailJob {
     pub raw: String,
     /// Polished lead-in, supplied to the model as surrounding context.
     pub context: String,
-    /// Raw bytes consumed so far, carried back into `apply`.
-    pub raw_len: usize,
+    /// The raw transcript through the end of this job, carried back into
+    /// `apply`; a seal job makes it the sealed raw prefix.
+    covered: String,
     /// Seal the tail into the prefix once this job lands.
     pub seal: bool,
+    /// Release only: the model already polished exactly this tail during the
+    /// dictation, so its output is reused instead of another pass.
+    pub reuse: Option<PolishOutcome>,
+}
+
+impl TailJob {
+    /// Raw bytes consumed so far.
+    fn raw_len(&self) -> usize {
+        self.covered.len()
+    }
 }
 
 impl PolishStream {
@@ -107,7 +127,27 @@ impl PolishStream {
     /// Raw bytes already sealed, so callers can tell how much work is left.
     #[cfg(test)]
     pub fn sealed_raw_len(&self) -> usize {
-        self.sealed_raw_len
+        self.sealed_raw.len()
+    }
+
+    /// Seals `raw[..end]` with `sealed_text` appended to the polished prefix,
+    /// and drops the tail.
+    fn seal_through(&mut self, raw: &str, end: usize, sealed_text: &str) {
+        self.sealed = join(&self.sealed, sealed_text);
+        self.sealed_raw = raw[..end].to_string();
+        self.clear_tail();
+    }
+
+    fn clear_tail(&mut self) {
+        self.tail.clear();
+        self.tail_raw.clear();
+        self.tail_outcome = None;
+    }
+
+    /// Whether `raw` extends the sealed raw prefix byte for byte. Chunk
+    /// merging only appends, so anything else is a rebuilt transcript.
+    fn extends_sealed(&self, raw: &str) -> bool {
+        raw.starts_with(&self.sealed_raw)
     }
 
     /// Records the ASR frozen prefix so commit can bound work even if no pass
@@ -132,69 +172,83 @@ impl PolishStream {
         // A raw stream that no longer extends what we sealed means the
         // transcript was rebuilt rather than appended to; the caller falls
         // back to a whole-text pass.
-        if self.sealed_raw_len > raw.len() || !raw.is_char_boundary(self.sealed_raw_len) {
+        if !self.extends_sealed(raw) {
             return None;
         }
+        let sealed_len = self.sealed_raw.len();
         self.observe(session, clamp_boundary(raw, frozen_len));
         let frozen = clamp_boundary(raw, self.frozen_len.min(raw.len()));
-        let frozen = sentence_seal_point(raw, self.sealed_raw_len, frozen);
-        if frozen > self.sealed_raw_len {
-            let slice = raw[self.sealed_raw_len..frozen].trim();
+        let frozen = sentence_seal_point(raw, sealed_len, frozen);
+        if frozen > sealed_len {
+            let slice = raw[sealed_len..frozen].trim();
             if slice.is_empty() {
-                self.sealed_raw_len = frozen;
+                self.sealed_raw = raw[..frozen].to_string();
             } else if slice == self.tail_raw {
-                self.sealed = join(&self.sealed, &self.tail);
-                self.sealed_raw_len = frozen;
-                self.tail.clear();
-                self.tail_raw.clear();
+                let tail = std::mem::take(&mut self.tail);
+                self.seal_through(raw, frozen, &tail);
             } else {
                 // The worker fell far behind: adopting the backlog as raw
                 // keeps this pass bounded. A keep-up seal is a sentence or
                 // two, well under the limit, so it is polished.
                 if slice.len() > SEAL_PASS_MAX_BYTES {
-                    self.sealed = join(&self.sealed, slice);
-                    self.sealed_raw_len = frozen;
-                    self.tail.clear();
-                    self.tail_raw.clear();
+                    self.seal_through(raw, frozen, slice);
                 } else {
                     return Some(TailJob {
                         raw: slice.to_string(),
                         context: context_tail(&self.sealed),
-                        raw_len: frozen,
+                        covered: raw[..frozen].to_string(),
                         seal: true,
+                        reuse: None,
                     });
                 }
             }
         }
-        let tail_raw = raw[self.sealed_raw_len..].trim();
+        let tail_raw = raw[self.sealed_raw.len()..].trim();
         if tail_raw.is_empty() || tail_raw == self.tail_raw {
             return None;
         }
         Some(TailJob {
             raw: tail_raw.to_string(),
             context: context_tail(&self.sealed),
-            raw_len: raw.len(),
+            covered: raw.to_string(),
             seal: false,
+            reuse: None,
         })
     }
 
-    /// Records a completed pass. Ignored when the session moved on or the job
-    /// covered less raw text than a pass that already landed, so a slow worker
-    /// can never walk the transcript backwards.
+    /// Records a completed pass. Ignored when the session moved on, the job
+    /// covered less raw text than a pass that already landed (so a slow worker
+    /// can never walk the transcript backwards), or the job was cut from a
+    /// transcript that does not extend the sealed prefix.
     pub fn apply(&mut self, session: u64, job: &TailJob, polished: &str) -> bool {
-        if session != self.session || job.raw_len < self.sealed_raw_len {
+        self.apply_pass(session, job, polished, None)
+    }
+
+    /// `apply`, also keeping the model's own output for a volatile tail so a
+    /// release that finds the same tail can reuse it (`TailJob::reuse`).
+    pub fn apply_pass(
+        &mut self,
+        session: u64,
+        job: &TailJob,
+        polished: &str,
+        outcome: Option<&PolishOutcome>,
+    ) -> bool {
+        if session != self.session
+            || job.raw_len() < self.sealed_raw.len()
+            || !job.covered.starts_with(&self.sealed_raw)
+        {
             return false;
         }
         let polished = polished.trim();
         self.changed |= polished != job.raw.trim();
         if job.seal {
             self.sealed = join(&self.sealed, polished);
-            self.sealed_raw_len = job.raw_len;
-            self.tail.clear();
-            self.tail_raw.clear();
+            self.sealed_raw = job.covered.clone();
+            self.clear_tail();
         } else {
             self.tail = polished.to_string();
             self.tail_raw = job.raw.clone();
+            self.tail_outcome = outcome.cloned();
         }
         true
     }
@@ -204,38 +258,44 @@ impl PolishStream {
     ///
     /// Returns the tail still needing a pass (possibly empty when everything
     /// is already sealed), or `None` when the stream cannot describe `raw` —
-    /// the caller then polishes the whole transcript, which is the
-    /// pre-streaming behavior and always correct.
+    /// the final transcript does not start with the sealed raw prefix. The
+    /// caller then polishes the whole transcript, which is the pre-streaming
+    /// behavior and always correct.
+    ///
+    /// When the tail is exactly what the last volatile pass polished (the
+    /// speaker paused before releasing), the job carries that pass's output
+    /// in `reuse`: polishing the same text again would only repeat it, and
+    /// the release-time edge repair needs no model.
     pub fn finish_job(&mut self, session: u64, raw: &str) -> Option<TailJob> {
-        if session != self.session
-            || self.sealed_raw_len > raw.len()
-            || !raw.is_char_boundary(self.sealed_raw_len)
-        {
+        if session != self.session || !self.extends_sealed(raw) {
             return None;
         }
+        let sealed_len = self.sealed_raw.len();
         let frozen = clamp_boundary(raw, self.frozen_len.min(raw.len()));
-        if frozen > self.sealed_raw_len {
-            let slice = raw[self.sealed_raw_len..frozen].trim();
+        if frozen > sealed_len {
+            let slice = raw[sealed_len..frozen].trim();
             let promoted = !slice.is_empty() && slice == self.tail_raw;
             // Frozen text no pass reached is polished with the tail rather
             // than adopted raw, as long as the release pass stays bounded.
-            let backlog = raw.len() - self.sealed_raw_len;
-            if promoted || slice.is_empty() || backlog > FINAL_PASS_MAX_BYTES {
-                if promoted {
-                    self.sealed = join(&self.sealed, &self.tail);
-                } else {
-                    self.sealed = join(&self.sealed, slice);
-                }
-                self.sealed_raw_len = frozen;
-                self.tail.clear();
-                self.tail_raw.clear();
+            let backlog = raw.len() - sealed_len;
+            if promoted {
+                let tail = std::mem::take(&mut self.tail);
+                self.seal_through(raw, frozen, &tail);
+            } else if slice.is_empty() || backlog > FINAL_PASS_MAX_BYTES {
+                self.seal_through(raw, frozen, slice);
             }
         }
+        let remainder = raw[self.sealed_raw.len()..].trim();
+        let reuse = self
+            .tail_outcome
+            .clone()
+            .filter(|_| !remainder.is_empty() && remainder == self.tail_raw);
         Some(TailJob {
-            raw: raw[self.sealed_raw_len..].trim().to_string(),
+            raw: remainder.to_string(),
             context: context_tail(&self.sealed),
-            raw_len: raw.len(),
+            covered: raw.to_string(),
             seal: true,
+            reuse,
         })
     }
 }
@@ -410,8 +470,9 @@ mod tests {
         let short = TailJob {
             raw: "hello".into(),
             context: String::new(),
-            raw_len: 3,
+            covered: "hel".into(),
             seal: true,
+            reuse: None,
         };
         assert!(!stream.apply(2, &short, "Old."));
         assert_eq!(stream.composed(), "Hello there.");
@@ -467,12 +528,77 @@ mod tests {
         assert!(!job.seal);
         assert_eq!(job.raw, "no friday");
         assert_eq!(stream.sealed_raw_len(), frozen);
-        assert!(stream.apply(3, &job, "No Friday."));
+        let model_output = outcome("No Friday.");
+        assert!(stream.apply_pass(3, &job, "No Friday.", Some(&model_output)));
         assert_eq!(stream.composed(), "Book it for Thursday No Friday.");
 
+        // The speaker paused before releasing, so the release tail is exactly
+        // what that pass polished. The job still describes the tail (the
+        // caller repairs its edges for release) but carries the model output
+        // to reuse instead of asking for another pass over the same text.
         let finish = stream.finish_job(3, raw).expect("commit");
         assert_eq!(finish.raw, "no friday");
         assert!(finish.seal);
+        assert_eq!(finish.reuse, Some(model_output));
+    }
+
+    fn outcome(text: &str) -> PolishOutcome {
+        PolishOutcome {
+            text: text.to_string(),
+            model: "test".to_string(),
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn release_polishes_a_tail_that_grew_or_was_never_polished() {
+        let mut stream = PolishStream::default();
+        stream.begin(13);
+        let job = stream.next_job(13, "book it for", 0).expect("volatile");
+        assert!(stream.apply_pass(13, &job, "Book it for", Some(&outcome("Book it for."))));
+        // More words arrived after the last pass.
+        let finish = stream.finish_job(13, "book it for thursday").expect("commit");
+        assert_eq!(finish.raw, "book it for thursday");
+        assert!(finish.reuse.is_none());
+
+        // A pass that fell back to raw text has no output to reuse.
+        let mut stream = PolishStream::default();
+        stream.begin(14);
+        let job = stream.next_job(14, "book it", 0).expect("volatile");
+        assert!(stream.apply(14, &job, "book it"));
+        assert!(stream.finish_job(14, "book it").unwrap().reuse.is_none());
+    }
+
+    #[test]
+    fn a_retranscribed_final_is_never_stitched_onto_the_sealed_prefix() {
+        let mut stream = PolishStream::default();
+        stream.begin(15);
+        let raw = "We should ship it. So we don't need";
+        let job = stream.next_job(15, raw, raw.len()).expect("seal");
+        assert!(job.seal);
+        assert!(stream.apply(15, &job, "We should ship it."));
+
+        // Frames dropped, so the final transcript is a fresh transcription
+        // that is longer than the sealed prefix but words differ inside it.
+        let rebuilt = "We should shift. So we don't need to worry about the ads.";
+        assert!(rebuilt.len() > stream.sealed_raw_len());
+        assert!(rebuilt.is_char_boundary(stream.sealed_raw_len()));
+        assert!(stream.finish_job(15, rebuilt).is_none());
+        assert!(stream.next_job(15, rebuilt, 0).is_none());
+
+        // A job cut from the old transcript cannot land on the new one.
+        let mut stream = PolishStream::default();
+        stream.begin(16);
+        let stale = stream.next_job(16, "hello there", 0).expect("volatile");
+        let seal = stream.next_job(16, "hello there friend", 5).expect("seal");
+        assert!(seal.seal);
+        assert!(stream.apply(16, &seal, "Hello"));
+        let foreign = TailJob {
+            covered: "jello there".into(),
+            ..stale
+        };
+        assert!(!stream.apply(16, &foreign, "Jello there"));
+        assert_eq!(stream.composed(), "Hello");
     }
 
     #[test]
