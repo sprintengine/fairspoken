@@ -428,7 +428,10 @@ fn read_cf_range(value: &CFType) -> Option<CFRange> {
 /// Pre-validation facts for the three-tier insertion's tier choice: role,
 /// whether `AXSelectedText` is settable, and whether the field is secure.
 pub fn focused_element_info() -> Option<crate::insertion::FocusedElementInfo> {
-    let focused = focused_element()?;
+    element_info(&focused_element()?)
+}
+
+fn element_info(focused: &AxElement) -> Option<crate::insertion::FocusedElementInfo> {
     let role = focused.role()?;
     let secure = is_secure_role(Some(&role), focused.subrole().as_deref());
     let mut settable = false;
@@ -472,23 +475,10 @@ pub fn ax_insert_text(text: &str) -> Result<(), i32> {
     }
 }
 
-/// Phase A/C: read the focused element's text around the caret. Returns
-/// `None` on anything ambiguous — no focused text element, a secure field, a
-/// password manager, or an unreadable selection range — so the caller falls
-/// back to today's exact paste behavior.
-pub fn focused_caret_context() -> Option<CaretContext> {
-    let (_, bundle_id) = frontmost_pid_and_bundle()?;
-    if is_password_manager(&bundle_id) {
-        return None;
-    }
-
-    let focused = focused_element()?;
-    if is_secure_field(&focused) {
-        return None;
-    }
-
+/// The caret read for an element already cleared of the exclusions.
+fn caret_context(focused: &AxElement) -> Option<CaretContext> {
     let range = read_cf_range(&focused.copy_attribute("AXSelectedTextRange")?)?;
-    let (mut before_units, after_units) = read_around_selection(&focused, &range)?;
+    let (mut before_units, after_units) = read_around_selection(focused, &range)?;
     // A window that starts inside a surrogate pair: drop the orphaned half.
     if before_units
         .first()
@@ -627,6 +617,16 @@ pub fn snapshot_focused_field() -> Result<WatchedField, &'static str> {
     if is_secure_field(&focused) {
         return Err("secure field");
     }
+    field_snapshot(focused, pid, bundle_id)
+}
+
+/// The edit watcher's snapshot of an element already cleared of the
+/// exclusions.
+fn field_snapshot(
+    focused: AxElement,
+    pid: i32,
+    bundle_id: String,
+) -> Result<WatchedField, &'static str> {
     let value = read_capped_value(&focused).ok_or("no readable text, or too long")?;
     let range = focused
         .copy_attribute("AXSelectedTextRange")
@@ -639,6 +639,44 @@ pub fn snapshot_focused_field() -> Result<WatchedField, &'static str> {
         value,
         selection_start: range.location as usize,
         selection_length: range.length as usize,
+    })
+}
+
+/// What the commit path reads from the focused element, in one pass that
+/// starts at release and overlaps the final transcription: the caret context,
+/// the edit watcher's field snapshot and the insertion facts. Each is `None`
+/// when not asked for or unavailable, under the same exclusions as the single
+/// reads (password managers and secure fields give no text; the insertion
+/// facts are read as `focused_element_info` reads them).
+pub struct FocusedRead {
+    /// The frontmost app when read, so a caller can tell the user moved on.
+    pub pid: i32,
+    pub caret: Option<CaretContext>,
+    pub field: Option<WatchedField>,
+    pub info: Option<crate::insertion::FocusedElementInfo>,
+}
+
+pub fn read_focused(want_caret: bool, want_field: bool, want_info: bool) -> Option<FocusedRead> {
+    let (pid, bundle_id) = frontmost_pid_and_bundle()?;
+    let application = application_element(pid)?;
+    unsafe { AXUIElementSetMessagingTimeout(application.element_ref(), 0.1) };
+    let focused = AxElement(application.copy_attribute("AXFocusedUIElement")?);
+    unsafe { AXUIElementSetMessagingTimeout(focused.element_ref(), 0.1) };
+    let info = if want_info { element_info(&focused) } else { None };
+    let readable = (want_caret || want_field)
+        && !is_password_manager(&bundle_id)
+        && !info.as_ref().map_or_else(|| is_secure_field(&focused), |info| info.secure);
+    let caret = if readable && want_caret { caret_context(&focused) } else { None };
+    let field = if readable && want_field {
+        field_snapshot(focused, pid, bundle_id).ok()
+    } else {
+        None
+    };
+    Some(FocusedRead {
+        pid,
+        caret,
+        field,
+        info,
     })
 }
 

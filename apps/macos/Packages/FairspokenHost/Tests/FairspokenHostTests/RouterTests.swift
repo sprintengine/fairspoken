@@ -310,6 +310,62 @@ struct RouterTests {
         #expect(pipe.isClosed)
         await h.shutdown()
     }
+
+    static let quickTimeouts = HTTPServerLimits(idleTimeout: .milliseconds(100), headerTimeout: .milliseconds(100))
+
+    @Test func idleConnectionsAndSlowHeadsTimeOut() async throws {
+        let h = Harness()
+        // Kept alive after a response, then nothing.
+        let (idle, idleTask) = h.connect(limits: Self.quickTimeouts)
+        idle.write("GET /v1/health HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n")
+        #expect(await idle.waitForOutput(containing: "standalone-host"))
+        await idleTask.value
+        #expect(idle.isClosed)
+        // Never sends a byte.
+        let started = ContinuousClock.now
+        let (silent, silentTask) = h.connect(limits: Self.quickTimeouts)
+        await silentTask.value
+        #expect(ContinuousClock.now - started >= .milliseconds(90))
+        #expect(silent.isClosed && silent.outputText.isEmpty)
+        // A head trickling in a byte at a time: the clock runs from its first byte.
+        let (slow, slowTask) = h.connect(limits: Self.quickTimeouts)
+        let trickle = Task {
+            for byte in "GET /v1/health HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n".utf8 {
+                if slow.isClosed { return }
+                slow.write([byte])
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        await slowTask.value
+        #expect(slow.isClosed && slow.outputText.isEmpty)
+        trickle.cancel()
+        await h.shutdown()
+    }
+
+    @Test func timeoutsDontCutStreamedBodiesOrEventStreams() async throws {
+        let h = Harness(heartbeat: .milliseconds(50))
+        await h.startWorkers()
+        // An upload paced slower than the head timeouts.
+        let (upload, uploadTask) = h.connect(limits: Self.quickTimeouts)
+        upload.write("POST /v1/transcriptions/stream HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer secret\r\nTransfer-Encoding: chunked\r\nContent-Type: \(StreamFrameCodec.contentType)\r\nConnection: close\r\n\r\n")
+        for frame in frames(seconds: 0.6, per: 3_200) {
+            upload.write(TestAudio.chunked(frame))
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        upload.write("0\r\n\r\n")
+        await uploadTask.value
+        #expect(ParsedResponse.parse(upload.outputText)?.status == 200)
+        // An event stream outlives them too.
+        let (events, eventsTask) = h.connect(limits: Self.quickTimeouts)
+        events.write("GET /v1/events HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n")
+        #expect(await events.waitForOutput(containing: "event: snapshot"))
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(!events.isClosed)
+        #expect(events.outputText.contains(": ping"))
+        events.endInput()
+        await eventsTask.value
+        await h.shutdown()
+    }
 }
 
 @Suite("Listener", .serialized)
@@ -384,6 +440,60 @@ struct ListenerTests {
         clients.forEach { $0.close() }
         seventeenth.close()
         await host.stop()
+    }
+
+    @Test func stoppingClosesKeptAliveConnections() async throws {
+        let (host, _) = try await start()
+        let client = try await RawClient(port: host.boundPort)
+        let request = "GET /v1/health HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer secret\r\n\r\n"
+        client.send(request)
+        #expect(await client.wait { $0.contains("standalone-host") })
+        await host.stop()
+        #expect(await client.wait { _ in client.isEnded })
+        // The same connection must not reach the stopped host's router.
+        client.send(request)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(client.text.components(separatedBy: "HTTP/1.1 200").count == 2)
+        client.close()
+    }
+
+    func okListener(_ limits: HTTPServerLimits) async throws -> HTTPListener {
+        let listener = try HTTPListener(host: "127.0.0.1", port: 0, limits: limits) { request in
+            await request.respond(status: 200, contentType: "text/plain", body: Array("ok".utf8))
+        }
+        try await listener.start()
+        return listener
+    }
+
+    @Test func idleConnectionsAreClosedOverTCP() async throws {
+        let listener = try await okListener(HTTPServerLimits(idleTimeout: .milliseconds(200), headerTimeout: .milliseconds(200)))
+        let client = try await RawClient(port: listener.boundPort)
+        client.send("GET / HTTP/1.1\r\nHost: t\r\n\r\n")
+        #expect(await client.wait { $0.contains("HTTP/1.1 200") })
+        #expect(await client.wait(until: { _ in client.isEnded }, timeout: .seconds(3)))
+        #expect(await settles { listener.connectionCount == 0 })
+        client.close()
+        listener.stop()
+    }
+
+    @Test func connectionsBeyondTheCapAreRefused() async throws {
+        let listener = try await okListener(HTTPServerLimits(maxConnections: 2))
+        let port = listener.boundPort
+        let a = try await RawClient(port: port)
+        let b = try await RawClient(port: port)
+        #expect(await settles { listener.connectionCount == 2 })
+        let refused = try await RawClient(port: port)
+        #expect(await refused.wait { _ in refused.isEnded })
+        #expect(ParsedResponse.parse(refused.text)?.status == 503)
+        #expect(refused.text.contains("Too many connections (limit 2)"))
+        // A slot frees when a client leaves.
+        a.close()
+        #expect(await settles { listener.connectionCount == 1 })
+        let next = try await RawClient(port: port)
+        next.send("GET / HTTP/1.1\r\nHost: t\r\n\r\n")
+        #expect(await next.wait { $0.contains("HTTP/1.1 200") })
+        [b, refused, next].forEach { $0.close() }
+        listener.stop()
     }
 
     @Test func onlyOneSpecificNonLoopbackAddressNeedsALoopbackCompanion() {

@@ -1,7 +1,7 @@
 /* Crystal theme for the home window (design/crystal/README.md). Loaded last,
    after the feature sheets, so it can restyle their surfaces without touching
-   their layout hooks. Tokens live in crystalTokens.css. */
-@import "./crystalTokens.css";
+   their layout hooks. Tokens live in crystalTokens.css, loaded once through
+   theme.css (imported by home.css). */
 
 /* ── Backdrop: a still sheen and one soft green wash ─────────────────── */
 body {

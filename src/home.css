@@ -1,32 +1,32 @@
-@import "./design-system/tokens.css";
-/* Legacy feature layouts consume semantic aliases. The Studio window shell
-   and shared control states are owned by dashboardShell.css. */
+@import "./theme.css";
+/* Legacy feature layouts consume these short aliases. They name the Crystal
+   tokens directly (the same values the semantic tokens are re-pointed to);
+   the window shell and shared control states are owned by dashboardShell.css
+   and crystal.css. */
 
 :root {
-  --bg: var(--sem-color-bg-surface);
-  --bg-elevated: var(--sem-color-bg-app);
-  --bg-row-hover: var(--sem-color-bg-hover);
-  --bg-input: var(--sem-color-bg-surface-raised);
-  --track: var(--sem-color-bg-selected);
-  --border: var(--sem-color-border-subtle);
+  --bg: var(--crystal-surface);
+  --bg-elevated: var(--crystal-page);
+  --bg-row-hover: var(--crystal-fill-hover);
+  --bg-input: var(--crystal-surface-strong);
+  --track: var(--crystal-fill-active);
+  --border: var(--crystal-hairline);
   --border-strong: var(--sem-color-border-default);
-  --text: var(--sem-color-text-primary);
+  --text: var(--crystal-ink);
   --text-secondary: var(--sem-color-text-default);
-  --text-muted: var(--sem-color-text-muted);
-  --accent: var(--sem-color-accent-primary);
-  --accent-strong: var(--sem-color-accent-hover);
-  --accent-quiet: var(--sem-color-accent-soft);
-  --focus: var(--sem-color-border-focus);
-  --dot-good: var(--sem-color-status-good);
-  --dot-idle: var(--sem-color-text-disabled);
-  --warning: var(--sem-color-status-warn);
+  --text-muted: var(--crystal-ink-2);
+  --accent: var(--crystal-accent);
+  --accent-strong: var(--crystal-accent-hover);
+  --accent-quiet: var(--crystal-tint);
+  --focus: var(--crystal-accent);
+  --dot-good: var(--crystal-ok);
+  --warning: var(--crystal-warn);
   --fs-display: calc(var(--sem-font-size-title) * 2);
   --fs-stat: calc(var(--sem-font-size-title) * 1.5);
   --fs-title: var(--sem-font-size-title);
   --fs-body: var(--sem-font-size-body);
   --fs-meta: var(--sem-font-size-meta);
   --fs-micro: var(--sem-font-size-micro);
-  --r: var(--sem-radius-shell);
   --r-sm: var(--sem-radius-control);
   --gutter: var(--sem-space-4xl);
   --mono: var(--sem-font-family-mono);
@@ -37,15 +37,12 @@
 html, body { height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
-  color: var(--text);
-  font-family: var(--sem-font-family-ui);
   font-size: var(--fs-body);
   line-height: 1.42;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums slashed-zero;
 }
-.num { font-variant-numeric: tabular-nums slashed-zero; }
-.mono { font-family: var(--mono); font-variant-numeric: tabular-nums slashed-zero; }
+.mono { font-variant-numeric: tabular-nums slashed-zero; }
 
 :focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
 .nav-item:focus-visible, .btn:focus-visible, .icon-btn:focus-visible,
@@ -84,7 +81,6 @@ body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 216px 1fr;
   overflow: hidden;
 }
 
@@ -93,7 +89,6 @@ body {
   background: var(--bg-elevated);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
-  padding: 14px 10px;
   overflow: hidden;
 }
 .nav { display: flex; flex-direction: column; gap: 2px; }
@@ -117,20 +112,16 @@ body {
 /* ── Main ────────────────────────────────────────────────── */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px var(--gutter); border-bottom: 1px solid var(--border); min-height: 54px;
+  display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border);
   flex: none;
 }
-.topbar h1 { font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.01em; }
-.content { padding: 20px var(--gutter); overflow: auto; flex: 1; min-height: 0; }
+.content { overflow: auto; flex: 1; min-height: 0; }
 .screen { display: none; }
 .screen.active { display: block; }
 
 /* ── Buttons ─────────────────────────────────────────────── */
 .btn {
   font: inherit; font-weight: 500; cursor: pointer;
-  border-radius: var(--r-sm); padding: 6px 12px;
-  border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text);
 }
 .btn:hover { background: var(--bg-row-hover); }
 .btn:disabled { opacity: .5; cursor: default; }
@@ -142,20 +133,15 @@ body {
 
 .icon-btn {
   display: inline-grid; place-items: center;
-  width: 28px; height: 28px; padding: 0;
-  border-radius: var(--r-sm); border: 1px solid transparent;
-  background: none; color: var(--text-secondary); cursor: pointer;
+  width: 28px; height: 28px; padding: 0; border: 1px solid transparent;
+  background: none; cursor: pointer;
 }
-.icon-btn:hover { background: var(--bg-row-hover); color: var(--text); }
 
 /* ── Inputs ──────────────────────────────────────────────── */
-.setting-select, .setting-input {
-  background: var(--bg-input); border: 1px solid var(--border-strong); color: var(--text);
-  border-radius: var(--r-sm); height: 28px; padding: 0 9px; font: inherit; font-size: 12.5px;
+.setting-select, .setting-input { height: 28px; padding: 0 9px; font: inherit; font-size: 12.5px;
   width: 100%; outline: none;
 }
-.setting-select:focus-visible, .setting-input:focus-visible {
-  border-color: var(--accent-strong); outline: 2px solid var(--focus); outline-offset: 0;
+.setting-select:focus-visible, .setting-input:focus-visible { outline-offset: 0;
 }
 .setting-select {
   appearance: none; -webkit-appearance: none; padding-right: 26px;
@@ -177,65 +163,46 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
    product accent exactly as accent-color did on the old checkboxes. */
 .switch {
   appearance: none; -webkit-appearance: none;
-  position: relative; width: 32px; height: 18px; margin: 0;
-  border-radius: 9px; border: 1px solid var(--border-strong);
-  background: var(--track); cursor: pointer; flex: none;
+  position: relative; margin: 0; cursor: pointer; flex: none;
 }
 .switch::after {
-  content: ""; position: absolute; top: 2px; left: 2px;
-  width: 12px; height: 12px; border-radius: 50%; background: var(--text-secondary);
-  transition: transform 120ms ease, background 120ms ease;
+  content: ""; position: absolute; border-radius: 50%;
 }
-.switch:checked { background: var(--accent); border-color: var(--accent); }
-.switch:checked::after { background: var(--sem-color-text-on-accent); transform: translateX(14px); }
+.switch:checked { border-color: var(--accent); }
 .switch:disabled { opacity: .5; cursor: default; }
 
 /* Segmented control — for two-value mode switches. Neutral active state; the
    accent stays with selection and CTAs. The inner radius is the outer radius
    minus the 2px padding (concentric), not a third radius token. */
 .seg {
-  display: inline-flex; padding: 2px; gap: 2px;
-  background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  display: inline-flex;
 }
 .seg button {
-  border: none; background: none; color: var(--text-secondary);
-  font: inherit; font-size: 12.5px; font-weight: 500;
-  padding: 3px 11px; border-radius: 4px; cursor: pointer;
+  border: none; background: none;
+  font: inherit; font-size: 12.5px; cursor: pointer;
 }
-.seg button:hover { color: var(--text); }
-.seg button[aria-pressed="true"] { background: var(--sem-color-bg-selected); color: var(--text); }
 
 /* ── Empty / placeholder states ──────────────────────────── */
 .empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; color: var(--text-muted); text-align: center;
-  padding: 64px 40px; min-height: 320px;
 }
 .empty[hidden] { display: none; }
 .empty svg { width: 26px; height: 26px; opacity: .4; margin-bottom: 4px; }
-.empty .e-title { color: var(--text-secondary); font-weight: 500; }
 .empty .e-sub { font-size: var(--fs-meta); max-width: 42ch; }
 
 /* ── Home / stats ─────────────────────────────────────────── */
-.hero { margin-bottom: 26px; }
-.hero .label { color: var(--text-secondary); font-size: var(--fs-meta); }
-.hero .value { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; }
-.hero .sub { color: var(--text-muted); font-size: var(--fs-meta); margin-top: 6px; max-width: 56ch; }
+.hero .sub { max-width: 56ch; }
 
 .chart { display: flex; align-items: flex-end; gap: 14px; height: 128px; padding: 4px 0 0; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; height: 100%; justify-content: flex-end; }
 .bar { width: 100%; max-width: 34px; min-height: 3px; border-radius: 4px 4px 2px 2px; background: var(--sem-color-bg-selected); }
 .bar.today { background: var(--accent); }
-.bar-day { color: var(--text-muted); font-size: var(--fs-micro); }
-.bar-col.is-today .bar-day { color: var(--text-secondary); }
+.bar-day { font-size: var(--fs-micro); }
 
 /* ── Settings ─────────────────────────────────────────────────
    Flat groups: a heading, breathing room, and hairline-separated rows.
    No card chrome — the 30px gap between groups is the separator. */
-.sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-}
 
 /* Row grammar — one idiom for every setting: label + muted help on the left,
    a compact right-aligned control sized to its content, never to the panel. */
@@ -250,21 +217,19 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .row-help { margin-top: 2px; font-size: var(--fs-meta); line-height: 1.45; color: var(--text-muted); }
 .row-control { flex: none; display: flex; align-items: center; gap: 8px; }
 .row-control .meta { color: var(--text-muted); font-size: var(--fs-meta); white-space: nowrap; }
-.row-control .btn { height: 28px; padding: 0 12px; }
-.status-text { color: var(--text-secondary); font-size: var(--fs-meta); }
+.status-text { font-size: var(--fs-meta); }
 
 /* Hosts found on the tailnet: each is a list row the user picks. */
-.tailnet-hosts { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--border); }
+.tailnet-hosts { display: flex; flex-direction: column; }
 .tailnet-hosts[hidden] { display: none; }
 .tailnet-host { margin: 0; }
-.tailnet-host .ds-list-row-title { color: var(--text); }
 
 /* Mic level — owned by the Microphone row so the live level reads as the
    selected device's. Movement is the status; no separate dot. */
 .mic-control { flex-direction: column; align-items: flex-end; gap: 6px; }
 .mic-control .mic-line { display: flex; align-items: center; gap: 8px; }
-.level { width: 240px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
-.level span { display: block; height: 100%; width: 100%; background: var(--dot-good); border-radius: 2px;
+.level { width: 240px; height: 4px; overflow: hidden; }
+.level span { display: block; height: 100%; width: 100%; border-radius: 2px;
   transform: scaleX(0); transform-origin: left center; transition: transform 90ms linear; }
 
 /* Model download — one state-driven sub-row owned by the Model row: status
@@ -273,12 +238,11 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .model-state { display: flex; align-items: center; gap: 12px; padding: 2px 0 12px; }
 .model-state[hidden] { display: none; }
 .model-state .status { color: var(--text-secondary); font-size: var(--fs-meta); white-space: nowrap; }
-.model-state .progress { flex: 1; height: 2px; border-radius: 1px; background: var(--track); overflow: hidden; display: none; }
+.model-state .progress { flex: 1; height: 2px; border-radius: 1px; overflow: hidden; display: none; }
 .model-state .progress span { display: block; height: 100%; width: 100%; background: var(--accent);
   transform: scaleX(0); transform-origin: left center; transition: transform 160ms ease; }
 .model-state .btn { margin-left: auto; height: 28px; padding: 0 12px; }
 .model-state[data-state="ready"] .status { color: var(--dot-good); }
-.model-state[data-state="error"] .status { color: var(--accent); }
 .model-state[data-state="loading"] .progress { display: block; }
 .model-state[data-state="loading"] .btn,
 .model-state[data-state="ready"] .btn { display: none; }
@@ -287,14 +251,11 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
    rebind button (click → capture, Esc cancels). */
 .shortcut {
   display: inline-flex; align-items: center; gap: 3px;
-  min-height: 28px; padding: 0 6px; border-radius: var(--r-sm);
-  border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer;
+  min-height: 28px; color: var(--text); cursor: pointer;
 }
-.shortcut:hover { background: var(--bg-row-hover); }
 .shortcut .keys { display: inline-flex; align-items: center; gap: 3px; }
 
 .shortcut .capture-hint { display: none; color: var(--text-muted); font-size: var(--fs-meta); padding: 0 4px; }
-.shortcut.capturing { border-color: var(--accent-strong); }
 .shortcut.capturing .keys { display: none; }
 .shortcut.capturing .capture-hint { display: block; }
 
@@ -303,11 +264,8 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 /* ── Notes ───────────────────────────────────────────────── */
 .topbar .search { margin-left: auto; }
 .search {
-  display: flex; align-items: center; gap: 8px; width: 240px;
-  background: var(--bg-input); border: 1px solid var(--border);
-  border-radius: var(--r-sm); padding: 6px 10px; color: var(--text-secondary);
+  display: flex; align-items: center; gap: 8px; width: 240px; color: var(--text-secondary);
 }
-.search:focus-within { border-color: var(--accent-strong); }
 .search[hidden] { display: none; }
 .search svg { width: 14px; height: 14px; opacity: .7; flex: none; }
 .search input { background: none; border: none; outline: none; color: var(--text); font: inherit; font-size: var(--fs-body); width: 100%; }
@@ -317,23 +275,16 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 /* Two list cards share the pane — the library on the left, the open note
    on the right. Selection is a fill plus an inset accent edge, never a
    left bar (same contract as list-row). */
-.notes { display: grid; grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); height: calc(100vh - 54px - 40px); gap: var(--sem-space-3xl); }
+.notes { display: grid; grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); height: calc(100vh - 54px - 40px); }
 .note-list { overflow: auto; }
 .note-row {
   display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto;
-  gap: 2px 10px; width: 100%; text-align: left; cursor: pointer; position: relative;
-  padding: var(--sem-space-xl); border: none; border-top: 1px solid var(--border);
-  background: none; color: inherit; font: inherit; border-radius: 0;
+  gap: 2px 10px; width: 100%; text-align: left; cursor: pointer; position: relative; border: none;
+  background: none; color: inherit; font: inherit;
 }
 .note-list > .note-row:first-child, .note-list > .note-list-empty { border-top: none; }
-.note-row:hover { background: var(--bg-row-hover); }
-.note-row[aria-selected="true"] {
-  background: var(--sem-color-bg-selected);
-  box-shadow: inset 0 0 0 2px var(--sem-color-accent-primary);
-}
-.note-row[aria-selected="true"]:hover { background: var(--sem-color-bg-selected); }
-.note-title { grid-column: 1; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.note-meta { grid-column: 1; color: var(--text-muted); font-size: var(--fs-micro); display: flex; gap: 8px; align-items: center; }
+.note-title { grid-column: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-meta { grid-column: 1; font-size: var(--fs-micro); display: flex; gap: 8px; align-items: center; }
 .note-pin { grid-column: 2; grid-row: 1 / 3; align-self: center; display: flex; color: var(--text-muted); }
 .note-row:not(.pinned) .note-pin { opacity: 0; }
 .note-row:hover .note-pin { opacity: .7; }
@@ -350,12 +301,11 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
   background: none; border: none; outline: none;
   color: var(--text); font: inherit; font-size: var(--fs-body); line-height: 1.6;
 }
-.nd-foot { display: flex; flex-wrap: wrap; gap: 16px; padding: var(--sem-space-lg) var(--sem-space-xl); border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-micro); }
+.nd-foot { display: flex; flex-wrap: wrap; gap: 16px; padding: var(--sem-space-lg) var(--sem-space-xl); border-top: 1px solid var(--border); font-size: var(--fs-micro); }
 .nd-foot .k { color: var(--text-secondary); }
 .note-detail .empty { min-height: 0; height: 100%; padding: var(--sem-space-4xl) var(--sem-space-xl); }
 
 /* ── Dictionary ──────────────────────────────────────────── */
-.dict-stack { max-width: 760px; margin: 0 auto; }
 .settings-card > .chips {
   display: flex; flex-wrap: wrap; gap: var(--sem-space-sm);
   padding: var(--sem-space-lg) var(--sem-space-xl);
@@ -363,12 +313,12 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 }
 .settings-card > .chips:empty { padding: var(--sem-space-xl); }
 .chips:empty::after { content: "No words yet."; color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
-.chip { display: inline-flex; align-items: center; gap: var(--sem-space-xs); padding: var(--sem-space-3xs) var(--sem-space-xs) var(--sem-space-3xs) var(--sem-space-sm); border: 1px solid var(--sem-color-border-default); border-radius: var(--sem-radius-control); color: var(--sem-color-text-default); font-size: var(--sem-font-size-meta); }
+.chip { display: inline-flex; align-items: center; gap: var(--sem-space-xs); border: 1px solid var(--sem-color-border-default); font-size: var(--sem-font-size-meta); }
 .chip button { background: none; border: none; color: var(--sem-color-text-muted); cursor: pointer; font-size: var(--sem-font-size-body); line-height: 1; padding: 0 var(--sem-space-3xs); }
 .chip button:hover { color: var(--sem-color-text-primary); }
 
 .settings-card > .dict-row,
-.settings-card > .dict-rows-empty { padding: var(--sem-space-xl); border-top: 1px solid var(--sem-color-border-subtle); }
+.settings-card > .dict-rows-empty { border-top: 1px solid var(--sem-color-border-subtle); }
 .settings-card > .dict-row:first-child,
 .settings-card > .dict-rows-empty:first-child { border-top: 0; }
 /* The trailing column is fixed so every row's fields line up whether or not
@@ -381,16 +331,15 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .dict-row-end { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--sem-space-xs); }
 .learned-chip {
   display: inline-flex; align-items: center; padding: 0 var(--sem-space-xs);
-  border: 1px solid var(--sem-color-border-subtle); border-radius: var(--sem-radius-control);
+  border: 1px solid var(--sem-color-border-subtle);
   color: var(--sem-color-text-muted); font-size: var(--fs-micro); line-height: 1.6; white-space: nowrap;
 }
-.settings-card > .dict-suggestion { padding: var(--sem-space-xl); border-top: 1px solid var(--sem-color-border-subtle); }
+.settings-card > .dict-suggestion { border-top: 1px solid var(--sem-color-border-subtle); }
 .settings-card > .dict-suggestion:first-child { border-top: 0; }
 .dict-suggestion { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: var(--sem-space-sm); }
 .dict-suggestion-text { min-width: 0; }
 .dict-suggestion-text .dict-arrow { margin: 0 var(--sem-space-xs); }
 .dict-suggestion-reason { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
-.training-warning { color: var(--warning); }
 .dict-row.format-mapping-row { grid-template-columns: minmax(0, 1fr) auto auto auto; }
 .format-mapping-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .format-mapping-source { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-meta); }
@@ -428,10 +377,10 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 
 .st { max-width: 640px; }
-.st-step { color: var(--text-muted); font-size: var(--fs-micro); margin-bottom: 12px; }
-.st-h { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.18; }
+.st-step { font-size: var(--fs-micro); margin-bottom: 12px; }
+.st-h { font-weight: 600; line-height: 1.18; }
 .st-h-sm { font-size: 22px; margin-top: 22px; }
-.st-sub { color: var(--text-secondary); font-size: var(--fs-meta); margin-top: 8px; max-width: 52ch; }
+.st-sub { font-size: var(--fs-meta); margin-top: 8px; max-width: 52ch; }
 .st-actions { display: flex; align-items: center; gap: 14px; margin-top: 26px; }
 .st-link { background: none; border: none; color: var(--text-secondary); font: inherit; cursor: pointer;
   text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-strong); }
@@ -447,13 +396,12 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 
 /* The reading block; preview is muted, the live target lights up as you type. */
 .passage-wrap { position: relative; margin-top: 26px; }
-.passage { font-size: 18px; line-height: 1.85; letter-spacing: .005em; color: var(--text-muted);
+.passage { font-size: 18px; line-height: 1.85; letter-spacing: .005em;
   font-family: var(--font-brand); white-space: pre-wrap; word-break: break-word; }
 .passage .ch { color: var(--text-muted); }
 .passage.live .ch.done { color: var(--text); }
-.passage.live .ch.bad { color: var(--accent); text-decoration: underline;
-  text-decoration-color: var(--accent); text-underline-offset: 3px; }
-.passage.live .ch.bad.space { background: var(--accent-quiet); text-decoration: none; }
+.passage.live .ch.bad { text-decoration: underline; text-underline-offset: 3px; }
+.passage.live .ch.bad.space { text-decoration: none; }
 .passage.live .ch.cur { position: relative; }
 .passage.live .ch.cur::before { content: ""; position: absolute; left: -1px; top: .12em; bottom: .04em;
   width: 2px; background: var(--accent); border-radius: 1px; animation: st-caret 1s steps(1) infinite; }
@@ -476,7 +424,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 
 /* Speaking leg: one earned status idiom — the 6px recording pulse. */
 .listen { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; color: var(--text-secondary); }
-.listen .rdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: st-pulse 1.4s ease-out infinite; }
+.listen .rdot { width: 6px; height: 6px; border-radius: 50%; animation: st-pulse 1.4s ease-out infinite; }
 .listen .clock { margin-left: auto; font-family: var(--mono); font-size: var(--fs-stat); font-weight: 600; color: var(--text); }
 @keyframes st-pulse {
   0% { box-shadow: 0 0 0 0 var(--sem-color-accent-soft-strong); }
@@ -488,7 +436,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 
 /* Results: hairline-split compare + proportional bars. One accent (spoke). */
 .res-head { display: flex; align-items: center; gap: 12px; }
-.res-h { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.18; }
+.res-h { font-weight: 600; line-height: 1.18; }
 .res-h em { font-style: normal; color: var(--accent); }
 .res-best { color: var(--text-secondary); font-size: var(--fs-micro); }
 
@@ -498,7 +446,6 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .compare .col + .col { border-left: 1px solid var(--border); }
 .c-label { color: var(--text-secondary); font-size: var(--fs-meta); display: flex; align-items: center; gap: 7px; }
 .c-label .swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
-.swatch.typed { background: var(--track); }
 .swatch.spoke { background: var(--accent); }
 .c-time { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; margin-top: 8px; }
 .c-meta { color: var(--text-muted); font-size: var(--fs-meta); margin-top: 6px; }
@@ -508,7 +455,6 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .bar-row .k { color: var(--text-secondary); font-size: var(--fs-meta); }
 .bar-track { height: 10px; border-radius: 5px; background: transparent; }
 .bar-fill { height: 10px; border-radius: 5px; display: block; }
-.bar-fill.typed { background: var(--track); }
 .bar-fill.spoke { background: var(--accent); }
 .bar-row .t { color: var(--text-muted); font-size: var(--fs-meta); font-family: var(--mono); min-width: 42px; text-align: right; }
 
@@ -517,7 +463,7 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 
 /* Capture errors: distinct mic vs transcription copy, the dot earned by failure. */
 .err { display: flex; flex-direction: column; gap: 6px; }
-.err .e-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-bottom: 6px; }
+.err .e-dot { width: 6px; height: 6px; border-radius: 50%; margin-bottom: 6px; }
 .err .e-dot.warn { background: var(--warning); }
 .err-h { font-size: var(--fs-title); font-weight: 600; }
 .err-sub { color: var(--text-secondary); font-size: var(--fs-meta); max-width: 48ch; }
@@ -550,13 +496,11 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
    test and the speed test's spoken results and low-accuracy guard. */
 .passage.compared { color: var(--text); margin-top: 0; }
 .passage.compared .w.miss { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--border-strong); }
-.passage.compared .w.sub { color: var(--accent); }
 
 /* Actual transcript: what the backend really returned. Inserted/substituted
    words carry the same accent; everything else is plain body text. */
 .vt-transcript { font-size: 16px; line-height: 1.85; letter-spacing: .005em; color: var(--text);
   font-family: var(--font-brand); white-space: pre-wrap; word-break: break-word; }
-.vt-transcript .w.ins, .vt-transcript .w.sub { color: var(--accent); }
 .vt-transcript .empty { color: var(--text-muted); }
 
 /* Colour-semantic legend: one quiet line. */
@@ -564,7 +508,6 @@ input[type="checkbox"]:not(.switch) { accent-color: var(--accent); width: 16px; 
 .vt-legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .vt-legend .sw { width: 10px; border-top: 2px solid currentColor; }
 .vt-legend .sw.miss { color: var(--text-muted); }
-.vt-legend .sw.acc { color: var(--accent); }
 
 /* Live preview ("heard so far") during recording / transcribing. Honest mode
    label; never presented as the final score. */

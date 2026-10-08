@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "home",
+  "description": "The home window: dragged by its overlay title bar (data-tauri-drag-region) and opens Hugging Face model pages in the browser",
+  "windows": ["home"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://huggingface.co/*" }]
+    }
+  ]
+}

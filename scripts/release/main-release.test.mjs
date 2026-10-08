@@ -9,6 +9,7 @@ import { commitBump, commitTypes, strongestBump } from './conventional-commits.m
 import {
   bumpVersion,
   isOnMain,
+  isOnMainFirstParent,
   resolveMainRelease,
   resolveNightly,
   resolvePromotion,
@@ -197,6 +198,32 @@ test('only a commit on main can be promoted', (t) => {
   assert.equal(isOnMain({ sha: head, mainSha: head, cwd: r.cwd }), true)
   assert.equal(isOnMain({ sha: offMain, mainSha: head, cwd: r.cwd }), false)
   assert.equal(isOnMain({ sha: 'f'.repeat(40), mainSha: head, cwd: r.cwd }), false)
+})
+
+// A hotfix tag publishes whatever commit it names, so it must name one main
+// moved through: not a commit inside a merged branch, not one main never had.
+test('a hotfix tag must name a commit on main\'s first-parent history', (t) => {
+  const r = repository(t)
+  const squashed = r.commit('fix: repair search')
+  r.git('checkout', '-b', 'topic')
+  const inside = r.commit('fix: half of a change')
+  r.git('checkout', 'main')
+  r.git('merge', '--no-ff', 'topic', '-m', 'fix: merge the change')
+  const merge = r.git('rev-parse', 'HEAD')
+  r.git('checkout', '-b', 'stray')
+  const stray = r.commit('fix: never merged')
+  r.git('checkout', 'main')
+  const head = r.commit('docs: later work')
+  const onMain = (sha) => isOnMainFirstParent({ sha, mainSha: head, cwd: r.cwd })
+  assert.equal(onMain(squashed), true)
+  assert.equal(onMain(merge), true)
+  assert.equal(onMain(head), true)
+  assert.equal(onMain(r.initial), true)
+  assert.equal(onMain(squashed.slice(0, 12)), true, 'an abbreviated sha resolves')
+  assert.equal(onMain(inside), false, 'reachable from main, but only through a merge')
+  assert.equal(isOnMain({ sha: inside, mainSha: head, cwd: r.cwd }), true)
+  assert.equal(onMain(stray), false)
+  assert.equal(onMain('f'.repeat(40)), false)
 })
 
 // The hotfix route. package.json stays at its development baseline by rule, so

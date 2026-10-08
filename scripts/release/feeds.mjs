@@ -170,10 +170,20 @@ export function renderAppcast({ app, repo, items }) {
 // it then reports a failed check, rather than parsing a feed that lies.
 // An appcast is always written, empty if need be, since Sparkle reads an empty
 // feed as "up to date".
+//
+// `withdrawn` names those JSON feeds with no candidate, so the upload deletes
+// the copy an earlier publish left on update-feeds (every release of that
+// channel was deleted, say): leaving it would keep serving a release that no
+// longer exists. A feed whose candidates were all skipped is NOT withdrawn: a
+// bad release holds a feed back, and the copy already there stays.
 export async function renderFeeds(plan, { repo, read }) {
   const files = {}
   const warnings = []
   const sources = {}
+  const withdrawn = CHANNELS.flatMap((channel) => [
+    ...(plan.desktop[channel].length === 0 ? [desktopFeedName(channel)] : []),
+    ...(plan.host[channel].length === 0 ? [hostFeedName(channel)] : []),
+  ])
   const skip = (release, name, problems) =>
     warnings.push(`${release.tag_name} ${name} is not usable, skipped: ${problems.join('; ')}`)
 
@@ -223,7 +233,7 @@ export async function renderFeeds(plan, { repo, read }) {
     files[app.appcast] = renderAppcast({ app, repo, items })
     sources[app.appcast] = items.map((item) => item.release.tag_name)
   }
-  return { files, warnings, sources }
+  return { files, warnings, sources, withdrawn }
 }
 
 // ---------------------------------------------------------------------------

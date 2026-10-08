@@ -1,0 +1,8 @@
+/* The token stack, imported once per page and before any component sheet:
+   the vendored design-system tokens, their light scope for nested light
+   previews, then the Crystal palette that re-points them. Order is the
+   contract: each layer overrides the one before at equal specificity, so no
+   other sheet may import tokens.css, light-scope.css or crystalTokens.css. */
+@import "./design-system/tokens.css";
+@import "./design-system/light-scope.css";
+@import "./crystalTokens.css";

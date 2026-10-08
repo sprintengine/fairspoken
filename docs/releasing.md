@@ -91,7 +91,9 @@ nightly. A release whose metadata does not check out is skipped with a warning
 (the next one is used), so a bad release can hold a feed back but never break
 it; the publish that made it then fails its own check, because its release is
 missing from the feeds. A JSON feed with no release to render from (no stable
-published yet) is not written; an appcast is always written, empty if need be.
+published yet, or every one deleted) is not written, and a copy of it an
+earlier publish left on `update-feeds` is deleted; an appcast is always
+written, empty if need be.
 Then the feeds are uploaded (each to a temporary name, the old copy deleted and
 the new one renamed into place, so readers see the old or the new file), read
 back without credentials, and only then are the old nightlies deleted. The job
@@ -170,7 +172,11 @@ file comes from main), so only promote nightlies cut by the current pipeline.
 ## The hotfix route
 
 Push a tag `vX.Y.Z` on main's first-parent history to build and publish exactly
-that commit as stable. The version must be above the latest published stable.
+that commit as stable. The resolve step refuses, before anything is built, a
+tag on any other commit: one main never had, or one main only reaches through
+a merge (a commit from inside a merged branch). So merge the fix to main first,
+then tag the commit the merge put on main. The version must be above the latest
+published stable.
 `package.json` is not consulted: it stays at the development baseline and every
 build stamps its own version.
 

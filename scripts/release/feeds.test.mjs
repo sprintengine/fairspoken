@@ -175,6 +175,24 @@ test('a new repository with one nightly: no stable JSON feeds yet, empty-but-val
   assert.match(none['appcast-fairspoken.xml'], /<channel>[\s\S]*<\/channel>/)
 })
 
+test('a JSON feed no release carries is withdrawn; one held back by a bad release is not', async () => {
+  const first = fixtureRelease({ version: '0.2.0-nightly.20261005.3', publishedAt: '2026-10-05T12:00:00Z', build: '202610051200' })
+  // No stable at all (never published, or every one deleted): the stale stable
+  // copies on update-feeds go.
+  assert.deepEqual((await render([first])).withdrawn, ['desktop-stable.json', 'host-stable.json'])
+  assert.deepEqual((await render([])).withdrawn, ['desktop-stable.json', 'host-stable.json', 'desktop-nightly.json', 'host-nightly.json'])
+  assert.deepEqual((await render(fixtureReleases())).withdrawn, [])
+  // The only nightly's manifest is broken: not rendered, but not withdrawn
+  // either, so the copy already published stays.
+  const broken = fixtureRelease({ version: '0.2.0-nightly.20261005.3', publishedAt: '2026-10-05T12:00:00Z', build: '202610051200' })
+  broken.assets.find((asset) => asset.name === DESKTOP_MANIFEST).content = '{not json'
+  const held = await render([broken])
+  assert.ok(!('desktop-nightly.json' in held.files))
+  assert.ok(!held.withdrawn.includes('desktop-nightly.json'))
+  // Appcasts are always rendered, so never withdrawn.
+  for (const { withdrawn } of [held, await render([])]) assert.ok(!withdrawn.some((name) => name.endsWith('.xml')))
+})
+
 test('feedsCoverRelease: the stable just published must head the stable feeds', async () => {
   const { files } = await render(fixtureReleases())
   assert.deepEqual(feedsCoverRelease(files, { version: '0.4.0', channel: 'stable', sparkleApps: SPARKLE_APPS }), [])

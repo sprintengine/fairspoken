@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "transcript-shelf",
+  "description": "The transcript shelf: a frameless window dragged by its body",
+  "windows": ["transcript-shelf"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
+}

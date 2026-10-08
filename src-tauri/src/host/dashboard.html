@@ -2202,7 +2202,7 @@
       case "pairing": {
         const who = d.clientName || clientName(d.client);
         if (d.ok) toast({ title: `${who} paired`, body: d.clientName ? clientName(d.client) : "", icon: "check", tone: "done", timeout: 5000 });
-        else toast({ title: "Pairing refused", body: `${who}: wrong password or too many tries.`, icon: "warn", tone: "error", timeout: 6000 });
+        else toast({ title: "Pairing refused", body: `${who}: wrong password.`, icon: "warn", tone: "error", timeout: 6000 });
         return;
       }
       default:

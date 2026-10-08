@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -37,6 +38,11 @@ data class Transcript(
     val superMode: String?,
 )
 
+/** A plain-HTTP request to an address outside the tailnet, refused before anything was sent. */
+class CleartextRefused : IOException(
+    "Plain HTTP only works over Tailscale. Use the host's Tailscale name or 100.x address, or https"
+)
+
 /** [rejected]: the host refused the token, so the fix is to pair again. */
 class HostException(message: String, val rejected: Boolean = false) : Exception(message)
 
@@ -51,6 +57,7 @@ class HostClient {
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .connectionPool(okhttp3.ConnectionPool(4, 5, TimeUnit.MINUTES))
+        .addNetworkInterceptor(cleartextOnlyOnTailnet)
         .build()
 
     private val probeHttp: OkHttpClient = http.newBuilder()
@@ -59,7 +66,7 @@ class HostClient {
 
     private val recordingLimits = ConcurrentHashMap<String, Int>()
 
-    suspend fun hello(baseUrl: String): HostHello? = withContext(Dispatchers.IO) {
+    suspend fun hello(baseUrl: String): Result<HostHello?> = withContext(Dispatchers.IO) {
         runCatching {
             probeHttp.newCall(Request.Builder().url("$baseUrl/v1/hello").build()).execute().use { response ->
                 if (!response.isSuccessful) return@use null
@@ -71,19 +78,23 @@ class HostClient {
                     auth = json.optString("auth", "token"),
                 )
             }
-        }.getOrNull()
+        }
     }
 
     /**
      * Finds a host by machine name, `name:port`, IP or URL, probing the URLs
      * the protocol lists in order and keeping the first that answers.
+     * Throws [HostException] when the only way in was plain HTTP off the tailnet.
      */
     suspend fun find(input: String, tailnetDomain: String?): FoundHost? {
         val candidates = candidateUrls(input, tailnetDomain)
         if (candidates.isEmpty()) return null
         return coroutineScope {
-            val probes = candidates.map { url -> async { hello(url)?.let { FoundHost(url, it) } } }
-            probes.firstNotNullOfOrNull { it.await() }
+            val probes = candidates.map { url -> async { url to hello(url) } }
+            val answers = probes.map { it.await() }
+            answers.firstNotNullOfOrNull { (url, hello) -> hello.getOrNull()?.let { FoundHost(url, it) } }
+                ?: answers.firstNotNullOfOrNull { (_, hello) -> hello.exceptionOrNull() as? CleartextRefused }
+                    ?.let { throw HostException(it.message.orEmpty()) }
         }
     }
 
@@ -179,6 +190,23 @@ class HostClient {
         const val DEFAULT_PORT = 48173
         private val JSON = "application/json".toMediaType()
         private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
+
+        /**
+         * Plain HTTP only inside the tailnet, where WireGuard encrypts every
+         * packet, or to this device. Checked against the address actually
+         * connected to (so a name that resolves elsewhere is caught too),
+         * before the request, and its token, is written.
+         */
+        private val cleartextOnlyOnTailnet = Interceptor { chain ->
+            val request = chain.request()
+            if (!request.url.isHttps) {
+                val address = chain.connection()?.route()?.socketAddress?.address
+                if (address == null || !(address.isLoopbackAddress || Tailnet.isTailnetAddress(address))) {
+                    throw CleartextRefused()
+                }
+            }
+            chain.proceed(request)
+        }
 
         fun candidateUrls(input: String, tailnetDomain: String?): List<String> {
             val raw = input.trim().trimEnd('/')
@@ -281,7 +309,12 @@ class StreamingUpload : Callback {
     }
 
     override fun onFailure(call: Call, e: IOException) {
-        complete(Result.failure(HostException(if (call.isCanceled()) "Cancelled" else "Can't reach the host")))
+        val message = when {
+            call.isCanceled() -> "Cancelled"
+            e is CleartextRefused -> e.message.orEmpty()
+            else -> "Can't reach the host"
+        }
+        complete(Result.failure(HostException(message)))
     }
 
     override fun onResponse(call: Call, response: Response) {

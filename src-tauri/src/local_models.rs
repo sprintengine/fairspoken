@@ -13,7 +13,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Mutex,
 };
 use std::time::{Duration, Instant, SystemTime};
@@ -169,6 +169,9 @@ pub struct LocalModels {
     /// SHA-256 of the developer's local model file, keyed by path, size and
     /// modification time: adapter manifests name their base by hash.
     local_sha: Mutex<Option<LocalSha>>,
+    /// Polish passes waiting for `inference`; a format-classifier completion
+    /// holding it stops early for them.
+    polish_waiting: AtomicUsize,
 }
 /// (path, size, modification time, SHA-256) of the local model file.
 type LocalSha = (PathBuf, u64, Option<SystemTime>, String);
@@ -265,6 +268,7 @@ impl LocalModels {
             download_cancel: AtomicBool::new(false),
             download_state: Mutex::new(None),
             local_sha: Mutex::new(None),
+            polish_waiting: AtomicUsize::new(0),
         }
     }
     /// The model the settings select, checked to be usable.
@@ -739,15 +743,26 @@ impl LocalModels {
         if timeout.is_zero() {
             return Err("no time left".into());
         }
-        let response: serde_json::Value = local_client()?
+        let request = completion_request(&messages, max_tokens as usize, None);
+        let body = local_client()?
             .post(format!("{url}/v1/chat/completions"))
             .timeout(timeout)
             .bearer_auth(&token)
-            .json(&serde_json::json!({"messages": messages, "temperature":0, "max_tokens":max_tokens, "chat_template_kwargs":{"enable_thinking":false}}))
+            .json(&request)
             .send()
             .and_then(|r| r.error_for_status())
-            .and_then(|r| r.json())
             .map_err(|e| e.to_string())?;
+        // A polish pass waiting for the runtime outranks the format guess
+        // (the rules decide instead), so this answer gives way to it.
+        let response = read_streamed_completion(body, || {
+            if self.polish_waiting.load(Ordering::SeqCst) > 0 {
+                Err("a polish pass needs the local model".into())
+            } else if Instant::now() >= deadline {
+                Err("no time left".into())
+            } else {
+                Ok(())
+            }
+        })?;
         response["choices"][0]["message"]["content"]
             .as_str()
             .map(str::to_string)
@@ -824,7 +839,10 @@ impl LocalModels {
         };
         let requests = adapter_requests(settings);
         let result = (|| {
-            let _gate = self.inference.lock().map_err(|e| e.to_string())?;
+            let _gate = {
+                let _waiting = WaitingForRuntime::new(&self.polish_waiting);
+                self.inference.lock().map_err(|e| e.to_string())?
+            };
             let (url, token, adapters) = self.ensure_runtime(&model, &requests, cancel, span)?;
             check_cancel(cancel)?;
             let client = local_client()?;
@@ -881,15 +899,23 @@ impl LocalModels {
             if let Some(span) = span {
                 span.event("polish-request", serde_json::json!({"provider":"local","model":model.id,"body":request}));
             }
-            let response: serde_json::Value = client
+            let body = client
                 .post(format!("{url}/v1/chat/completions"))
                 .timeout(LOCAL_POLISH_TIMEOUT)
                 .bearer_auth(&token)
                 .json(&request)
                 .send()
                 .and_then(|r| r.error_for_status())
-                .and_then(|r| r.json())
                 .map_err(|e| format!("Local polish failed: {e}"))?;
+            // A cancelled pass (a superseded preview, a release, a cancelled
+            // dictation) stops at the next token and frees the runtime.
+            let response = read_streamed_completion(body, || check_cancel(cancel)).map_err(|e| {
+                if e == "Cancelled" {
+                    e
+                } else {
+                    format!("Local polish failed: {e}")
+                }
+            })?;
             if let Some(span) = span {
                 span.event("polish-response", response.clone());
             }
@@ -1113,12 +1139,17 @@ fn tagged_messages(raw: &str, system: &str, layout: Layout, spelling: &[String])
 
 /// The chat completion body for one pass; `lora` selects the adapters this
 /// pass runs with (absent when the runtime has none).
+///
+/// Always streamed, so a caller can stop between tokens
+/// (`read_streamed_completion`): llama-server abandons a generation once its
+/// client disconnects, which frees the single slot without killing the
+/// runtime.
 fn completion_request(
     messages: &serde_json::Value,
     max_tokens: usize,
     lora: Option<serde_json::Value>,
 ) -> serde_json::Value {
-    let mut request = serde_json::json!({"messages": messages, "temperature":0, "max_tokens":max_tokens, "chat_template_kwargs":{"enable_thinking":false}});
+    let mut request = serde_json::json!({"messages": messages, "temperature":0, "max_tokens":max_tokens, "stream":true, "chat_template_kwargs":{"enable_thinking":false}});
     if let Some(lora) = lora {
         request["lora"] = lora;
     }
@@ -1168,6 +1199,60 @@ fn fast_output_budget(messages: &serde_json::Value, transcript: &str) -> Option<
         + TEMPLATE_TOKENS;
     let output = (transcript.len() * 2 + 128).max(256);
     (input + output + LOCAL_CONTEXT_MARGIN <= LOCAL_CONTEXT_TOKENS).then_some(output)
+}
+
+/// Reads a streamed chat completion (server-sent events), calling `stop`
+/// before each chunk; an error from it abandons the stream, and dropping the
+/// unfinished body closes the connection. Returns the answer in the
+/// non-streamed response shape, so the guards read it the same way. A stream
+/// that ends without a finish reason reads as incomplete.
+fn read_streamed_completion(
+    body: impl Read,
+    stop: impl Fn() -> Result<(), String>,
+) -> Result<serde_json::Value, String> {
+    use std::io::BufRead;
+    let mut content = String::new();
+    let mut finish_reason = serde_json::Value::Null;
+    for line in std::io::BufReader::new(body).lines() {
+        stop()?;
+        let line = line.map_err(|e| e.to_string())?;
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            continue;
+        };
+        if data == "[DONE]" {
+            break;
+        }
+        let chunk: serde_json::Value =
+            serde_json::from_str(data).map_err(|e| format!("unreadable stream chunk: {e}"))?;
+        if let Some(error) = chunk.get("error") {
+            return Err(format!("runtime error: {error}"));
+        }
+        let choice = &chunk["choices"][0];
+        if let Some(text) = choice["delta"]["content"].as_str() {
+            content.push_str(text);
+        }
+        if !choice["finish_reason"].is_null() {
+            finish_reason = choice["finish_reason"].clone();
+        }
+    }
+    stop()?;
+    Ok(serde_json::json!({"choices":[{"message":{"content":content},"finish_reason":finish_reason}]}))
+}
+
+/// Counts a polish pass as waiting for the runtime while it lives.
+struct WaitingForRuntime<'a>(&'a AtomicUsize);
+
+impl<'a> WaitingForRuntime<'a> {
+    fn new(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter)
+    }
+}
+
+impl Drop for WaitingForRuntime<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
@@ -1722,6 +1807,81 @@ mod tests {
         );
     }
     #[test]
+    fn a_streamed_completion_reads_as_the_plain_response_shape() {
+        let stream = concat!(
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" there.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let value = read_streamed_completion(stream.as_bytes(), || Ok(())).unwrap();
+        assert_eq!(validate_output("hello there", &value, &[], &[]).unwrap(), "Hello there.");
+        // Cut off before a finish reason: incomplete, so the raw text stays.
+        let cut = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n";
+        let value = read_streamed_completion(cut.as_bytes(), || Ok(())).unwrap();
+        assert!(validate_output("hello", &value, &[], &[]).is_err());
+        let error = "data: {\"error\":{\"message\":\"boom\"}}\n\n";
+        assert!(read_streamed_completion(error.as_bytes(), || Ok(())).is_err());
+    }
+    #[test]
+    fn a_cancelled_stream_stops_between_tokens_and_hangs_up() {
+        use std::io::BufRead;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // A fake runtime that streams tokens until its client disconnects.
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request["stream"], true);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            for sent in 1..=300 {
+                let chunk = format!(
+                    "data: {{\"choices\":[{{\"delta\":{{\"content\":\"w{sent} \"}},\"finish_reason\":null}}]}}\n\n"
+                );
+                if stream.write_all(chunk.as_bytes()).and_then(|_| stream.flush()).is_err() {
+                    return sent;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            300
+        });
+        let body = local_client()
+            .unwrap()
+            .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+            .json(&completion_request(&serde_json::json!([]), 16, None))
+            .send()
+            .unwrap();
+        let cancel = AtomicBool::new(false);
+        let chunks = std::cell::Cell::new(0);
+        let result = read_streamed_completion(body, || {
+            chunks.set(chunks.get() + 1);
+            if chunks.get() == 3 {
+                cancel.store(true, Ordering::SeqCst);
+            }
+            check_cancel(&cancel)
+        });
+        assert_eq!(result.unwrap_err(), "Cancelled");
+        let sent = server.join().unwrap();
+        assert!(sent < 300, "the runtime kept streaming after the client hung up");
+    }
+    #[test]
     fn only_a_pass_that_plainly_fits_skips_the_tokenizer() {
         let short = "we moved it to rail way";
         let messages = tagged_messages(short, TAGGED_SYSTEM_PROMPT, Layout::default(), &[]);
@@ -1755,6 +1915,7 @@ mod tests {
         let bare = completion_request(&messages, 256, None);
         assert!(bare.get("lora").is_none());
         assert_eq!(bare["max_tokens"], 256);
+        assert_eq!(bare["stream"], true);
         let packs = vec!["developer".to_string()];
         let applied = completion_request(&messages, 256, polish_adapters::request_field(&[adapter], &packs));
         assert_eq!(applied["lora"], serde_json::json!([{"id":0,"scale":1.0}]));

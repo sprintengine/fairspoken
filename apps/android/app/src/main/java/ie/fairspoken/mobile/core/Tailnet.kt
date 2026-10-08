@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 
 /**
  * What the phone can see of its tailnet. The Tailscale app keeps its peer
@@ -22,7 +24,7 @@ object Tailnet {
             val link = cm.getLinkProperties(network) ?: continue
             val address = link.linkAddresses
                 .map { it.address }
-                .firstOrNull { it is Inet4Address && isTailscaleAddress(it.hostAddress.orEmpty()) }
+                .firstOrNull { it is Inet4Address && isTailnetAddress(it) }
                 ?.hostAddress
                 ?: continue
             val domain = link.domains.orEmpty().split(' ', ',')
@@ -33,9 +35,13 @@ object Tailnet {
         return TailnetStatus(false, null, null)
     }
 
-    /** 100.64.0.0/10, the CGNAT range Tailscale hands out. */
-    private fun isTailscaleAddress(ip: String): Boolean {
-        val parts = ip.split('.').mapNotNull { it.toIntOrNull() }
-        return parts.size == 4 && parts[0] == 100 && parts[1] in 64..127
+    /** 100.64.0.0/10 and fd7a:115c:a1e0::/48, the ranges Tailscale hands out. */
+    fun isTailnetAddress(address: InetAddress): Boolean {
+        val b = address.address.map { it.toInt() and 0xFF }
+        return when (address) {
+            is Inet4Address -> b[0] == 100 && b[1] in 64..127
+            is Inet6Address -> b.take(6) == listOf(0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0)
+            else -> false
+        }
     }
 }

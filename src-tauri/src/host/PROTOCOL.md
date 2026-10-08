@@ -26,6 +26,11 @@ elsewhere are `{"error": "<message>"}` with a 4xx/5xx status.
 
 `GET /v1/hello` and `POST /v1/pair` (below) never require the token.
 
+Any route may answer `503 {"error": "Server busy; try again shortly"}` while
+too many requests are being handled at once: 8 without a valid token (the
+dashboard page, discovery, pairing and 401s), 32 with it. Transcriptions and
+event streams have their own limits below.
+
 ## Discovery and pairing
 
 A client finds hosts on the user's tailnet without the user typing an
@@ -94,10 +99,15 @@ it in its client list.
   and 20 failed attempts across all addresses per 10 minutes. Once exceeded,
   every attempt (right or wrong) from that scope answers `429` until the
   window has room again. Successes don't count. State is in memory only.
-- Each attempt with a well-formed body emits a `pairing` event on
-  `/v1/events`: `{at, client, clientName, ok}` (`clientName` cleaned as above
-  or `null`; `ok` is true for either `200`, including `token: null`).
-- The client address follows the same rule as `/v1/stats` `client`.
+- Each attempt with a well-formed body that is not rate-limited emits a
+  `pairing` event on `/v1/events`: `{at, client, clientName, ok}`
+  (`clientName` cleaned as above or `null`; `ok` is true for either `200`,
+  including `token: null`). `429` answers emit nothing.
+- The rate limit's client address is the peer IP, or for a loopback request
+  (a local proxy such as `tailscale serve`) the last `X-Forwarded-For` value,
+  the hop the proxy appended (earlier values come from the client), else
+  `Tailscale-User-Login`. The event's `client` follows the `/v1/stats`
+  `client` rule.
 
 ### Client discovery (informative)
 
@@ -301,7 +311,9 @@ when no stream, queued or running job remains.
 
 Worker `state` is `idle`, `loading`, `transcribing` or `model-unavailable`.
 `source` is `stream` or `batch`. `client` is the peer IP, or for loopback
-requests the first `X-Forwarded-For` / `Tailscale-User-Login` value.
+requests the first `X-Forwarded-For` / `Tailscale-User-Login` value. It is
+for display only; the pairing rate limit uses the last hop (see
+`POST /v1/pair`).
 `models` sizes are on-disk bytes when installed, else the download size.
 `queue[].id` and `workers[].job.id` are job ids and `streams[].id` stream ids,
 matching the ids in `/v1/events`.

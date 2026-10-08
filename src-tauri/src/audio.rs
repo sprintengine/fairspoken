@@ -492,9 +492,208 @@ fn append_mono_samples<T>(
     }
 }
 
+/// The rate every transcription host and engine works at; audio streamed to
+/// a host is brought down to it first.
+pub const STREAM_SAMPLE_RATE: u32 = 16_000;
+/// Low-pass corner: 92% of the 8 kHz output Nyquist frequency, so the
+/// filter's transition band ends at about 8 kHz.
+const DOWNSAMPLE_CUTOFF_HZ: f64 = 7_360.0;
+/// Filter taps either side of each output sample, in output periods.
+/// Thirty-two keeps the transition band about 1.25 kHz wide.
+const DOWNSAMPLE_HALF_WIDTH: u64 = 32;
+/// Kaiser window shape: about 80 dB of stopband attenuation.
+const DOWNSAMPLE_KAISER_BETA: f64 = 8.0;
+/// Most filter phases precomputed. An odd capture rate whose ratio to 16 kHz
+/// needs more has each output's position rounded to 1/512 of an input
+/// sample, far below anything audible.
+const DOWNSAMPLE_MAX_PHASES: u64 = 512;
+
+/// Streaming low-pass decimator from a capture rate to `STREAM_SAMPLE_RATE`:
+/// a polyphase windowed-sinc (Kaiser) FIR, so speech energy above 8 kHz is
+/// filtered out rather than folded back into the band the models hear.
+/// Frames of any size go through `process`; `flush` emits the last few
+/// outputs once the stream ends. Output sample `k` sits at input position
+/// `k * input_rate / 16000`, so `ceil(n * 16000 / input_rate)` samples come
+/// out for `n` in, however they were split into frames.
+pub struct Downsampler {
+    input_rate: u32,
+    /// The 16 kHz / input-rate ratio in lowest terms, `up / down`.
+    up: u64,
+    down: u64,
+    phases: u64,
+    /// Taps either side of an output's position, in input samples.
+    half: u64,
+    /// `phases` rows of `2 * half` coefficients.
+    table: Vec<f32>,
+    /// Input samples from absolute index `base` on.
+    history: Vec<f32>,
+    base: u64,
+    consumed: u64,
+    produced: u64,
+}
+
+impl Downsampler {
+    /// `None` when `input_rate` is already at or below 16 kHz: there is
+    /// nothing to remove, and the host resamples up if it must.
+    pub fn new(input_rate: u32) -> Option<Self> {
+        if input_rate <= STREAM_SAMPLE_RATE {
+            return None;
+        }
+        let common = gcd(u64::from(STREAM_SAMPLE_RATE), u64::from(input_rate));
+        let up = u64::from(STREAM_SAMPLE_RATE) / common;
+        let down = u64::from(input_rate) / common;
+        let phases = up.min(DOWNSAMPLE_MAX_PHASES);
+        let half = (DOWNSAMPLE_HALF_WIDTH * u64::from(input_rate))
+            .div_ceil(u64::from(STREAM_SAMPLE_RATE));
+        let taps = 2 * half as usize;
+        // Cycles per input sample.
+        let cutoff = DOWNSAMPLE_CUTOFF_HZ / f64::from(input_rate);
+        let window_norm = bessel_i0(DOWNSAMPLE_KAISER_BETA);
+        let mut table = Vec::with_capacity(phases as usize * taps);
+        for phase in 0..phases {
+            let fraction = phase as f64 / phases as f64;
+            let row: Vec<f64> = (0..taps)
+                .map(|tap| {
+                    // Distance from the output's position to this tap's input.
+                    let x = (tap as f64 + 1.0 - half as f64) - fraction;
+                    let edge = (x / half as f64).clamp(-1.0, 1.0);
+                    let window = bessel_i0(DOWNSAMPLE_KAISER_BETA * (1.0 - edge * edge).sqrt())
+                        / window_norm;
+                    2.0 * cutoff * sinc(2.0 * cutoff * x) * window
+                })
+                .collect();
+            // Unity gain at DC for every phase.
+            let sum: f64 = row.iter().sum();
+            table.extend(row.iter().map(|c| (c / sum) as f32));
+        }
+        Some(Self {
+            input_rate,
+            up,
+            down,
+            phases,
+            half,
+            table,
+            history: Vec::new(),
+            base: 0,
+            consumed: 0,
+            produced: 0,
+        })
+    }
+
+    pub fn input_rate(&self) -> u32 {
+        self.input_rate
+    }
+
+    /// Takes the next input samples and returns the outputs they complete.
+    pub fn process(&mut self, samples: &[i16]) -> Vec<i16> {
+        self.history
+            .extend(samples.iter().map(|sample| f32::from(*sample)));
+        self.consumed += samples.len() as u64;
+        let mut output =
+            Vec::with_capacity((samples.len() as u64 * self.up / self.down) as usize + 1);
+        // An output is ready once the input `half` samples past it is in.
+        while self.next_position().0 + self.half < self.consumed {
+            output.push(self.next_output());
+        }
+        self.trim_history();
+        output
+    }
+
+    /// The outputs still owed once the input has ended, the missing future
+    /// samples taken as silence.
+    pub fn flush(&mut self) -> Vec<i16> {
+        let mut output = Vec::new();
+        while self.produced * self.down < self.consumed * self.up {
+            output.push(self.next_output());
+        }
+        output
+    }
+
+    /// The input index at or before the next output's position, and the
+    /// filter phase for the fraction past it.
+    fn next_position(&self) -> (u64, u64) {
+        let position = self.produced * self.down;
+        let mut n0 = position / self.up;
+        let remainder = position % self.up;
+        let mut phase = if self.phases == self.up {
+            remainder
+        } else {
+            (remainder * self.phases + self.up / 2) / self.up
+        };
+        if phase == self.phases {
+            n0 += 1;
+            phase = 0;
+        }
+        (n0, phase)
+    }
+
+    fn next_output(&mut self) -> i16 {
+        let (n0, phase) = self.next_position();
+        let taps = 2 * self.half as usize;
+        let row = &self.table[phase as usize * taps..(phase as usize + 1) * taps];
+        // The first tap's input index; before the stream or past its end the
+        // input is silence.
+        let first = n0 as i64 + 1 - self.half as i64;
+        let mut sum = 0.0_f32;
+        for (tap, coefficient) in row.iter().enumerate() {
+            let index = first + tap as i64;
+            if index < self.base as i64 || index >= self.consumed as i64 {
+                continue;
+            }
+            sum += coefficient * self.history[(index as u64 - self.base) as usize];
+        }
+        self.produced += 1;
+        sum.round()
+            .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+    }
+
+    /// Drops input no future output reaches, in batches.
+    fn trim_history(&mut self) {
+        let needed_from = (self.next_position().0 + 1).saturating_sub(self.half);
+        let stale = needed_from.saturating_sub(self.base) as usize;
+        if stale >= 4_096 {
+            self.history.drain(..stale);
+            self.base += stale as u64;
+        }
+    }
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+fn sinc(x: f64) -> f64 {
+    if x.abs() < 1e-12 {
+        1.0
+    } else {
+        let px = std::f64::consts::PI * x;
+        px.sin() / px
+    }
+}
+
+/// The zeroth-order modified Bessel function of the first kind, by its
+/// power series (the Kaiser window's building block).
+fn bessel_i0(x: f64) -> f64 {
+    let half = x / 2.0;
+    let mut term = 1.0;
+    let mut sum = 1.0;
+    for k in 1..64 {
+        term *= half / k as f64;
+        let squared = term * term;
+        sum += squared;
+        if squared < sum * 1e-16 {
+            break;
+        }
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{append_mono_samples, Recording, ToI16Sample};
+    use super::{append_mono_samples, Downsampler, Recording, ToI16Sample, STREAM_SAMPLE_RATE};
 
     #[test]
     fn converts_float_samples_to_i16() {
@@ -546,5 +745,84 @@ mod tests {
         assert!((stats.peak - 0.5).abs() < 0.001);
         assert!((stats.rms - 0.353).abs() < 0.001);
         assert_eq!(stats.dropped_stream_frames, 2);
+    }
+
+    fn tone(rate: u32, hz: f64, amplitude: f64, samples: usize) -> Vec<i16> {
+        (0..samples)
+            .map(|n| {
+                (amplitude * (2.0 * std::f64::consts::PI * hz * n as f64 / f64::from(rate)).sin())
+                    .round() as i16
+            })
+            .collect()
+    }
+
+    /// The whole input through the downsampler in capture-callback-sized
+    /// frames, then flushed.
+    fn downsample(rate: u32, input: &[i16], frame: usize) -> Vec<i16> {
+        let mut downsampler = Downsampler::new(rate).expect("a rate above 16 kHz");
+        let mut output = Vec::new();
+        for chunk in input.chunks(frame) {
+            output.extend(downsampler.process(chunk));
+        }
+        output.extend(downsampler.flush());
+        output
+    }
+
+    fn rms(samples: &[i16]) -> f64 {
+        (samples.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / samples.len() as f64).sqrt()
+    }
+
+    /// The output away from the start and end, where the filter sees silence.
+    fn middle(samples: &[i16]) -> &[i16] {
+        &samples[samples.len() / 10..samples.len() * 9 / 10]
+    }
+
+    #[test]
+    fn downsampling_keeps_speech_and_removes_what_would_alias() {
+        for rate in [48_000, 44_100, 96_000] {
+            let input = tone(rate, 1_000.0, 10_000.0, rate as usize);
+            let kept = downsample(rate, &input, 480);
+            let ratio = rms(middle(&kept)) / rms(middle(&input));
+            assert!((0.98..1.02).contains(&ratio), "{rate} Hz: 1 kHz kept at {ratio}");
+
+            // 10 kHz would fold to 6 kHz; 8.5 kHz to 7.5 kHz.
+            for hz in [10_000.0, 8_500.0] {
+                let input = tone(rate, hz, 10_000.0, rate as usize);
+                let removed = downsample(rate, &input, 480);
+                let ratio = rms(middle(&removed)) / rms(middle(&input));
+                assert!(ratio < 0.001, "{rate} Hz: {hz} Hz left at {ratio}");
+            }
+
+            let dc = downsample(rate, &vec![10_000; rate as usize], 441);
+            assert!(middle(&dc).iter().all(|s| (s - 10_000).abs() <= 1));
+        }
+    }
+
+    #[test]
+    fn downsampled_length_and_samples_do_not_depend_on_framing() {
+        for (rate, samples) in [(48_000, 48_000), (44_100, 12_345), (22_050, 7), (48_000, 0)] {
+            let input = tone(rate, 440.0, 8_000.0, samples);
+            let whole = downsample(rate, &input, samples.max(1));
+            let expected = (samples as u64 * u64::from(STREAM_SAMPLE_RATE)).div_ceil(u64::from(rate));
+            assert_eq!(whole.len() as u64, expected, "{rate} Hz, {samples} samples");
+            for frame in [1, 160, 441, 4_800] {
+                assert_eq!(downsample(rate, &input, frame), whole, "{rate} Hz in {frame}s");
+            }
+        }
+        // A long stream trims its history without changing the output.
+        let long = tone(48_000, 300.0, 8_000.0, 48_000 * 5);
+        assert_eq!(downsample(48_000, &long, 480), downsample(48_000, &long, long.len()));
+    }
+
+    #[test]
+    fn only_rates_above_the_stream_rate_are_downsampled_odd_ones_included() {
+        assert!(Downsampler::new(16_000).is_none());
+        assert!(Downsampler::new(8_000).is_none());
+        // An odd rate whose ratio needs more phases than are precomputed.
+        let input = tone(44_056, 1_000.0, 10_000.0, 44_056);
+        let output = downsample(44_056, &input, 480);
+        assert_eq!(output.len(), 16_000);
+        let ratio = rms(middle(&output)) / rms(middle(&input));
+        assert!((0.98..1.02).contains(&ratio), "{ratio}");
     }
 }

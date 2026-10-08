@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Hosts are reached over Tailscale, which encrypts every packet with
-     WireGuard, so plain HTTP to a tailnet address is allowed. Hosts published
-     with `tailscale serve` over HTTPS are used first when they answer. -->
+     WireGuard, so plain HTTP to a tailnet address is allowed. This file can't
+     name address ranges, so HostClient enforces the rule: plain HTTP only to
+     100.64.0.0/10, fd7a:115c:a1e0::/48 or this device, checked against the
+     address actually connected to. Hosts published with `tailscale serve`
+     over HTTPS are used first when they answer. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
