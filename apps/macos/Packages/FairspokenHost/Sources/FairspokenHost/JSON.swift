@@ -4,18 +4,18 @@ import Foundation
 /// so the wire shape matches the Rust host exactly: keys in a stable order, optional fields
 /// present as `null` (serde's default) instead of omitted, and floats printed as `1.0`
 /// rather than `1`.
-public indirect enum JSONValue: Sendable {
+public indirect enum HostJSON: Sendable {
     case null
     case bool(Bool)
     case int(Int64)
     case double(Double)
     case string(String)
-    case array([JSONValue])
-    case object([(String, JSONValue)])
+    case array([HostJSON])
+    case object([(String, HostJSON)])
 
-    public static func int(_ value: Int) -> JSONValue { .int(Int64(value)) }
-    public static func optionalString(_ value: String?) -> JSONValue { value.map { .string($0) } ?? .null }
-    public static func optionalInt(_ value: Int?) -> JSONValue { value.map { .int(Int64($0)) } ?? .null }
+    public static func int(_ value: Int) -> HostJSON { .int(Int64(value)) }
+    public static func optionalString(_ value: String?) -> HostJSON { value.map { .string($0) } ?? .null }
+    public static func optionalInt(_ value: Int?) -> HostJSON { value.map { .int(Int64($0)) } ?? .null }
 
     public var serialized: String {
         var out = ""
@@ -80,7 +80,7 @@ public indirect enum JSONValue: Sendable {
         out += "\""
     }
 
-    public static func error(_ message: String) -> JSONValue { .object([("error", .string(message))]) }
+    public static func error(_ message: String) -> HostJSON { .object([("error", .string(message))]) }
 }
 
 /// Helpers for reading request bodies parsed by `JSONSerialization`.

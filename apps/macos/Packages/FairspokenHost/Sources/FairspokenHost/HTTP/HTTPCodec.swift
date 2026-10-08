@@ -144,27 +144,35 @@ public enum HTTPHeadParser {
     /// Parses a complete head from the front of `buffer`, consuming it; nil if more bytes are
     /// needed. Leading empty lines (allowed by RFC 9112 between pipelined requests) are skipped.
     public static func parse(_ buffer: inout ByteBuffer) throws(HTTPParseError) -> HTTPRequestHead? {
-        // Find the blank line that ends the head before consuming anything.
-        var scan = buffer
-        while let peek = scan.firstLineFeed(), peek <= 1 {
-            let line = scan.readable.prefix(peek + 1)
-            if line.allSatisfy({ $0 == 0x0D || $0 == 0x0A }) { scan.skip(peek + 1) } else { break }
+        var skipped = 0
+        return try parse(&buffer, skippedEmptyLineBytes: &skipped)
+    }
+
+    /// As `parse(_:)`, for a caller feeding one head in pieces: leading empty lines are consumed
+    /// from `buffer` at once (so a peer sending nothing else is never buffered), and their bytes,
+    /// accumulated in `skippedEmptyLineBytes` across calls, count toward `maxHeadBytes`.
+    public static func parse(_ buffer: inout ByteBuffer, skippedEmptyLineBytes skipped: inout Int) throws(HTTPParseError) -> HTTPRequestHead? {
+        while let first = buffer.readable.first {
+            let length = first == 0x0A ? 1 : (first == 0x0D && buffer.readable.dropFirst().first == 0x0A ? 2 : 0)
+            guard length > 0 else { break }
+            buffer.skip(length)
+            skipped += length
+            if skipped > maxHeadBytes { throw .headTooLarge }
         }
-        var probe = scan
+        let limit = maxHeadBytes - skipped
+        // Find the blank line that ends the head before consuming anything.
+        var probe = buffer
         var lines: [String] = []
-        var consumed = 0
         while true {
-            guard let line = try probe.readLine(maxLength: maxHeadBytes) else {
-                if scan.readableCount > maxHeadBytes { throw .headTooLarge }
+            guard let line = try probe.readLine(maxLength: limit) else {
+                if buffer.readableCount > limit { throw .headTooLarge }
                 return nil
             }
-            consumed += 1
             if line.isEmpty { break }
             lines.append(line)
             if lines.count > maxHeaders + 1 { throw .headTooLarge }
-            if probe.readIndex - scan.readIndex > maxHeadBytes { throw .headTooLarge }
+            if probe.readIndex - buffer.readIndex > limit { throw .headTooLarge }
         }
-        _ = consumed
         guard let requestLine = lines.first else { throw .malformedRequestLine }
         let parts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
         guard parts.count == 3 else { throw .malformedRequestLine }

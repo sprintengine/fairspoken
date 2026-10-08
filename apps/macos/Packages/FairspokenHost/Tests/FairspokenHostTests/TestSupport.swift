@@ -4,8 +4,8 @@ import Synchronization
 @testable import FairspokenHost
 import FairspokenCore
 
-/// In-memory `HTTPTransport`: the test writes request bytes in, reads response bytes out.
-final class PipeTransport: FairspokenHost.HTTPTransport, @unchecked Sendable {
+/// In-memory `ByteStreamTransport`: the test writes request bytes in, reads response bytes out.
+final class PipeTransport: ByteStreamTransport, @unchecked Sendable {
     let peerAddress: String?
     private let input: AsyncStream<[UInt8]>
     private let inputContinuation: AsyncStream<[UInt8]>.Continuation

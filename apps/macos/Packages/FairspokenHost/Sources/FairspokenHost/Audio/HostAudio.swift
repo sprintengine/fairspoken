@@ -1,4 +1,5 @@
 import AVFoundation
+import FairspokenCore
 import Foundation
 
 /// Mono PCM16 audio at its own sample rate.
@@ -129,8 +130,9 @@ private final class OneShotBuffer: @unchecked Sendable {
 /// Incremental reader for `/v1/transcriptions/stream` frames
 /// (`[u32 LE sample_rate][u32 LE n][n × i16 LE]`), mirroring `read_stream_frame`.
 public struct StreamFrameReader: Sendable {
-    public static let maxSampleRate = 192_000
-    public static let maxSamplesPerFrame = 192_000
+    /// The client-side codec's limits, so both ends of the stream agree.
+    public static let maxSampleRate = Int(StreamFrameCodec.maxSampleRate)
+    public static let maxSamplesPerFrame = StreamFrameCodec.maxSamplesPerFrame
 
     public struct Frame: Equatable, Sendable {
         public var sampleRate: Int
@@ -157,18 +159,19 @@ public struct StreamFrameReader: Sendable {
 
     /// The next complete frame, or nil if more bytes are needed.
     public mutating func next() throws(ReadError) -> Frame? {
-        guard buffer.readableCount >= 8 else { return nil }
-        let head = Array(buffer.readable.prefix(8))
+        let headerSize = StreamFrameCodec.headerSize
+        guard buffer.readableCount >= headerSize else { return nil }
+        let head = Array(buffer.readable.prefix(headerSize))
         let rate = Int(UInt32(head[0]) | UInt32(head[1]) << 8 | UInt32(head[2]) << 16 | UInt32(head[3]) << 24)
         let count = Int(UInt32(head[4]) | UInt32(head[5]) << 8 | UInt32(head[6]) << 16 | UInt32(head[7]) << 24)
         guard rate != 0, rate <= Self.maxSampleRate else { throw .unsupportedSampleRate }
         if count == 0 {
-            buffer.skip(8)
+            buffer.skip(headerSize)
             return Frame(sampleRate: rate, samples: [])
         }
         guard count <= Self.maxSamplesPerFrame else { throw .frameTooLarge }
-        guard buffer.readableCount >= 8 + count * 2 else { return nil }
-        buffer.skip(8)
+        guard buffer.readableCount >= headerSize + count * 2 else { return nil }
+        buffer.skip(headerSize)
         let bytes = buffer.read(count * 2)
         var samples = [Int16](repeating: 0, count: count)
         for i in 0..<count {

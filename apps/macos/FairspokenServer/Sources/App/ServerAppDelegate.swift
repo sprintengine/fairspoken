@@ -177,7 +177,9 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem == updateItem ? updates.presentation.isEnabled : true
+        if menuItem == updateItem { return updates.presentation.isEnabled }
+        if menuItem == toggleItem { return controller.runState != .starting }
+        return true
     }
 
     @objc private func openWindow() { showWindow() }

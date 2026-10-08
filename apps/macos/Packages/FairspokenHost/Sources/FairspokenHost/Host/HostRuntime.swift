@@ -125,7 +125,7 @@ public final class HostRuntime: Sendable {
         sizes.withLock { $0 = next }
     }
 
-    public func statsJSON() -> JSONValue {
+    public func statsJSON() -> HostJSON {
         let live = liveSettings
         let pairing = pairingEnabled
         let models = modelInfos()
@@ -136,11 +136,11 @@ public final class HostRuntime: Sendable {
     }
 
     /// Subscribes to `/v1/events` and takes the snapshot atomically (both under the metrics lock).
-    public func subscribe() throws(EventHub.SubscribeError) -> (EventSubscription, JSONValue) {
+    public func subscribe() throws(EventHub.SubscribeError) -> (EventSubscription, HostJSON) {
         let live = liveSettings
         let pairing = pairingEnabled
         let models = modelInfos()
-        let result = metrics.locked { s -> Result<(EventSubscription, JSONValue), EventHub.SubscribeError> in
+        let result = metrics.locked { s -> Result<(EventSubscription, HostJSON), EventHub.SubscribeError> in
             do {
                 let sub = try metrics.events.subscribe()
                 return .success((sub, HostMetrics.snapshot(s, bindAddr: configuration.bindAddr, serverVersion: serverVersion, live: live, models: models,
@@ -156,7 +156,7 @@ public final class HostRuntime: Sendable {
 
     /// The in-process equivalent of `/v1/events` for the app's own UI: a snapshot and the frames
     /// that follow it, with no subscriber limit.
-    public func observe() -> (snapshot: JSONValue, frames: AsyncStream<String>) {
+    public func observe() -> (snapshot: HostJSON, frames: AsyncStream<String>) {
         let live = liveSettings
         let pairing = pairingEnabled
         let models = modelInfos()

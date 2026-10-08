@@ -414,7 +414,7 @@ public struct HostLiveSettings: Sendable, Equatable {
     }
 
     /// The `POST /v1/config` answer. It reports whether pairing is on, never the password.
-    func configResponse(pairingEnabled: Bool) -> JSONValue {
+    func configResponse(pairingEnabled: Bool) -> HostJSON {
         .object([
             ("maxActiveStreams", .int(maxActiveStreams)),
             ("maxRecordingSeconds", .int(maxRecordingSeconds)),

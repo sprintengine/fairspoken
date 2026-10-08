@@ -354,12 +354,12 @@ public final class HostMetrics: Sendable {
 
     /// The `/v1/stats` body. Call with the lock held (`locked`) when pairing with a subscription.
     static func snapshot(_ s: State, bindAddr: String, serverVersion: String, live: HostLiveSettings, models: [ModelInfo],
-                         pairingEnabled: Bool) -> JSONValue {
+                         pairingEnabled: Bool) -> HostJSON {
         let now = ContinuousClock.now
         let installed = Dictionary(uniqueKeysWithValues: models.map { ($0.descriptor.id, $0.installed) })
-        let workers: [JSONValue] = s.workers.enumerated().map { index, w in
+        let workers: [HostJSON] = s.workers.enumerated().map { index, w in
             let assigned = index < live.workerModels.count ? live.workerModels[index] : HostConfiguration.defaultModel
-            let job: JSONValue = w.job.map { j in
+            let job: HostJSON = w.job.map { j in
                 .object([("id", .int(Int64(j.id))), ("model", .string(j.model)), ("source", .string(j.source)),
                          ("client", .optionalString(j.client)), ("audioSeconds", .double(j.audioSeconds)),
                          ("elapsedMs", .int(Int64(ms(now - j.startedAt))))])
@@ -370,35 +370,35 @@ public final class HostMetrics: Sendable {
                 ("completedJobs", .int(Int64(w.completedJobs))), ("lastError", .optionalString(w.lastError)), ("job", job),
             ])
         }
-        let queue: [JSONValue] = s.queued.map { j in
+        let queue: [HostJSON] = s.queued.map { j in
             .object([("id", .int(Int64(j.id))), ("model", .string(j.model)), ("source", .string(j.source)),
                      ("client", .optionalString(j.client)), ("audioSeconds", .double(j.audioSeconds)),
                      ("waitingMs", .int(Int64(ms(now - j.enqueuedAt))))])
         }
-        let streams: [JSONValue] = s.activeStreams.map { st in
+        let streams: [HostJSON] = s.activeStreams.map { st in
             .object([("id", .int(Int64(st.id))), ("client", .optionalString(st.client)),
                      ("elapsedMs", .int(Int64(ms(now - st.startedAt))))])
         }
-        let clients: [JSONValue] = s.clients.sorted { $0.value.lastSeenMs > $1.value.lastSeenMs }.map { address, c in
+        let clients: [HostJSON] = s.clients.sorted { $0.value.lastSeenMs > $1.value.lastSeenMs }.map { address, c in
             .object([("address", .string(address)), ("requests", .int(Int64(c.requests))), ("completed", .int(Int64(c.completed))),
                      ("rejected", .int(Int64(c.rejected))), ("failed", .int(Int64(c.failed))),
                      ("totalAudioSeconds", .double(c.totalAudioSeconds)), ("lastSeenMs", .int(Int64(c.lastSeenMs))),
                      ("lastModel", .optionalString(c.lastModel))])
         }
-        let recent: [JSONValue] = s.recent.map { r in
+        let recent: [HostJSON] = s.recent.map { r in
             .object([("id", .int(Int64(r.id))), ("completedAtMs", .int(Int64(r.completedAtMs))),
                      ("durationSeconds", .double(r.durationSeconds)), ("backend", .string(r.backend)), ("model", .string(r.model)),
                      ("source", .string(r.source)), ("client", .optionalString(r.client)), ("queueWaitMs", .int(Int64(r.queueWaitMs))),
                      ("processingMs", .int(Int64(r.processingMs)))])
         }
-        let modelList: [JSONValue] = models.map { m in
-            let assigned = live.workerModels.enumerated().filter { $0.element == m.descriptor.id }.map { JSONValue.int($0.offset) }
+        let modelList: [HostJSON] = models.map { m in
+            let assigned = live.workerModels.enumerated().filter { $0.element == m.descriptor.id }.map { HostJSON.int($0.offset) }
             let size = m.installed ? (m.installedBytes.flatMap { $0 > 0 ? $0 : nil } ?? m.descriptor.approxBytes) : m.descriptor.approxBytes
             return .object([("id", .string(m.descriptor.id)), ("name", .string(m.descriptor.name)),
                             ("publisher", .string(m.descriptor.publisher)), ("sizeBytes", .int(size)),
                             ("installed", .bool(m.installed)), ("assignedWorkers", .array(assigned))])
         }
-        let download: JSONValue = s.modelDownload.map { d in
+        let download: HostJSON = s.modelDownload.map { d in
             .object([("model", .string(d.model)), ("stage", .string(d.stage)), ("percentage", .int(d.percentage)),
                      ("error", .optionalString(d.error))])
         } ?? .null
