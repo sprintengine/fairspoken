@@ -25,7 +25,7 @@ mod insertion;
 mod live_preview;
 mod local_models;
 mod machine;
-mod model_source;
+mod model_link;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
@@ -298,6 +298,8 @@ fn settings_to_save(
     settings.learned_vocabulary_hints = latest.learned_vocabulary_hints.clone();
     settings.learn_from_edits = latest.learn_from_edits;
     settings.enabled_packs = latest.enabled_packs.clone();
+    // Download links belong to the Models screen (`set_model_link`).
+    settings.model_links = latest.model_links.clone();
     settings
 }
 
@@ -324,13 +326,6 @@ fn save_settings_locked(
         if picks_cloud_location || picks_cloud_polish {
             return Err(settings::CLOUD_UNAVAILABLE.to_string());
         }
-    }
-
-    // Only a newly entered model source is checked, so one stored by hand
-    // (or by a newer build) never blocks saving unrelated changes; it fails
-    // where models are fetched instead, with the same message.
-    if model_source::normalize_setting(&settings.model_source) != current_settings.model_source {
-        model_source::ModelSource::parse(&settings.model_source)?;
     }
 
     if services
@@ -488,12 +483,12 @@ async fn get_local_model_catalog(
 #[tauri::command]
 async fn download_local_model(app: AppHandle, model: String) -> Result<(), String> {
     local_models::spec(&model)?;
-    let source = configured_model_source(&app.state::<AppServices>())?;
+    let link = saved_model_link(&app.state::<AppServices>().settings_snapshot()?, &model)?;
     app.state::<AppServices>().local_models.begin_download()?;
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<AppServices>()
             .local_models
-            .download(&app, &model, &source)
+            .download(&app, &model, link.as_ref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -549,36 +544,55 @@ fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
         .collect()
 }
 
-/// The saved model source (`Settings::model_source`), parsed.
-fn configured_model_source(services: &AppServices) -> Result<model_source::ModelSource, String> {
-    model_source::ModelSource::parse(&services.settings_snapshot()?.model_source)
+/// The download link saved for `model` (`Settings::model_links`), if any.
+/// A saved link that doesn't parse fails that model's download, saying why.
+fn saved_model_link(settings: &Settings, model: &str) -> Result<Option<model_link::ModelLink>, String> {
+    settings
+        .model_links
+        .get(model)
+        .map(|raw| model_link::ModelLink::parse(raw))
+        .transpose()
 }
 
-/// Settings → Transcription → Model source → Test: whether `source` (as
-/// typed, not yet saved) can serve the first file of `model` (the selected
-/// model when absent). Returns where the file was found; the error says what
-/// failed and where.
+/// Every model id this app downloads: the speech models, then the polish
+/// models. These are the keys `modelLinks` accepts.
+fn downloadable_model_ids() -> Vec<&'static str> {
+    SttModel::all()
+        .into_iter()
+        .map(SttModel::model_id)
+        .chain(local_models::MODELS.iter().map(|m| m.id))
+        .collect()
+}
+
+/// Models screen → Download from link: saves `link` for `model` (checked
+/// first), or with no link (or an empty one) goes back to the standard
+/// download. Returns the saved settings.
 #[tauri::command]
-async fn test_model_source(
+fn set_model_link(
     app: AppHandle,
-    source: String,
-    model: Option<SttModel>,
-) -> Result<String, String> {
-    run_blocking(app, move |_, services| {
-        let parsed = model_source::ModelSource::parse(&source)?;
-        let model = match model {
-            Some(model) => model,
-            None => services.settings_snapshot()?.model,
-        };
-        let file = services.models.first_file(model);
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
-            .build()
-            .map_err(|err| err.to_string())?;
-        parsed.check(&client, &file)
-    })
-    .await
+    model: String,
+    link: Option<String>,
+    services: State<'_, AppServices>,
+) -> Result<Settings, String> {
+    let model = model.trim().to_string();
+    if !downloadable_model_ids().contains(&model.as_str()) {
+        return Err(format!("{model} isn't a model this app downloads."));
+    }
+    let link = link
+        .filter(|link| !link.trim().is_empty())
+        .map(|link| model_link::ModelLink::normalize(&link))
+        .transpose()?;
+    let mut store = services.settings.lock().map_err(|e| e.to_string())?;
+    let mut settings = store.current();
+    match link {
+        Some(link) => settings.model_links.insert(model, link),
+        None => settings.model_links.remove(&model),
+    };
+    store.save(settings)?;
+    let saved = store.current();
+    drop(store);
+    let _ = app.emit("settings-updated", saved.clone());
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -742,8 +756,8 @@ fn begin_prepare_transcription_model(
     let settings = services.settings_snapshot()?;
     let model = request.model.unwrap_or(settings.model);
     let model_id = model.model_id().to_string();
-    let source = match model_source::ModelSource::parse(&settings.model_source) {
-        Ok(source) => source,
+    let link = match saved_model_link(&settings, &model_id) {
+        Ok(link) => link,
         Err(err) => {
             services
                 .model_prepare_running
@@ -751,7 +765,10 @@ fn begin_prepare_transcription_model(
             return Err(err);
         }
     };
-    let models = services.models.clone().with_source(source);
+    let models = services
+        .models
+        .clone()
+        .with_links(link.map(|link| (model_id.clone(), link)).into_iter().collect());
     let running = Arc::clone(&services.model_prepare_running);
 
     thread::Builder::new()
@@ -3089,7 +3106,7 @@ pub fn run() {
             get_local_model_catalog,
             get_dictation_models,
             search_hugging_face_models,
-            test_model_source,
+            set_model_link,
             set_cursor_preview_size,
             download_local_model,
             cancel_local_model_download,

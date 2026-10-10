@@ -45,6 +45,23 @@
 .model-variant .ds-select { width: 100%; min-width: 0; }
 .model-row .models-actions { margin-left: auto; }
 
+/* Download from link: the saved link sits on the row's metadata line; the
+   field opens under the row's description, where its progress shows. */
+.model-link-saved {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sem-space-2xs) var(--sem-space-xs);
+  margin-top: var(--sem-space-xs);
+  color: var(--sem-color-text-muted);
+  font-size: var(--sem-font-size-meta);
+}
+.model-link-url { color: var(--sem-color-text-default); font-family: var(--sem-font-family-mono); overflow-wrap: anywhere; }
+.model-link-editor { display: flex; flex-direction: column; gap: var(--sem-space-xs); margin-top: var(--sem-space-md); }
+.model-link-field { display: flex; align-items: center; gap: var(--sem-space-sm); }
+.model-link-field .ds-input { flex: 1; min-width: 0; }
+.model-link-editor [hidden] { display: none; }
+
 #modelSearchBox { width: 100%; }
 #modelSearchBox .ds-input--seamless { flex: 1; min-width: 0; }
 .model-search-hint {
