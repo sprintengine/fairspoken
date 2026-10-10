@@ -127,7 +127,15 @@ struct ModelCard: View {
         HStack(spacing: 10) {
             switch state {
             case .available:
-                Text("Not downloaded").font(.callout).foregroundStyle(Crystal.ink3).lineLimit(1)
+                if let error = model.models.downloadErrors[info.id] {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(Crystal.error)
+                        .lineLimit(4).fixedSize(horizontal: false, vertical: true)
+                        .help(error)
+                        .textSelection(.enabled)
+                } else {
+                    Text("Not downloaded").font(.callout).foregroundStyle(Crystal.ink3).lineLimit(1)
+                }
                 Spacer()
                 Button("Download", systemImage: "arrow.down") { model.models.download(info.id) }
                     .cardButton()

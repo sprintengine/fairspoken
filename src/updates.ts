@@ -16,12 +16,14 @@ import {
 } from "./updateModel";
 import { errorMessage } from "./errors";
 
-// The update UI in the home window: the sidebar button, the "available" toast,
+// The update UI in the home window: the sidebar row, the "available" toast,
 // the Settings rail and Updates badges, and Settings → Updates. The backend
 // (src-tauri/src/updates.rs) checks on its own schedule and reports every
 // change as `update-status`; everything here renders that one status.
 
 const button = document.querySelector<HTMLButtonElement>("#updateButton")!;
+const buttonTitle = document.querySelector<HTMLElement>("#updateTitle")!;
+const buttonDetail = document.querySelector<HTMLElement>("#updateDetail")!;
 const settingsBadge = document.querySelector<HTMLElement>("#settingsUpdateBadge")!;
 const settingsRail = document.querySelector<HTMLElement>("#settingsRailButton")!;
 const navBadge = document.querySelector<HTMLElement>("#updatesNavBadge")!;
@@ -199,6 +201,8 @@ function renderButton(status: UpdateStatus): void {
     delete button.dataset.progress;
   }
   button.disabled = view.disabled;
+  buttonTitle.textContent = view.title;
+  buttonDetail.textContent = view.detail;
   button.setAttribute("aria-label", view.label);
   button.dataset.tooltip = view.label;
   // A tooltip already showing for this button follows the state.

@@ -59,6 +59,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var inputGain = 2
     public var postProcess = true
     public var vocabularyHints: [String] = []
+    /// Bundled vocabulary packs the user turned on, by id (`VocabularyPacks`).
+    public var enabledPacks: [String] = []
     public var transcriptCorrections: [TranscriptCorrection] = []
     public var snippets: [Snippet] = []
     public var alwaysOnTop = true
@@ -77,6 +79,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var polishModel = "speakoflow-mini"
     public var polishTones: [String: String] = [:]
     public var contextAwareness = false
+    /// Where models download from: `""` Hugging Face, an http(s) mirror URL, or a folder
+    /// (`ModelSource`). Shared with the Tauri app.
+    public var modelSource = ""
 
     // Mac-only (ignored by the Rust app).
     /// Put the previous clipboard back after pasting the dictation.
@@ -100,6 +105,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         inputGain = c.lenientInt(.inputGain) ?? d.inputGain
         postProcess = c.lenient(Bool.self, .postProcess) ?? d.postProcess
         vocabularyHints = c.lenient([String].self, .vocabularyHints) ?? d.vocabularyHints
+        enabledPacks = c.lenient([String].self, .enabledPacks) ?? d.enabledPacks
         transcriptCorrections = c.lenient([TranscriptCorrection].self, .transcriptCorrections) ?? d.transcriptCorrections
         snippets = c.lenient([Snippet].self, .snippets) ?? d.snippets
         alwaysOnTop = c.lenient(Bool.self, .alwaysOnTop) ?? d.alwaysOnTop
@@ -118,6 +124,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         polishModel = c.lenient(String.self, .polishModel) ?? d.polishModel
         polishTones = c.lenient([String: String].self, .polishTones) ?? d.polishTones
         contextAwareness = c.lenient(Bool.self, .contextAwareness) ?? d.contextAwareness
+        modelSource = c.lenient(String.self, .modelSource) ?? d.modelSource
         restoreClipboard = c.lenient(Bool.self, .restoreClipboard) ?? d.restoreClipboard
         self = normalized()
     }
@@ -132,8 +139,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         while s.remoteUrl.hasSuffix("/") { s.remoteUrl.removeLast() }
         s.cloudAuthToken = s.cloudAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         s.vocabularyHints = Self.normalizeVocabulary(s.vocabularyHints)
+        s.enabledPacks = VocabularyPacks.normalizeEnabled(s.enabledPacks)
         if s.recordingShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.recordingShortcut = AcceleratorString.defaultRecording }
         if s.transcriptStackShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.transcriptStackShortcut = AcceleratorString.defaultTranscriptStack }
+        // Trimmed, without trailing slashes; a value that can't be a source is kept (trimmed) so
+        // the download reports why, as in the Tauri app.
+        s.modelSource = ModelSource.normalizeSetting(s.modelSource)
         // Unknown ids (e.g. Whisper models from the Tauri app) fall back to the default, as in Rust.
         if SpeechModelCatalog.model(id: s.model) == nil { s.model = SpeechModelCatalog.defaultModelID }
         return s

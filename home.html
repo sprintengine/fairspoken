@@ -10,26 +10,55 @@
 </head>
 <body>
   <div class="app">
-    <!-- Window-drag region beneath the native macOS traffic lights. -->
-    <header class="titlebar" data-tauri-drag-region></header>
-
     <div class="workspace">
-      <!-- ── Sidebar: two glass capsules, places on top and personal below ── -->
+      <!-- ── Sidebar: brand, places, then the engine status and updates ── -->
       <aside class="sidebar" aria-label="App navigation">
+        <!-- Room for the native traffic lights; drags the window. -->
+        <div class="sidebar-chrome" data-tauri-drag-region></div>
+        <div class="sidebar-brand" data-tauri-drag-region>
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 10.5v3M7.5 7v10M11 4v16M14.5 8v8M18 5.5v13M21 10.5v3"/></svg></span>
+          <span class="brand-name">Fairspoken</span>
+        </div>
         <nav class="nav" aria-label="Primary">
-<button class="nav-item ds-button ds-button--icon" type="button" data-screen="home" aria-label="Home" data-tooltip="Home" aria-current="page"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 11.5 12 5l8 6.5M6 10v9h12v-9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-<button class="nav-item ds-button ds-button--icon" type="button" data-screen="notes" aria-label="Notes" data-tooltip="Notes"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="3.5" width="14" height="17" rx="2.5"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4" stroke-linecap="round"/></svg></button>
-<button class="nav-item ds-button ds-button--icon" type="button" data-screen="activity" aria-label="Activity" data-tooltip="Activity"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h4l2.5 7 5-14L17 12h4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-<button class="nav-item ds-button ds-button--icon" type="button" data-screen="models" aria-label="Models" data-tooltip="Models"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5" stroke-linejoin="round"/></svg></button>
+          <button class="nav-item" type="button" data-screen="home" aria-current="page"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 10.5v3M7.5 7v10M11 4v16M14.5 8v8M18 5.5v13M21 10.5v3"/></svg><span class="nav-label">Home</span></button>
+          <button class="nav-item" type="button" data-screen="notes"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="3.5" width="14" height="17" rx="2.5"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4" stroke-linecap="round"/></svg><span class="nav-label">Notes</span></button>
+          <button class="nav-item" type="button" data-screen="dictionary"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5h12v17h-12A1.5 1.5 0 0 1 5 19V5a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="M5 18.5A1.5 1.5 0 0 1 6.5 17h12M9.5 13.5l2.5-6.5 2.5 6.5M10.4 11.5h3.2"/></svg><span class="nav-label">Dictionary</span></button>
+          <button class="nav-item" type="button" data-screen="models"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5" stroke-linejoin="round"/></svg><span class="nav-label">Models</span></button>
+          <button class="nav-item" type="button" data-screen="activity"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h4l2.5 7 5-14L17 12h4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nav-label">Activity</span></button>
+          <button class="nav-item" type="button" data-screen="settings" id="settingsRailButton"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M9.81 4.93 10.09 2.59h3.82l.28 2.34 1.26.52 1.85-1.45 2.7 2.7-1.45 1.85.52 1.26 2.34.28v3.82l-2.34.28-.52 1.26 1.45 1.85-2.7 2.7-1.85-1.45-1.26.52-.28 2.34h-3.82l-.28-2.34-1.26-.52-1.85 1.45-2.7-2.7 1.45-1.85-.52-1.26-2.34-.28v-3.82l2.34-.28.52-1.26L4 6.7 6.7 4l1.85 1.45Z"/><circle cx="12" cy="12" r="3.2"/></svg><span class="nav-label">Settings</span><span class="nav-badge" id="settingsUpdateBadge" aria-hidden="true" hidden></span></button>
+          <button class="nav-item" type="button" data-screen="profile"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3.2"/><path d="M6.4 18.6a6.5 6.5 0 0 1 11.2 0"/></svg><span class="nav-label">Profile</span></button>
         </nav>
         <div class="nav-spacer"></div>
-        <nav class="sidebar-foot" aria-label="Personal"><button class="nav-item ds-button ds-button--icon update-button" id="updateButton" type="button" data-state="idle" aria-label="Check for updates" data-tooltip="Check for updates" hidden><svg class="update-ring" aria-hidden="true" viewBox="0 0 40 40"><circle class="update-ring-track" cx="20" cy="20" r="17"/><circle class="update-ring-fill" cx="20" cy="20" r="17" pathLength="100"/></svg><svg class="update-icon update-icon--sync" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3M4.5 12a7.5 7.5 0 0 1 12.8-5.3"/><path d="M17.5 3.5v3.3h-3.3M6.5 20.5v-3.3h3.3"/></svg><svg class="update-icon update-icon--download" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5M7.5 10 12 14.5 16.5 10"/><path d="M4.5 14.5v3.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3.5"/></svg><svg class="update-icon update-icon--restart" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4v4.2h-4.2"/></svg><span class="update-count ds-badge-count ds-badge-count--accent ds-badge-count--corner" aria-hidden="true">1</span><span class="update-dot" aria-hidden="true"></span></button><button class="nav-item ds-button ds-button--icon" type="button" data-screen="settings" aria-label="Settings" data-tooltip="Settings" id="settingsRailButton"><span class="nav-badge" id="settingsUpdateBadge" aria-hidden="true" hidden></span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M18.4 18.4l-2.1-2.1M7.7 7.7 5.6 5.6" stroke-linecap="round"/></svg></button><button class="nav-item ds-button ds-button--icon" type="button" data-screen="profile" aria-label="Your profile" data-tooltip="Your profile"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></button></nav>
+        <div class="sidebar-foot">
+          <!-- What transcribes, whether it is ready, and the shortcut; driven by sidebarStatus.ts. -->
+          <button class="sidebar-status" id="sidebarStatus" type="button" data-route="models" data-state="idle">
+            <span class="sidebar-status-head">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="sidebar-status-text">
+                <span class="sidebar-status-name" id="sidebarStatusName">Speech model</span>
+                <span class="sidebar-status-state" id="sidebarStatusState">Checking…</span>
+              </span>
+            </span>
+            <span class="sidebar-status-shortcut">
+              <span>Dictate</span>
+              <span class="ds-kbd-chord" id="sidebarShortcut"></span>
+            </span>
+          </button>
+          <button class="update-button" id="updateButton" type="button" data-state="idle" aria-label="Check for updates" data-tooltip="Check for updates" hidden>
+            <span class="update-glyph" aria-hidden="true"><svg class="update-ring" viewBox="0 0 40 40"><circle class="update-ring-track" cx="20" cy="20" r="17"/><circle class="update-ring-fill" cx="20" cy="20" r="17" pathLength="100"/></svg><svg class="update-icon update-icon--sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3M4.5 12a7.5 7.5 0 0 1 12.8-5.3"/><path d="M17.5 3.5v3.3h-3.3M6.5 20.5v-3.3h3.3"/></svg><svg class="update-icon update-icon--download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5M7.5 10 12 14.5 16.5 10"/><path d="M4.5 14.5v3.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3.5"/></svg><svg class="update-icon update-icon--restart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4v4.2h-4.2"/></svg><span class="update-count ds-badge-count ds-badge-count--accent ds-badge-count--corner">1</span><span class="update-dot"></span></span>
+            <span class="update-text" aria-hidden="true"><span class="update-title" id="updateTitle">Check for updates</span><span class="update-detail" id="updateDetail"></span></span>
+          </button>
+        </div>
       </aside>
 
     <!-- ── Main ── -->
     <div class="main">
-      <header class="topbar">
-        <h1 id="screenTitle">Home</h1>
+      <!-- The space above and around the title drags the window. -->
+      <header class="topbar" data-tauri-drag-region>
+        <div class="page-title" data-tauri-drag-region>
+          <h1 id="screenTitle">Home</h1>
+          <p class="page-subtitle" id="screenSubtitle" hidden></p>
+        </div>
         <p id="settingsSaveStatus" class="settings-save-status" role="status" hidden></p>
         <div class="search" id="notesSearch" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
@@ -48,33 +77,39 @@
           </div>
 
           <div id="homeStats" hidden>
-            <div class="hero">
-              <div class="label">Time saved</div>
-              <div class="value num" id="statTimeSaved">—</div>
-              <div class="sub" id="statTimeSavedSub"></div>
-              <div class="hero-actions">
-                <button class="btn btn-primary" data-open="speedtest" type="button">Speed test</button>
-                <button class="btn" data-open="voicetest" type="button">Accuracy test</button>
-              </div>
+            <div class="home-top">
+              <section class="glass-card hero" aria-labelledby="timeSavedLabel">
+                <h2 class="eyebrow" id="timeSavedLabel">Time saved</h2>
+                <div class="value num" id="statTimeSaved">—</div>
+                <div class="sub" id="statTimeSavedSub"></div>
+                <div class="hero-actions">
+                  <button class="btn btn-primary" data-open="speedtest" type="button">Speed test</button>
+                  <button class="btn" data-open="voicetest" type="button">Accuracy test</button>
+                </div>
+              </section>
+              <section class="glass-card totals" aria-labelledby="totalsTitle">
+                <h2 class="eyebrow" id="totalsTitle">All time</h2>
+                <dl class="totals-list">
+                  <div><dt>Words dictated</dt><dd class="num" id="statTotalWords">0</dd></div>
+                  <div><dt>Spoken time</dt><dd class="num" id="statSpokenTime">0 m</dd></div>
+                  <div><dt>Money saved</dt><dd class="num" id="statMoneySaved">$0</dd></div>
+                </dl>
+                <p class="totals-note" id="statMoneySavedMeta">vs cloud transcription</p>
+              </section>
             </div>
-            <section class="settings-section" aria-labelledby="usageTitle">
+            <section class="glass-card metric-strip" aria-labelledby="usageTitle">
               <h2 id="usageTitle" class="sr-only">Usage</h2>
-              <div class="stat-grid">
-                <div class="stat"><div class="stat-label">Words dictated</div><div class="stat-value num" id="statTotalWords">0</div></div>
-                <div class="stat"><div class="stat-label">Spoken time</div><div class="stat-value num" id="statSpokenTime">0 m</div></div>
-                <div class="stat"><div class="stat-label">This week</div><div class="stat-value num" id="statThisWeek">0</div><div class="stat-meta" id="statWeekDelta"></div></div>
-                <div class="stat"><div class="stat-label">Day streak</div><div class="stat-value num" id="statStreak">0</div><div class="stat-meta" id="statBestStreak"></div></div>
-                <div class="stat"><div class="stat-label">Speaking pace</div><div class="stat-value num" id="statWpm">0</div><div class="stat-meta">words per minute</div></div>
-                <div class="stat"><div class="stat-label">Money saved</div><div class="stat-value num" id="statMoneySaved">$0</div><div class="stat-meta" id="statMoneySavedMeta">vs cloud transcription</div></div>
-                <div class="stat" id="statZeroEditTile" hidden><div class="stat-label">Zero-edit dictations</div><div class="stat-value num" id="statZeroEdit">–</div><div class="stat-meta" id="statZeroEditMeta">last 30 days</div></div>
-              </div>
+              <div class="stat"><div class="stat-label">This week</div><div class="stat-value"><span class="num" id="statThisWeek">0</span><span class="stat-unit">words</span></div><div class="stat-meta" id="statWeekDelta"></div></div>
+              <div class="stat"><div class="stat-label">Speaking pace</div><div class="stat-value"><span class="num" id="statWpm">0</span><span class="stat-unit">wpm</span></div><div class="stat-meta">measured as you speak</div></div>
+              <div class="stat"><div class="stat-label">Streak</div><div class="stat-value"><span class="num" id="statStreak">0</span><span class="stat-unit">days</span></div><div class="stat-meta" id="statBestStreak"></div></div>
+              <div class="stat" id="statZeroEditTile" hidden><div class="stat-label">Zero-edit</div><div class="stat-value"><span class="num" id="statZeroEdit">–</span></div><div class="stat-meta" id="statZeroEditMeta">last 30 days</div></div>
             </section>
             <section class="settings-section" aria-labelledby="performanceTitle" id="performanceSection" hidden>
               <div class="settings-section-header">
                 <h2 id="performanceTitle">Last dictation</h2>
                 <span class="settings-section-meta" id="perfSummary"></span>
               </div>
-              <div class="stat-grid stat-grid--4">
+              <div class="glass-card metric-strip">
                 <div class="stat"><div class="stat-label">Wait after release</div><div class="stat-value num" id="perfTotal">–</div><div class="stat-meta" id="perfTotalMeta"></div></div>
                 <div class="stat"><div class="stat-label">Final transcription</div><div class="stat-value num" id="perfTranscribe">–</div><div class="stat-meta" id="perfTranscribeMeta"></div></div>
                 <div class="stat"><div class="stat-label">Speech model</div><div class="stat-value num" id="perfModel">–</div><div class="stat-meta" id="perfModelMeta"></div></div>
@@ -83,7 +118,7 @@
             </section>
             <section class="settings-section" aria-labelledby="weekChartTitle">
               <h2 id="weekChartTitle">This week</h2>
-              <div class="settings-card">
+              <div class="glass-card">
                 <div class="chart" id="statChart" aria-label="Words per day"></div>
               </div>
             </section>
@@ -223,7 +258,17 @@
         </section>
 
         <!-- ════ SETTINGS (driven by settings.ts) ════ -->
-        <section class="screen" id="screen-settings"><div class="settings-workspace"><nav class="settings-navigation" aria-label="Settings categories"><button type="button" class="settings-nav-item ds-list-row" data-settings-category="general" aria-controls="settings-general" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>General</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="audio" aria-controls="settings-audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg><span>Audio</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="transcription" aria-controls="settings-transcription"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M12 6v14M8 20h8"/></svg><span>Transcription</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="polish" aria-controls="settings-polish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 20 11-11 3 3L7 23M16 2v4M20 6h3M5 3v6M2 6h6"/></svg><span>Text polish</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="keybindings" aria-controls="settings-keybindings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h1m3 0h1m3 0h1M7 16h10"/></svg><span>Keybindings</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="appearance" aria-controls="settings-appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18"/></svg><span>Appearance</span></button><button type="button" class="settings-nav-item ds-list-row" data-settings-category="updates" aria-controls="settings-updates" id="updatesNavItem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3M4.5 12a7.5 7.5 0 0 1 12.8-5.3"/><path d="M17.5 3.5v3.3h-3.3M6.5 20.5v-3.3h3.3"/></svg><span>Updates</span><span class="ds-badge-count ds-badge-count--accent settings-nav-badge" id="updatesNavBadge" aria-hidden="true" hidden>1</span></button></nav><div class="settings-content"><form class="settings-form" id="settingsForm">
+        <section class="screen" id="screen-settings"><div class="settings-workspace">
+          <nav class="settings-navigation" aria-label="Settings categories">
+            <button type="button" class="settings-nav-item" data-settings-category="general" aria-controls="settings-general" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M9.81 4.93 10.09 2.59h3.82l.28 2.34 1.26.52 1.85-1.45 2.7 2.7-1.45 1.85.52 1.26 2.34.28v3.82l-2.34.28-.52 1.26 1.45 1.85-2.7 2.7-1.85-1.45-1.26.52-.28 2.34h-3.82l-.28-2.34-1.26-.52-1.85 1.45-2.7-2.7 1.45-1.85-.52-1.26-2.34-.28v-3.82l2.34-.28.52-1.26L4 6.7 6.7 4l1.85 1.45Z"/><circle cx="12" cy="12" r="3.2"/></svg><span>General</span></button>
+            <button type="button" class="settings-nav-item" data-settings-category="keybindings" aria-controls="settings-keybindings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M9 9h6v6H9zM9 9V6.5A2.5 2.5 0 1 0 6.5 9H9Zm6 0V6.5A2.5 2.5 0 1 1 17.5 9H15Zm0 6v2.5a2.5 2.5 0 1 0 2.5-2.5H15Zm-6 0v2.5A2.5 2.5 0 1 1 6.5 15H9Z"/></svg><span>Shortcuts</span></button>
+            <button type="button" class="settings-nav-item" data-settings-category="audio" aria-controls="settings-audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg><span>Audio</span></button>
+            <button type="button" class="settings-nav-item" data-settings-category="transcription" aria-controls="settings-transcription"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 10.5v3M7.5 7v10M11 4v16M14.5 8v8M18 5.5v13M21 10.5v3"/></svg><span>Transcription</span></button>
+            <button type="button" class="settings-nav-item" data-settings-category="polish" aria-controls="settings-polish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4.5 11.6 9a2 2 0 0 0 1.2 1.2L17.5 12l-4.7 1.7a2 2 0 0 0-1.2 1.2L10 19.5l-1.6-4.6a2 2 0 0 0-1.2-1.2L2.5 12l4.7-1.8A2 2 0 0 0 8.4 9L10 4.5ZM18.5 3v4M16.5 5h4M18 17v3M16.5 18.5h3"/></svg><span>Text polish</span></button>
+            <button type="button" class="settings-nav-item" data-settings-category="appearance" aria-controls="settings-appearance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/></svg><span>Appearance</span></button>
+            <button type="button" class="settings-nav-item" data-settings-category="updates" aria-controls="settings-updates" id="updatesNavItem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3M4.5 12a7.5 7.5 0 0 1 12.8-5.3"/><path d="M17.5 3.5v3.3h-3.3M6.5 20.5v-3.3h3.3"/></svg><span>Updates</span><span class="settings-nav-badge" id="updatesNavBadge" aria-hidden="true" hidden></span></button>
+          </nav>
+          <div class="settings-content"><form class="settings-form" id="settingsForm">
 
 <!-- ── General ── -->
 <section class="settings-page" data-settings-page="general" id="settings-general" aria-label="General">
@@ -537,6 +582,17 @@
           <div class="row-help">Native Mac apps only; Electron apps, terminals and web pages ignore it.</div>
         </div>
         <div class="row-control"><input id="accessibilityInsert" class="switch" type="checkbox" role="switch" /></div>
+      </div>
+      <div class="row" id="modelSourceRow">
+        <div class="row-text">
+          <label class="row-label" for="modelSource">Model source</label>
+          <div class="row-help">A Hugging Face–compatible mirror URL, or a folder with the model files.</div>
+          <div class="row-help status-text" id="modelSourceStatus" role="status" aria-live="polite" hidden></div>
+        </div>
+        <div class="row-control">
+          <input id="modelSource" class="setting-input mono w-lg" type="text" placeholder="Hugging Face" maxlength="2048" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <button class="btn" id="modelSourceTest" type="button">Test</button>
+        </div>
       </div>
     </div>
   </details>

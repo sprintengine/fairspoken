@@ -49,6 +49,8 @@ final class ModelLibrary {
     private(set) var items: [String: ItemState] = [:]
     private(set) var diskBytes: [String: Int64] = [:]
     private(set) var lastLoadSeconds: Double?
+    /// Why the last gallery download of a model failed (says what and where), until the next try.
+    private(set) var downloadErrors: [String: String] = [:]
 
     let engine = FluidAudioEngine()
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -132,6 +134,7 @@ final class ModelLibrary {
     func download(_ id: String) {
         guard state(of: id) == .available else { return }
         items[id] = .downloading(0)
+        downloadErrors[id] = nil
         let report: @Sendable (FluidAudioEngine.Stage) -> Void = { [weak self] stage in
             Task { @MainActor in
                 switch stage {
@@ -142,17 +145,23 @@ final class ModelLibrary {
             }
         }
         Task { [weak self] in
+            var failure: String?
             do {
                 try await FluidAudioEngine.download(id, progress: report)
+            } catch is CancellationError {
             } catch {
                 Self.log.error("Download failed: \(error.localizedDescription, privacy: .public)")
+                failure = error.localizedDescription
             }
             await MainActor.run { [weak self] in
                 self?.items[id] = nil
+                self?.downloadErrors[id] = failure
                 self?.refresh()
             }
         }
     }
+
+    func clearDownloadErrors() { downloadErrors = [:] }
 
     /// Removes a model's files. The active model is never deleted.
     func delete(_ id: String) {

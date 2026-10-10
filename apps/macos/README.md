@@ -138,6 +138,8 @@ first four fields are the Rust host's file (`PersistedHostConfig`), so either ho
   queue capacity, address, port and token restart the server when saved in the window.
 - `bindAddress`: `127.0.0.1` (default, this Mac only; pair with `tailscale serve --bg 48173` to reach
   it on your tailnet over HTTPS), `0.0.0.0` (every network), or one address (e.g. the Tailscale IP).
+- `modelSource` (left out when empty): where models download from; see *Model source* below.
+  `FAIRSPOKEN_MODEL_SOURCE` overrides it for a run. An invalid value stops the server with the reason.
 - Environment variables (headless and testing; the same names as the Rust host):
   `FAIRSPOKEN_HOST_CONFIG_PATH`, and for this run `FAIRSPOKEN_HOST_ADDR`, `FAIRSPOKEN_HOST_TOKEN`,
   `FAIRSPOKEN_HOST_PAIRING_PASSWORD`, `FAIRSPOKEN_HOST_NAME`, `FAIRSPOKEN_HOST_WORKERS`, `FAIRSPOKEN_HOST_QUEUE_CAPACITY`; `FAIRSPOKEN_HOST_MODEL`,
@@ -165,6 +167,25 @@ Settings › Transcription › **My host** holds the host URL, token (Keychain) 
 connection button and a status line such as "Using host: practice-mini.local:48173 · connected"
 (one `GET /v1/health` when Settings or Home opens, or on Test; no background polling). Monitoring a
 host is Fairspoken Server's job (or the web dashboard at the host's `/`); the client has no Server view.
+
+## Model source
+
+For networks that block huggingface.co: Fairspoken › Settings › Transcription › This Mac › **Model source**,
+and Fairspoken Server › Configuration › Downloads. Saved as `modelSource` (settings.json, shared with the
+Tauri app; host-config.json for the server). Parsing and checks live in `FairspokenCore/ModelSource.swift`.
+
+- Empty: Hugging Face.
+- `http://` or `https://`: a Hugging Face–compatible mirror (Artifactory/Nexus Hugging Face remote,
+  hf-mirror, Olah). FluidAudio fetches `{base}/{repo}/resolve/{revision}/{file}` and lists files with
+  `{base}/api/models/{repo}/tree/{revision}`, so the mirror must serve both. Plain `http://` works only
+  to local-network names and addresses (App Transport Security); use `https://` otherwise.
+- An absolute path, `~/…` or `file://`: a folder (local or a mounted share) holding
+  `{folder}/FluidInference/<repo>/…`, as `hf download FluidInference/<repo> --local-dir {folder}/FluidInference/<repo>`
+  writes it (`parakeet-tdt-0.6b-v3-coreml`, `parakeet-ultra-coreml`). Installing copies the bundles
+  FluidAudio loads plus the top-level files into its cache, then checks them; an incomplete copy is removed.
+
+Other schemes, credentials in the URL and relative paths are refused. **Test** checks the source can
+serve the selected model (or each worker's model) without downloading it.
 
 ## Updates
 

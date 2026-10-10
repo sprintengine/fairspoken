@@ -1,3 +1,5 @@
+use crate::model_source::{HubFile, ModelSource, Opened};
+use reqwest::blocking::Client;
 use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
@@ -8,22 +10,33 @@ use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+// Each model's Hugging Face repository and revision. Files are fetched from
+// the configured model source (`model_source`): Hugging Face by default, a
+// mirror, or a folder. docs/model-sources.md lists these for admins; keep it
+// in step.
 #[cfg(feature = "whisper")]
-const WHISPER_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const WHISPER_REPO: (&str, &str) = ("ggerganov/whisper.cpp", "main");
 
 /// Source repo for the ONNX export of NVIDIA Parakeet TDT 0.6B v3 that
 /// `parakeet-rs` loads. The four files below use the exact names the
 /// `ParakeetTDT` loader expects in its model directory.
-const PARAKEET_BASE_URL: &str =
-    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+const PARAKEET_REPO: (&str, &str) = ("istupakov/parakeet-tdt-0.6b-v3-onnx", "main");
 const PARAKEET_DIR: &str = "parakeet-tdt-0.6b-v3";
 const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 const PARAKEET_V2_MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
-const PARAKEET_V2_BASE_URL: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85";
+const PARAKEET_V2_REPO: (&str, &str) = (
+    "istupakov/parakeet-tdt-0.6b-v2-onnx",
+    "0bbb45a3365852604aef28b538a8f066f4ccaa85",
+);
 /// Moondream's Parakeet Ultra, a post-trained Parakeet TDT 0.6B v3, as an
-/// ONNX export laid out exactly like the istupakov TDT folders.
+/// ONNX export laid out exactly like the istupakov TDT folders, in the
+/// `parakeet-ultra` folder of its repository.
 const PARAKEET_ULTRA_MODEL_ID: &str = "parakeet-ultra";
-const PARAKEET_ULTRA_BASE_URL: &str = "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/parakeet-ultra";
+const PARAKEET_ULTRA_REPO: (&str, &str) = (
+    "altunenes/parakeet-rs",
+    "4d2a8bc71f5c896ec40faa59732e6716295edaf2",
+);
+const PARAKEET_ULTRA_REPO_DIR: &str = "parakeet-ultra";
 const PARAKEET_FILES: [&str; 4] = [
     "encoder-model.onnx",
     "encoder-model.onnx.data",
@@ -149,6 +162,9 @@ pub struct ModelStatus {
 #[derive(Clone)]
 pub struct ModelService {
     base_dir: PathBuf,
+    /// Where missing files are fetched from; Hugging Face unless the caller
+    /// sets the configured source (`with_source`).
+    source: ModelSource,
 }
 
 #[derive(Clone, Debug)]
@@ -163,8 +179,10 @@ pub struct ModelPrepareProgress {
 /// because the published checksums for the Parakeet ONNX export are not pinned
 /// yet — when absent, presence on disk is the only validation.
 struct ModelFile {
+    /// The file's name in the model directory.
     name: &'static str,
-    url: String,
+    /// Where it lives in its Hugging Face repository.
+    hub: HubFile,
     hash: Option<ModelHash>,
 }
 
@@ -172,6 +190,7 @@ impl Default for ModelService {
     fn default() -> Self {
         Self {
             base_dir: default_model_dir(),
+            source: ModelSource::default(),
         }
     }
 }
@@ -180,7 +199,27 @@ impl ModelService {
     /// Models stored under `base_dir`, for tests.
     #[cfg(test)]
     pub(crate) fn at(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            source: ModelSource::default(),
+        }
+    }
+
+    /// The same model directory, fetching missing files from `source`.
+    pub fn with_source(mut self, source: ModelSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// The first file `prepare_with_progress` fetches for `model`: what the
+    /// Settings "Test" button asks the model source for.
+    pub fn first_file(&self, model: SttModel) -> HubFile {
+        let (_, files) = self.storage(model);
+        files
+            .into_iter()
+            .next()
+            .map(|file| file.hub)
+            .expect("every model has at least one file")
     }
 
     pub fn status(&self, model: SttModel) -> ModelStatus {
@@ -240,6 +279,10 @@ impl ModelService {
         let (dir, files) = self.storage(model);
         fs::create_dir_all(&dir)
             .map_err(|err| format!("Failed to create model directory: {err}"))?;
+        let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|err| format!("Failed to start the model download: {err}"))?;
 
         let file_count = files.len().max(1) as u32;
         for (index, file) in files.iter().enumerate() {
@@ -257,13 +300,17 @@ impl ModelService {
 
             let tmp = target.with_extension("download");
             let label = format!(
-                "Downloading {} ({}/{})",
+                "{} {} ({}/{})",
+                self.source.verb(),
                 model.model_id(),
                 index + 1,
                 file_count
             );
             let file_index = index as u32;
-            download_to_file_with_progress(&file.url, &tmp, |file_percentage| {
+            // A copy from a folder streams through the same path as a
+            // download, so it gets the same progress and checksum checks.
+            let opened = self.source.open(&client, &file.hub)?;
+            let written = write_with_progress(opened, &tmp, |file_percentage| {
                 // Map this file's 0-100 onto its slice of the overall 0-95 band.
                 let overall =
                     ((file_index * 100 + u32::from(file_percentage)) / file_count).min(95) as u8;
@@ -272,7 +319,11 @@ impl ModelService {
                     message: label.clone(),
                     percentage: overall.max(1),
                 });
-            })?;
+            });
+            if let Err(err) = written {
+                let _ = fs::remove_file(&tmp);
+                return Err(format!("{err} ({} from {})", file.hub.name(), self.source));
+            }
 
             if let Some(hash) = file.hash {
                 progress(ModelPrepareProgress {
@@ -283,8 +334,10 @@ impl ModelService {
                 if !file_hash_matches(&tmp, hash)? {
                     let _ = fs::remove_file(&tmp);
                     return Err(format!(
-                        "Downloaded model file failed checksum validation: {}",
-                        file.name
+                        "{} from {} failed checksum validation: it is not the expected file for {}",
+                        file.hub.name(),
+                        self.source,
+                        model.model_id()
                     ));
                 }
             }
@@ -356,7 +409,7 @@ impl ModelService {
                     .zip(hashes)
                     .map(|(name, hash)| ModelFile {
                         name,
-                        url: format!("{PARAKEET_V2_BASE_URL}/{name}"),
+                        hub: HubFile::new(PARAKEET_V2_REPO.0, PARAKEET_V2_REPO.1, *name),
                         hash: Some(ModelHash::Sha256(hash)),
                     })
                     .collect();
@@ -377,7 +430,11 @@ impl ModelService {
                     .zip(hashes)
                     .map(|(name, hash)| ModelFile {
                         name,
-                        url: format!("{PARAKEET_ULTRA_BASE_URL}/{name}"),
+                        hub: HubFile::new(
+                            PARAKEET_ULTRA_REPO.0,
+                            PARAKEET_ULTRA_REPO.1,
+                            format!("{PARAKEET_ULTRA_REPO_DIR}/{name}"),
+                        ),
                         hash: Some(ModelHash::Sha256(hash)),
                     })
                     .collect();
@@ -388,7 +445,7 @@ impl ModelService {
                     .iter()
                     .map(|name| ModelFile {
                         name,
-                        url: format!("{PARAKEET_BASE_URL}/{name}"),
+                        hub: HubFile::new(PARAKEET_REPO.0, PARAKEET_REPO.1, *name),
                         // TODO: pin SHA256 for each Parakeet file once the
                         // checksums can be fetched from Hugging Face.
                         hash: None,
@@ -400,7 +457,7 @@ impl ModelService {
             SttModel::Whisper(whisper) => {
                 let file = ModelFile {
                     name: whisper.file_name(),
-                    url: format!("{WHISPER_BASE_URL}/{}", whisper.file_name()),
+                    hub: HubFile::new(WHISPER_REPO.0, WHISPER_REPO.1, whisper.file_name()),
                     hash: Some(whisper.hash()),
                 };
                 (self.base_dir.clone(), vec![file])
@@ -476,19 +533,19 @@ pub(crate) fn default_model_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("models"))
 }
 
-fn download_to_file_with_progress(
-    url: &str,
+/// Streams an opened model file into `target`, reporting 1-100.
+fn write_with_progress(
+    opened: Opened,
     target: &Path,
     mut progress: impl FnMut(u8),
 ) -> Result<(), String> {
-    let mut response = reqwest::blocking::get(url)
-        .map_err(|err| format!("Model download failed: {err}"))?
-        .error_for_status()
-        .map_err(|err| format!("Model download returned an error: {err}"))?;
+    let Opened {
+        reader: mut response,
+        len: total,
+    } = opened;
     let mut file = File::create(target)
         .map_err(|err| format!("Failed to create model download file: {err}"))?;
 
-    let total = response.content_length();
     let mut downloaded = 0_u64;
     let mut last_percentage = 0_u8;
     let mut chunk = [0_u8; 1024 * 64];
@@ -511,6 +568,13 @@ fn download_to_file_with_progress(
             }
         }
     }
+    if let Some(total) = total.filter(|total| downloaded != *total) {
+        return Err(format!(
+            "Got {downloaded} bytes where {total} were expected"
+        ));
+    }
+    file.sync_all()
+        .map_err(|err| format!("Failed to write model download: {err}"))?;
     progress(100);
     Ok(())
 }
@@ -636,9 +700,15 @@ mod tests {
             files.iter().map(|f| f.name).collect::<Vec<_>>(),
             super::PARAKEET_FILES
         );
-        assert!(files.iter().all(
-            |f| f.url.contains("0bbb45a3365852604aef28b538a8f066f4ccaa85") && f.hash.is_some()
-        ));
+        assert!(files.iter().all(|f| f.hub.repo == "istupakov/parakeet-tdt-0.6b-v2-onnx"
+            && f.hub.revision == "0bbb45a3365852604aef28b538a8f066f4ccaa85"
+            && f.hash.is_some()));
+        assert_eq!(
+            crate::model_source::ModelSource::default()
+                .file_url(&files[0].hub)
+                .unwrap(),
+            "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/encoder-model.onnx"
+        );
     }
 
     #[test]
@@ -655,10 +725,16 @@ mod tests {
             files.iter().map(|f| f.name).collect::<Vec<_>>(),
             super::PARAKEET_FILES
         );
-        assert!(files.iter().all(|f| f
-            .url
-            .contains("4d2a8bc71f5c896ec40faa59732e6716295edaf2/parakeet-ultra/")
+        assert!(files.iter().all(|f| f.hub.revision
+            == "4d2a8bc71f5c896ec40faa59732e6716295edaf2"
+            && f.hub.path == format!("parakeet-ultra/{}", f.name)
             && f.hash.is_some()));
+        assert_eq!(
+            crate::model_source::ModelSource::default()
+                .file_url(&files[0].hub)
+                .unwrap(),
+            "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/parakeet-ultra/encoder-model.onnx"
+        );
     }
 
     #[test]
@@ -723,10 +799,9 @@ mod tests {
 
     #[test]
     fn reports_missing_model_status_for_parakeet() {
-        let service = ModelService {
-            base_dir: std::env::temp_dir()
-                .join(format!("fairspoken-models-{}", std::process::id())),
-        };
+        let service = ModelService::at(
+            std::env::temp_dir().join(format!("fairspoken-models-{}", std::process::id())),
+        );
         let status = service.status(SttModel::Parakeet);
 
         assert!(!status.cached);
@@ -734,17 +809,90 @@ mod tests {
         assert!(status.model_path.ends_with("parakeet-tdt-0.6b-v3"));
     }
 
+    #[test]
+    fn copies_a_model_from_a_folder_source_into_the_model_directory() {
+        use crate::model_source::ModelSource;
+        let models = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let repo = shared
+            .path()
+            .join("istupakov")
+            .join("parakeet-tdt-0.6b-v3-onnx");
+        fs::create_dir_all(&repo).unwrap();
+        for name in super::PARAKEET_FILES {
+            fs::write(repo.join(name), format!("contents of {name}")).unwrap();
+        }
+        let service = ModelService::at(models.path().to_path_buf())
+            .with_source(ModelSource::Folder(shared.path().to_path_buf()));
+        assert_eq!(
+            service.first_file(SttModel::Parakeet).name(),
+            "encoder-model.onnx"
+        );
+
+        let mut stages = Vec::new();
+        let status = service
+            .prepare_with_progress(SttModel::Parakeet, |progress| {
+                stages.push((progress.stage, progress.message))
+            })
+            .expect("copy from the folder");
+        assert!(status.cached, "{}", status.message);
+        assert!(stages
+            .iter()
+            .any(|(stage, message)| *stage == "downloading" && message.starts_with("Copying ")));
+        let installed = models.path().join("parakeet-tdt-0.6b-v3");
+        for name in super::PARAKEET_FILES {
+            let path = installed.join(name);
+            // A copy, not a link, and the source is left in place.
+            assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                format!("contents of {name}")
+            );
+            assert!(repo.join(name).is_file());
+        }
+    }
+
+    #[test]
+    fn a_folder_source_reports_missing_and_wrong_files() {
+        use crate::model_source::ModelSource;
+        let models = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let service = ModelService::at(models.path().to_path_buf())
+            .with_source(ModelSource::Folder(shared.path().to_path_buf()));
+
+        let repo = shared
+            .path()
+            .join("istupakov")
+            .join("parakeet-tdt-0.6b-v2-onnx");
+        let err = service
+            .prepare_with_progress(SttModel::ParakeetV2, |_| {})
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!("encoder-model.onnx not found in {}", repo.display())
+        );
+
+        // v2 has pinned checksums, which a folder copy is held to as well.
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("encoder-model.onnx"), b"not the model").unwrap();
+        let err = service
+            .prepare_with_progress(SttModel::ParakeetV2, |_| {})
+            .unwrap_err();
+        assert!(err.contains("failed checksum validation"), "{err}");
+        let target = models.path().join("parakeet-tdt-0.6b-v2");
+        assert!(!target.join("encoder-model.onnx").exists());
+        assert!(!target.join("encoder-model.download").exists());
+    }
+
     #[cfg(feature = "whisper")]
     #[test]
     #[ignore = "downloads the tiny whisper.cpp model"]
     fn downloads_tiny_model() {
         use super::WhisperModel;
-        let service = ModelService {
-            base_dir: std::env::temp_dir().join(format!(
-                "fairspoken-model-download-{}",
-                std::process::id()
-            )),
-        };
+        let service = ModelService::at(std::env::temp_dir().join(format!(
+            "fairspoken-model-download-{}",
+            std::process::id()
+        )));
         let status = service
             .prepare(SttModel::Whisper(WhisperModel::Tiny))
             .expect("prepare tiny model");

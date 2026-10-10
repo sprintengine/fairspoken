@@ -1,6 +1,7 @@
 use super::pairing::{deserialize_password_change, validate_pairing_password, HostAuth};
 use super::lock_unpoisoned;
 use super::update::UpdatePrefs;
+use crate::model_source::ModelSource;
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -19,6 +20,9 @@ pub(super) const MAX_HOST_MAX_ACTIVE_STREAMS: u32 = 32;
 pub(super) const MIN_HOST_MAX_RECORDING_SECONDS: u16 = 10;
 pub(super) const MAX_HOST_MAX_RECORDING_SECONDS: u16 = 600;
 pub(super) const DEFAULT_HOST_MODEL: SttModel = SttModel::Parakeet;
+/// Where the host downloads models from (`model_source`), below
+/// `--model-source` and above the config file's `modelSource`.
+pub(super) const MODEL_SOURCE_ENV: &str = "FAIRSPOKEN_MODEL_SOURCE";
 
 #[derive(Clone)]
 pub(super) struct HostRuntimeConfig {
@@ -126,6 +130,11 @@ pub(super) struct PersistedHostConfig {
     /// then keep the environment's value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) super_mode: Option<super::super_mode::SuperModePolicy>,
+    /// Where models download from (`model_source`); absent is Hugging Face.
+    /// `--model-source` and `FAIRSPOKEN_MODEL_SOURCE` override it. The same
+    /// key the Swift host reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) model_source: Option<String>,
 }
 
 impl PersistedHostConfig {
@@ -142,8 +151,34 @@ impl PersistedHostConfig {
             pairing_password: None,
             name: None,
             super_mode: None,
+            model_source: None,
         }
     }
+}
+
+/// Where the host's models come from, and which setting chose it: the
+/// command line, then the environment, then the config file, then Hugging
+/// Face. A blank environment variable counts as unset; an explicit
+/// `--model-source ""` chooses Hugging Face. Invalid values fail startup,
+/// like any other operator configuration, naming where they came from.
+pub(super) fn resolve_model_source(
+    cli: Option<&str>,
+    env: Option<&str>,
+    file: Option<&str>,
+    config_path: &Path,
+) -> Result<(ModelSource, String), String> {
+    let (raw, origin) = if let Some(cli) = cli {
+        (cli, "--model-source".to_string())
+    } else if let Some(env) = env.filter(|value| !value.trim().is_empty()) {
+        (env, MODEL_SOURCE_ENV.to_string())
+    } else if let Some(file) = file.filter(|value| !value.trim().is_empty()) {
+        (file, format!("modelSource in {}", config_path.display()))
+    } else {
+        return Ok((ModelSource::HuggingFace, "default".to_string()));
+    };
+    ModelSource::parse(raw)
+        .map(|source| (source, origin.clone()))
+        .map_err(|err| format!("{origin}: {err}"))
 }
 
 pub(super) fn default_host_config_path() -> PathBuf {
@@ -243,6 +278,7 @@ pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<
             pairing_password: auth.saved_pairing_password,
             name: live.saved_name(),
             super_mode: Some(live.super_mode),
+            model_source: live.saved_model_source(),
         },
     )
 }
@@ -318,6 +354,9 @@ pub(super) struct HostLiveConfig {
     /// The display name in `/v1/hello`, and the config file's `name` (kept
     /// as found so a rewrite of the file doesn't drop or bake in a default).
     name: Mutex<(String, Option<String>)>,
+    /// The config file's `modelSource`, kept as found so rewriting the file
+    /// never drops it or bakes in a command-line or environment value.
+    saved_model_source: Mutex<Option<String>>,
     /// Restart-only: whether clients may get super mode at all.
     pub(super) super_mode: super::super_mode::SuperModePolicy,
 }
@@ -332,6 +371,7 @@ impl HostLiveConfig {
             update_prefs: Mutex::new(UpdatePrefs::default()),
             auth: Mutex::new(HostAuth::default()),
             name: Mutex::new((String::new(), None)),
+            saved_model_source: Mutex::new(None),
             super_mode: config.super_mode,
         }
     }
@@ -362,6 +402,14 @@ impl HostLiveConfig {
 
     pub(super) fn set_name(&self, display: String, saved: Option<String>) {
         *lock_unpoisoned(&self.name) = (display, saved);
+    }
+
+    fn saved_model_source(&self) -> Option<String> {
+        lock_unpoisoned(&self.saved_model_source).clone()
+    }
+
+    pub(super) fn set_saved_model_source(&self, saved: Option<String>) {
+        *lock_unpoisoned(&self.saved_model_source) = saved;
     }
 
     pub(super) fn update_prefs(&self) -> UpdatePrefs {
@@ -541,5 +589,97 @@ pub(super) fn parse_bool(value: &str) -> Option<bool> {
         "1" | "true" => Some(true),
         "0" | "false" => Some(false),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod model_source_tests {
+    use super::*;
+
+    fn resolve(
+        cli: Option<&str>,
+        env: Option<&str>,
+        file: Option<&str>,
+    ) -> Result<(ModelSource, String), String> {
+        resolve_model_source(cli, env, file, Path::new("host-config.json"))
+    }
+
+    fn mirror(base: &str) -> ModelSource {
+        ModelSource::Mirror(base.to_string())
+    }
+
+    #[test]
+    fn command_line_beats_environment_beats_config_file_beats_default() {
+        let (cli, env, file) = (
+            Some("https://cli.example"),
+            Some("https://env.example/"),
+            Some("https://file.example"),
+        );
+        assert_eq!(
+            resolve(cli, env, file).unwrap(),
+            (mirror("https://cli.example"), "--model-source".into())
+        );
+        assert_eq!(
+            resolve(None, env, file).unwrap(),
+            (mirror("https://env.example"), MODEL_SOURCE_ENV.into())
+        );
+        assert_eq!(
+            resolve(None, None, file).unwrap(),
+            (
+                mirror("https://file.example"),
+                "modelSource in host-config.json".into()
+            )
+        );
+        assert_eq!(
+            resolve(None, None, None).unwrap(),
+            (ModelSource::HuggingFace, "default".into())
+        );
+        // A blank variable or file value is unset; a blank flag is a choice.
+        assert_eq!(resolve(None, Some(" "), file).unwrap().0, mirror("https://file.example"));
+        assert_eq!(resolve(None, None, Some("")).unwrap().0, ModelSource::HuggingFace);
+        assert_eq!(resolve(Some(""), env, file).unwrap().0, ModelSource::HuggingFace);
+    }
+
+    #[test]
+    fn an_invalid_source_fails_naming_where_it_came_from() {
+        let err = resolve(None, Some("ftp://env.example"), None).unwrap_err();
+        assert!(err.starts_with("FAIRSPOKEN_MODEL_SOURCE: "), "{err}");
+        let err = resolve(None, None, Some("relative/models")).unwrap_err();
+        assert!(err.starts_with("modelSource in host-config.json: "), "{err}");
+        // A valid higher-precedence value wins over an invalid lower one.
+        assert!(resolve(Some("https://cli.example"), Some("ftp://x"), None).is_ok());
+    }
+
+    #[test]
+    fn the_config_file_keeps_its_model_source_when_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("host-config.json");
+        let model = SttModel::Parakeet.model_id();
+        fs::write(
+            &path,
+            format!(r#"{{"maxActiveStreams":4,"maxRecordingSeconds":600,"useGpu":true,"workerModels":["{model}"],"modelSource":"https://mirror.example"}}"#),
+        )
+        .unwrap();
+        let persisted = load_persisted_config(&path).unwrap().unwrap();
+        assert_eq!(persisted.model_source.as_deref(), Some("https://mirror.example"));
+
+        let live = HostLiveConfig::new(&HostRuntimeConfig {
+            worker_count: 1,
+            queue_capacity: 1,
+            max_active_streams: 4,
+            max_recording_seconds: 600,
+            use_gpu: true,
+            worker_models: vec![SttModel::Parakeet],
+            super_mode: super::super::super_mode::SuperModePolicy::Allow,
+        });
+        live.set_saved_model_source(persisted.model_source);
+        persist_live_config(&path, &live).unwrap();
+        let rewritten = load_persisted_config(&path).unwrap().unwrap();
+        assert_eq!(rewritten.model_source.as_deref(), Some("https://mirror.example"));
+
+        // Without one, the key stays out of the file.
+        live.set_saved_model_source(None);
+        persist_live_config(&path, &live).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("modelSource"));
     }
 }

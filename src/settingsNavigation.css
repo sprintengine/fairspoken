@@ -1,10 +1,9 @@
-/* Functional layout stays usable if the separate presentation commit is reverted. */
+/* Settings layout: the category tab strip stays under the title while the
+   chosen page scrolls beneath it. Presentation lives in crystal.css. */
 .content:has(> #screen-settings.active) { padding: 0; overflow: hidden; display: flex; }
 #screen-settings.active { flex: 1; min-height: 0; min-width: 0; }
-.settings-workspace { display: grid; grid-template-columns: calc(var(--sem-size-control-lg) * 5) minmax(0, 1fr); height: 100%; }
-.settings-navigation { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sem-space-xs); padding: var(--sem-space-xl); }
-.settings-navigation button { display: flex; align-items: center; gap: var(--sem-space-sm); padding: var(--sem-space-sm); }
-.settings-navigation svg { width: var(--sem-icon-size-sm); height: var(--sem-icon-size-sm); flex: none; }
-.settings-content { min-width: 0; min-height: 0; overflow: auto; padding: var(--sem-space-3xl); }
+.settings-workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.settings-navigation { flex: none; display: flex; margin: 0 var(--page-gutter, 32px); }
+.settings-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 22px var(--page-gutter, 32px) 40px; }
+.settings-content .settings-form { width: 100%; }
 .settings-page[hidden] { display: none; }
-.settings-breadcrumb-parent, .settings-breadcrumb-separator { color: var(--sem-color-text-muted); font-weight: var(--sem-font-weight-regular); }

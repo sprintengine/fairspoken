@@ -272,6 +272,11 @@ pub struct Settings {
         deserialize_with = "super_mode_model_or_default"
     )]
     pub super_mode_model: WhisperModel,
+    /// Where speech and polish models are downloaded from: empty for
+    /// Hugging Face, a Hugging Face–compatible mirror's base URL, or a folder
+    /// holding the files (`model_source`). Shared with the Swift apps.
+    #[serde(default)]
+    pub model_source: String,
 }
 
 /// Who wrote a dictionary entry. Learned entries come from the edit watcher
@@ -378,6 +383,7 @@ impl Default for Settings {
             format_ai_detection: false,
             super_mode: SuperModeSetting::Off,
             super_mode_model: default_super_mode_model(),
+            model_source: String::new(),
         }
     }
 }
@@ -517,6 +523,7 @@ fn normalize(settings: Settings) -> Settings {
         ),
         enabled_packs: normalize_enabled_packs(settings.enabled_packs),
         polish_local_model_path: settings.polish_local_model_path.trim().to_string(),
+        model_source: crate::model_source::normalize_setting(&settings.model_source),
         polish_local_adapters: {
             let mut paths: Vec<String> = Vec::new();
             for path in settings.polish_local_adapters.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
@@ -742,6 +749,35 @@ mod tests {
         std::fs::remove_dir(path).unwrap();
     }
 
+
+    #[test]
+    fn model_source_defaults_to_hugging_face_and_round_trips() {
+        assert_eq!(Settings::default().model_source, "");
+        let old: Settings = serde_json::from_value(serde_json::json!({ "language": "de" })).unwrap();
+        assert_eq!(old.model_source, "");
+        assert_eq!(
+            serde_json::to_value(Settings::default()).unwrap()["modelSource"],
+            serde_json::json!("")
+        );
+
+        let path = std::env::temp_dir().join(format!("settings-model-source-{}.json", uuid::Uuid::new_v4()));
+        let mut service = SettingsService { current: Settings::default(), path: path.clone() };
+        service
+            .save(Settings { model_source: "  https://mirror.example/hf/  ".into(), ..Settings::default() })
+            .unwrap();
+        assert_eq!(service.current().model_source, "https://mirror.example/hf");
+        let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(stored["modelSource"], "https://mirror.example/hf");
+        assert_eq!(load(&path).model_source, "https://mirror.example/hf");
+
+        // A folder is stored as typed, trimmed.
+        let folder = std::env::temp_dir().join("models").display().to_string();
+        service
+            .save(Settings { model_source: format!(" {folder}\n"), ..Settings::default() })
+            .unwrap();
+        assert_eq!(load(&path).model_source, folder);
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn a_file_missing_fields_loads_the_rest_with_defaults() {

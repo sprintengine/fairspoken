@@ -1,34 +1,13 @@
 @import "./design-system/button.css";
 @import "./design-system/tooltip.css";
 
-/* The same shell as Studio: one native material behind chrome and one opaque
-   working surface. No CSS blur layers or nested tint accumulation. */
+/* One native material behind the window and Crystal surfaces on top (see
+   crystal.css). No CSS blur layers or nested tint accumulation here. */
 html { background: transparent; }
 body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-default); }
-:root[data-window-material="glass"] body {
-  background: color-mix(in srgb, var(--sem-color-bg-app) calc(var(--sem-glass-opacity) * 100%), transparent);
-}
 .app { background: transparent; }
-.titlebar {
-  height: var(--sem-size-control-lg);
-  border: 0;
-  background: transparent;
-  justify-content: flex-start;
-  padding: 0 var(--sem-space-xl) 0 calc(var(--sem-size-control-lg) + var(--sem-space-4xl) + var(--sem-space-xl));
-}
-.sidebar { border: 0; background: transparent; overflow: visible; }
-.nav, .sidebar-foot { display: flex; flex-direction: column; gap: var(--sem-space-sm); padding: 0; }
-.sidebar .nav-item { padding: 0; justify-content: center; }
-.sidebar .nav-item svg { opacity: 1; }
-.sidebar .nav-item[aria-current="page"]::before { content: none; }
-.topbar { gap: var(--sem-space-lg); }
 #screen-home, #screen-models, .profile-content { max-width: 1080px; }
 #screen-dictionary, #screen-activity { max-width: 760px; }
-.hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--sem-space-xs) var(--sem-space-3xl); }
-.hero .label, .hero .value, .hero .sub { grid-column: 1; margin: 0; }
-.hero .hero-actions { grid-column: 2; grid-row: 1 / 4; display: flex; align-self: center; margin: 0; }
-#homeStats .settings-section { margin-bottom: var(--sem-space-3xl); }
-.main #screen-models { background: transparent; padding: 0; }
 .profile-content { max-width: 640px; }
 .profile-heading { display: flex; align-items: center; gap: var(--sem-space-xl); margin-bottom: var(--sem-space-3xl); }
 .profile-heading svg { width: var(--sem-size-control-lg); height: var(--sem-size-control-lg); }
@@ -37,11 +16,9 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
    their states to the kit's button anatomy without replacing those hooks. */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--sem-space-xs);
-  font: var(--sem-font-weight-medium) var(--sem-font-size-body)/var(--sem-font-line-tight) var(--sem-font-family-ui);
+  font: var(--sem-font-weight-regular) var(--sem-font-size-body)/var(--sem-font-line-tight) var(--sem-font-family-ui);
   transition: background-color var(--sem-motion-duration-fast) var(--sem-motion-ease-standard), color var(--sem-motion-duration-fast) var(--sem-motion-ease-standard), box-shadow var(--sem-motion-duration-fast) var(--sem-motion-ease-standard);
 }
-.btn:active:not(:disabled) { box-shadow: var(--sem-shadow-control-pressed); }
-.btn.btn-primary:active:not(:disabled) { box-shadow: var(--sem-shadow-control-pressed); }
 .btn.btn-ghost:active:not(:disabled), .icon-btn:active:not(:disabled) { transform: scale(.97); }
 .btn.btn-sm { font-size: var(--sem-font-size-meta); }
 .btn:disabled { opacity: .45; box-shadow: none; cursor: not-allowed; }
@@ -50,16 +27,9 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
   outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset);
 }
 .setting-select, .setting-input { font-size: var(--sem-font-size-body); }
-.setting-select { appearance: auto; -webkit-appearance: auto; background-image: none; padding: 0 var(--sem-space-sm); color-scheme: inherit; }
 :root[data-mode="light"] { color-scheme: light; }
 :root[data-mode="dark"] { color-scheme: dark; }
-.seg button { font-size: var(--sem-font-size-meta); min-height: var(--sem-size-hit-target-min); }
 @media(max-width:760px) {
-  :root { --gutter: var(--sem-space-xl); }
-  .content { padding-block: var(--sem-space-3xl); }
-  .hero { display: flex; flex-direction: column; gap: var(--sem-space-sm); }
-  .hero .hero-actions { align-self: flex-start; flex-direction: row; flex-wrap: wrap; margin-top: var(--sem-space-lg); }
-  .hero .value { font-size: calc(var(--sem-font-size-title) * 2); }
   .row { flex-wrap: wrap; gap: var(--sem-space-lg); }
   .row-control { max-width: 100%; }
   .settings-form { max-width: 100%; }
@@ -67,13 +37,10 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
 @media(prefers-reduced-motion:reduce) {
   .btn.btn-ghost:active:not(:disabled), .icon-btn:active:not(:disabled) { transform: none; }
 }
-@media(prefers-reduced-transparency:reduce) {
-  :root[data-window-material="glass"] body { background: var(--sem-color-bg-app); }
-}
 
-/* Let Notes use the available work area instead of subtracting the old
-   sidebar shell's pixel heights from the viewport. Two list cards share the
-   pane: the library on the left, the open note on the right. */
+/* Let Notes use the available work area instead of subtracting pixel heights
+   from the viewport. Two list cards share the pane: the library on the left,
+   the open note on the right. */
 .content:has(> #screen-notes.active) { display: flex; flex-direction: column; }
 #screen-notes.active { flex: 1; min-height: 0; }
 .notes { height: 100%; min-height: 0; align-items: stretch; }
@@ -81,11 +48,6 @@ body { background: var(--sem-color-bg-app); line-height: var(--sem-font-line-def
 .note-list.settings-card { overflow-y: auto; }
 .note-detail.settings-card { padding: 0; overflow: hidden; }
 .nd-textarea:focus-visible { outline: var(--sem-focus-ring); outline-offset: calc(-1 * var(--sem-focus-ring-offset)); }
-.btn:disabled:hover { color: var(--sem-color-text-default); border-color: var(--sem-color-border-default); }
-.btn.btn-primary:disabled:hover { background: var(--sem-color-accent-primary); color: var(--sem-color-text-on-accent); border-color: transparent; }
-.btn.btn-ghost:disabled:hover { background: transparent; color: var(--sem-color-text-muted); border-color: transparent; }
 @media(max-width:760px) {
   .notes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 2fr); gap: var(--sem-space-xl); }
-  .note-list { border-right: 0; }
-  .note-detail { padding-left: 0; }
 }

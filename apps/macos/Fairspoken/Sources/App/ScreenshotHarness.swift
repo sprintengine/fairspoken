@@ -81,6 +81,12 @@ final class ScreenshotHarness {
         try? await Task.sleep(for: .milliseconds(1000))
         await freshFrame()
         if let window = windows.dashboard { await capture(window, as: "settings-transcription-\(suffix)") }
+        // The same tab with a model source filled in (screenshot settings are never saved or applied).
+        model.settings.update { $0.modelSource = "/Volumes/Practice Share/models" }
+        try? await Task.sleep(for: .milliseconds(400))
+        await freshFrame()
+        if let window = windows.dashboard { await capture(window, as: "settings-model-source-\(suffix)") }
+        model.settings.update { $0.modelSource = "" }
         // The same tab with My host chosen (the sample host; no tailnet scan, so no real machines).
         let location = model.settings.settings.transcriptionLocation
         model.settings.update { $0.transcriptionLocation = .remoteHost }
@@ -89,6 +95,10 @@ final class ScreenshotHarness {
         await freshFrame()
         if let window = windows.dashboard { await capture(window, as: "settings-host-\(suffix)") }
         model.settings.update { $0.transcriptionLocation = location }
+        model.settingsTab = .vocabulary
+        try? await Task.sleep(for: .milliseconds(800))
+        await freshFrame()
+        if let window = windows.dashboard { await capture(window, as: "settings-vocabulary-\(suffix)") }
         windows.dashboard?.orderOut(nil)
     }
 

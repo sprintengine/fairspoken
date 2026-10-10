@@ -71,6 +71,22 @@ function formatDuration(seconds: number): string {
   return `${minutes} m`;
 }
 
+// The headline duration sets its units small beside the numerals ("132h 12m"),
+// with the plain text kept whole for assistive tech.
+function renderHeadlineDuration(node: HTMLElement, text: string): void {
+  const spoken = document.createElement("span");
+  spoken.className = "sr-only";
+  spoken.textContent = text;
+  const shown = text.split(" ").map((part) => {
+    const span = document.createElement("span");
+    span.textContent = part;
+    if (!/\d/.test(part)) span.className = "unit";
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  });
+  node.replaceChildren(spoken, ...shown);
+}
+
 const usdFormat = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
 
 function formatMoney(usd: number): string {
@@ -117,7 +133,7 @@ function renderStats(summary: UsageStatsSummary): void {
   homeEmpty.hidden = true;
   homeStats.hidden = false;
 
-  statTimeSaved.textContent = formatDuration(summary.timeSavedSeconds);
+  renderHeadlineDuration(statTimeSaved, formatDuration(summary.timeSavedSeconds));
   const typingWpm = Math.round(summary.typingWpm) || TYPING_WPM;
   statTimeSavedSub.textContent =
     `vs typing at ${typingWpm} wpm`;

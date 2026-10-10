@@ -9,14 +9,15 @@ import "./activity";
 import "./modelDashboard";
 import "./settingsModelSummaries";
 import "./updates";
-import { selectSettingsCategory, updateSettingsHeading } from "./settingsNavigation";
+import { selectSettingsCategory } from "./settingsNavigation";
+import "./sidebarStatus";
 import { createSpeedTest } from "./speedTest";
 import { createVoiceAccuracyTest } from "./voiceAccuracyTest";
 import "./settingsPremium.css";
 // Crystal theme last: it restyles the surfaces the sheets above lay out.
 import "./crystal.css";
 
-// The home window shell: owns sidebar navigation between the four screens.
+// The home window shell: owns sidebar navigation between the screens.
 // The Settings screen's own controls are driven independently by settings.ts,
 // the Home screen's stats by homeStats.ts, and the Notes library by notes.ts.
 
@@ -33,9 +34,22 @@ const TITLES: Record<Screen, string> = {
   profile: "Your profile",
 };
 
+// A quiet line under the title, where the screen has one worth saying.
+const SUBTITLES: Partial<Record<Screen, string>> = {
+  models: "Speech and polish models on this device",
+  dictionary: "Applied to every dictation",
+};
+
+// Home greets rather than naming itself, with the date beneath.
+function greeting(now = new Date()): string {
+  const hour = now.getHours();
+  return hour < 5 ? "Good evening" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+}
+
 const navItems = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-item"));
 const screens = Array.from(document.querySelectorAll<HTMLElement>(".screen"));
 const screenTitle = document.getElementById("screenTitle");
+const screenSubtitle = document.getElementById("screenSubtitle");
 const notesSearch = document.getElementById("notesSearch");
 
 // The speed test is a sub-route of Home, not a nav screen: it renders into its
@@ -51,6 +65,18 @@ const voiceTest = voiceTestContainer
   ? createVoiceAccuracyTest({ container: voiceTestContainer, onExit: () => go("home") })
   : null;
 
+function setHeading(title: string, subtitle = ""): void {
+  if (screenTitle) screenTitle.textContent = title;
+  if (screenSubtitle) {
+    screenSubtitle.textContent = subtitle;
+    screenSubtitle.hidden = !subtitle;
+  }
+}
+
+function setHomeHeading(): void {
+  setHeading(greeting(), new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }));
+}
+
 function isScreen(value: string): value is Screen {
   return (SCREENS as readonly string[]).includes(value);
 }
@@ -59,8 +85,7 @@ function go(screen: Screen): void {
   speedTest?.stop();
   voiceTest?.stop();
   for (const item of navItems) {
-    // Dictionary has no rail item of its own; it opens from Your profile.
-    if (item.dataset.screen === screen || (screen === "dictionary" && item.dataset.screen === "profile")) {
+    if (item.dataset.screen === screen) {
       item.setAttribute("aria-current", "page");
     } else {
       item.removeAttribute("aria-current");
@@ -69,13 +94,11 @@ function go(screen: Screen): void {
   for (const section of screens) {
     section.classList.toggle("active", section.id === `screen-${screen}`);
   }
-  if (screenTitle) {
-    screenTitle.textContent = TITLES[screen];
-  }
+  if (screen === "home") setHomeHeading();
+  else setHeading(TITLES[screen], SUBTITLES[screen]);
   if (notesSearch) {
     notesSearch.hidden = screen !== "notes";
   }
-  if (screen === "settings") updateSettingsHeading();
   const saveStatus = document.getElementById("settingsSaveStatus");
   if (saveStatus) saveStatus.hidden = screen !== "settings";
   document.dispatchEvent(new CustomEvent("home-screen-changed", { detail: { screen } }));
@@ -96,7 +119,7 @@ function openSubRoute(sectionId: string, title: string): void {
   for (const section of screens) {
     section.classList.toggle("active", section.id === sectionId);
   }
-  if (screenTitle) screenTitle.textContent = title;
+  setHeading(title);
   if (notesSearch) notesSearch.hidden = true;
   const saveStatus = document.getElementById("settingsSaveStatus");
   if (saveStatus) saveStatus.hidden = true;
@@ -156,3 +179,6 @@ void listen<string>("home-navigate", (event) => {
 }).catch(() => {
   /* navigation deep-link is best-effort; the window still opens on Home */
 });
+
+// The window opens on Home: replace the static fallback title with its greeting.
+setHomeHeading();

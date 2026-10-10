@@ -3,6 +3,7 @@ import FluidAudio
 import Foundation
 import FairspokenCore
 import OSLog
+import Synchronization
 
 let speechLog = Logger(subsystem: "ie.fairspoken.speech", category: "engine")
 
@@ -45,17 +46,118 @@ public enum ParakeetModels {
         return (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
-    /// Downloads (if needed) without loading. FluidAudio compiles the models for this Mac as
-    /// the last step, reported as `.compiling`.
+    /// Downloads (if needed) without loading, from the current `source`. From Hugging Face or a
+    /// mirror, FluidAudio compiles the models for this Mac as the last step, reported as
+    /// `.compiling`; a folder install is a copy (compiled on first load).
     public static func download(_ id: String, progress: @escaping @Sendable (Stage) -> Void) async throws {
-        guard let v = version(for: id) else { throw SpeechEngineError.unknownModel(id) }
+        guard let v = version(for: id), let files = sourceFiles(for: id) else { throw SpeechEngineError.unknownModel(id) }
         if isInstalled(id) { return }
-        try await AsrModels.download(version: v) { p in
-            switch p.phase {
-            case .compiling: progress(.compiling)
-            default: progress(.downloading(p.fractionCompleted))
-            }
+        if let problem = currentProblem.withLock({ $0 }) { throw problem }
+        let source = self.source
+        if case .folder = source {
+            try await installFromFolder(source, version: v, files: files, progress: progress)
+            return
         }
+        do {
+            try await AsrModels.download(version: v) { p in
+                switch p.phase {
+                case .compiling: progress(.compiling)
+                default: progress(.downloading(p.fractionCompleted))
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ModelSourceError.downloadFailed(location: source.location(of: files.repo), reason: ModelSourceProbe.describe(error))
+        }
+    }
+
+    // MARK: Source
+
+    /// The FluidAudio repository of a model and the files `AsrModels.modelsExist` checks for.
+    public struct SourceFiles: Sendable, Equatable {
+        /// `FluidInference/parakeet-tdt-0.6b-v3-coreml`
+        public var repo: String
+        public var revision: String
+        public var required: [String]
+    }
+
+    public static func sourceFiles(for id: String) -> SourceFiles? {
+        guard let v = version(for: id) else { return nil }
+        let names = ModelNames.ASR.self
+        let repo: Repo
+        let models: Set<String>
+        switch v {
+        case .v3: repo = .parakeetV3; models = names.requiredModelsV3(precision: .int8)
+        case .ultra: repo = .parakeetUltra; models = names.requiredModelsV3()
+        case .v2: repo = .parakeetV2; models = names.requiredModels
+        default: return nil
+        }
+        return SourceFiles(repo: repo.remotePath, revision: repo.revision, required: models.sorted() + [names.vocabularyFile])
+    }
+
+    private static let currentSource = Mutex<ModelSource>(.huggingFace)
+    /// Why the configured text isn't a source (a hand-edited file); downloads fail with it.
+    private static let currentProblem = Mutex<ModelSourceError?>(nil)
+
+    /// Where downloads come from. Set it before the first download and whenever the setting
+    /// changes; a download in progress keeps the source it started with.
+    public static var source: ModelSource { currentSource.withLock { $0 } }
+
+    /// Points FluidAudio's registry at Hugging Face or the mirror (for a folder, downloads
+    /// don't use it).
+    public static func setSource(_ source: ModelSource) {
+        currentSource.withLock { $0 = source }
+        if case .mirror(let url) = source {
+            ModelRegistry.baseURL = url.absoluteString
+        } else {
+            // FluidAudio's own default, which honours REGISTRY_URL / MODEL_REGISTRY_URL.
+            let env = ProcessInfo.processInfo.environment
+            ModelRegistry.baseURL = env["REGISTRY_URL"] ?? env["MODEL_REGISTRY_URL"] ?? ModelSource.huggingFaceURL.absoluteString
+        }
+        speechLog.info("Model source: \(source.displayName, privacy: .public)")
+    }
+
+    /// The settings value. An invalid one (settings keep it so the error shows) makes downloads
+    /// fail with the reason rather than quietly use Hugging Face.
+    public static func setSource(text: String) {
+        do {
+            setSource(try ModelSource.parse(text))
+            currentProblem.withLock { $0 = nil }
+        } catch {
+            setSource(.huggingFace)
+            currentProblem.withLock { $0 = error }
+            speechLog.error("Model source: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// The Test button: can `text` serve each of `ids`? Nothing is downloaded.
+    public static func check(_ text: String, models ids: [String]) async -> ModelSourceCheck {
+        let source: ModelSource
+        do { source = try ModelSource.parse(text) } catch { return ModelSourceCheck(ok: false, message: error.localizedDescription) }
+        var found: [String] = []
+        for id in ids {
+            guard let files = sourceFiles(for: id) else { continue }
+            let result = await ModelSourceProbe.check(source, repo: files.repo, revision: files.revision, requiredFiles: files.required)
+            guard result.ok else { return result }
+            found.append(result.message)
+        }
+        return ModelSourceCheck(ok: true, message: found.joined(separator: " "))
+    }
+
+    /// Copies `{folder}/{repo}` into FluidAudio's cache off the calling thread, reporting the copy
+    /// as `.downloading`, and keeps it only if FluidAudio finds every file it loads.
+    private static func installFromFolder(_ source: ModelSource, version v: AsrModelVersion, files: SourceFiles,
+                                          progress: @escaping @Sendable (Stage) -> Void) async throws {
+        guard let from = source.repoDirectory(files.repo) else { throw ModelSourceError.folderMissing(path: source.displayName) }
+        let destination = AsrModels.defaultCacheDirectory(for: v)
+        progress(.downloading(0))
+        try await Task.detached(priority: .userInitiated) {
+            try ModelFolderInstaller.install(from: from, to: destination, required: files.required, progress: { progress(.downloading($0)) }) { dir in
+                AsrModels.modelsExist(at: dir, version: v) ? [] : ModelFolderInstaller.missingFiles(in: dir, required: files.required)
+            }
+        }.value
+        speechLog.info("Installed \(files.repo, privacy: .public) from \(from.path(percentEncoded: false), privacy: .public)")
     }
 
     /// Removes a model's files. Only ever deletes inside FluidAudio's model cache.

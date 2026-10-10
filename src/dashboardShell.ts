@@ -1,4 +1,5 @@
-// Window material, local appearance preference and the shared rail tooltip.
+// Window material, local appearance preference and the shared tooltip (the
+// sidebar update row names its full state there).
 // Navigation stays in home.ts so every route follows the same lifecycle.
 import "./dashboardShell.css";
 

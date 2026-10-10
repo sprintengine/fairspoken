@@ -1,4 +1,5 @@
 import FairspokenHost
+import FairspokenSpeech
 import Foundation
 import FairspokenCore
 
@@ -23,10 +24,12 @@ nonisolated enum HeadlessServer {
                 if HostEnvironment.value("TOKEN", in: ServerInfo.environment) != nil { toSave.token = "" }
                 if HostEnvironment.value("PAIRING_PASSWORD", in: ServerInfo.environment)?.isEmpty == false { toSave.pairingPassword = "" }
                 if HostEnvironment.value("NAME", in: ServerInfo.environment) != nil { toSave.displayName = "" }
+                if HostEnvironment.modelSource(in: ServerInfo.environment) != nil { toSave.modelSource = "" }
                 try HostConfigurationStore.save(toSave, to: url)
                 say("Created \(url.path)\(toSave.token.isEmpty ? "" : " with a new token (shown in the app under Connect)")")
             }
             config = resolved
+            ParakeetModels.setSource(text: config.modelSource)
         } catch {
             say("error: \(error.localizedDescription)")
             return 78 // EX_CONFIG
@@ -42,7 +45,8 @@ nonisolated enum HeadlessServer {
         say("\(ServerInfo.displayName) \(ServerInfo.version) listening on http://\(config.bindAddress):\(host.boundPort)"
             + " · \(config.workerCount) worker(s) · \(config.workerModels.joined(separator: ", "))"
             + (host.runtime.authToken == nil ? " · no token (every client is allowed)" : " · token required")
-            + " · \"\(host.runtime.displayName)\" pairing " + (host.runtime.pairingEnabled ? "on" : "off"))
+            + " · \"\(host.runtime.displayName)\" pairing " + (host.runtime.pairingEnabled ? "on" : "off")
+            + " · models from \(ParakeetModels.source.displayName)")
         let sleepGuard = SleepGuard()
         if config.preventSleep { sleepGuard.hold(reason: "\(ServerInfo.displayName) is serving transcription requests") }
 

@@ -46,6 +46,27 @@
   --crystal-shadow-control: 0 1px 2px rgba(16, 24, 32, 0.06);
   --crystal-shadow-chip: 0 1px 3px rgba(16, 24, 32, 0.12);
   --crystal-shadow-track: inset 0 0 0 1px rgba(16, 24, 32, 0.04);
+  /* Flat fills for what sits inside glass (glass can't sit on glass): a
+     grouped settings card, a field or keycap, and a bordered push button. */
+  --crystal-well: rgba(16, 24, 32, 0.045);
+  --crystal-well-strong: rgba(16, 24, 32, 0.075);
+  /* The sidebar: a lighter pane over the backdrop, its selected row a
+     neutral grey pill, as in a native macOS source list. */
+  --crystal-sidebar: rgba(255, 255, 255, 0.55);
+  --crystal-sidebar-edge: rgba(16, 24, 32, 0.07);
+  --crystal-selection: rgba(16, 24, 32, 0.085);
+  /* A brushed band across the backdrop. */
+  --crystal-band: rgba(255, 255, 255, 0.35);
+  /* Glass cards and the Settings tab strip: a pale frost with a bright rim. */
+  --crystal-glass: rgba(255, 255, 255, 0.5);
+  --crystal-glass-strong: rgba(255, 255, 255, 0.8);
+  --crystal-glass-edge: rgba(16, 24, 32, 0.06);
+  /* The brand mark: a silver tile with a facet of light. */
+  --crystal-mark-top: #ffffff;
+  --crystal-mark-bottom: #cccccc;
+  --crystal-mark-sheen: rgba(255, 255, 255, 0.7);
+  --crystal-mark-edge: rgba(16, 24, 32, 0.12);
+  --crystal-mark-shadow: rgba(0, 0, 0, 0.1);
 
   --sem-color-text-default: #2b3238;
   --sem-color-text-on-accent: #ffffff;
@@ -68,8 +89,8 @@
 }
 
 [data-mode="dark"] {
-  --crystal-page: #0d0f12;
-  --crystal-page-sheen: #1b1f24;
+  --crystal-page: #121417;
+  --crystal-page-sheen: #1f2328;
   --crystal-surface: rgba(255, 255, 255, 0.055);
   --crystal-surface-strong: rgba(255, 255, 255, 0.09);
   --crystal-edge: rgba(255, 255, 255, 0.1);
@@ -96,6 +117,21 @@
   --crystal-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.25);
   --crystal-shadow-chip: 0 1px 3px rgba(0, 0, 0, 0.35);
   --crystal-shadow-track: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --crystal-well: rgba(255, 255, 255, 0.05);
+  --crystal-well-strong: rgba(255, 255, 255, 0.085);
+  --crystal-sidebar: rgba(24, 30, 32, 0.5);
+  --crystal-sidebar-edge: rgba(255, 255, 255, 0.08);
+  --crystal-selection: rgba(255, 255, 255, 0.13);
+  --crystal-band: rgba(255, 255, 255, 0.025);
+  /* Dark glass deepens what is behind it; the rim carries the edge. */
+  --crystal-glass: rgba(0, 0, 0, 0.12);
+  --crystal-glass-strong: rgba(0, 0, 0, 0.18);
+  --crystal-glass-edge: rgba(255, 255, 255, 0.1);
+  --crystal-mark-top: #4d4d4d;
+  --crystal-mark-bottom: #242424;
+  --crystal-mark-sheen: rgba(255, 255, 255, 0.16);
+  --crystal-mark-edge: rgba(255, 255, 255, 0.2);
+  --crystal-mark-shadow: rgba(0, 0, 0, 0.35);
 
   --sem-color-text-default: #cdd3d8;
   --sem-color-text-on-accent: #0b1a12;
@@ -124,11 +160,17 @@
     --crystal-surface: #f8f9fa;
     --crystal-surface-strong: #ffffff;
     --crystal-surface-overlay: #ffffff;
+    --crystal-sidebar: #f3f4f6;
+    --crystal-glass: #f8f9fa;
+    --crystal-glass-strong: #ffffff;
   }
   [data-mode="dark"] {
     --crystal-surface: #181b1f;
     --crystal-surface-strong: #20242a;
     --crystal-surface-overlay: #20242a;
+    --crystal-sidebar: #15181b;
+    --crystal-glass: #15181b;
+    --crystal-glass-strong: #101215;
   }
 }
 
@@ -138,10 +180,14 @@
 [data-mode] {
   --crystal-glass-filter: blur(24px) saturate(160%);
   --crystal-backdrop:
-    radial-gradient(70% 60% at 0% 0%, var(--crystal-wash), transparent 70%),
-    linear-gradient(180deg, var(--crystal-page-sheen) 0%, var(--crystal-page) 62%);
+    radial-gradient(60% 70% at 8% 0%, var(--crystal-wash), transparent 70%),
+    linear-gradient(135deg, transparent 25%, var(--crystal-band) 55%, transparent 85%),
+    linear-gradient(180deg, var(--crystal-page-sheen) 0%, var(--crystal-page) 100%);
+  /* Radii: 20 for glass cards, 12 for grouped rows, fields and wells, 6 for
+     push buttons and popups (macOS bezels). */
   --crystal-radius-card: 20px;
   --crystal-radius-field: 12px;
+  --crystal-radius-control: 6px;
   /* A switch thumb stays white on both the track and the accent, in both modes. */
   --crystal-thumb: #ffffff;
 

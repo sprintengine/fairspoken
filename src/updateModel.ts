@@ -37,6 +37,9 @@ export interface ButtonView {
   action: ButtonAction;
   /** Tooltip and accessible name: always the state and the versions. */
   label: string;
+  /** The sidebar row's two visible lines: what is happening, then which build. */
+  title: string;
+  detail: string;
 }
 
 export function channelName(channel: Channel): string {
@@ -59,21 +62,28 @@ export function downloadFraction(status: UpdateStatus): number | null {
   return Math.max(0, Math.min(1, status.downloaded / status.total));
 }
 
+/** The build a pending update installs, for the sidebar row's second line. */
+function offerDetail(status: UpdateStatus & { version: string; switchToStable: boolean }): string {
+  return status.switchToStable ? `Stable ${status.version}` : `${APP_NAME} ${status.version}`;
+}
+
 export function buttonView(status: UpdateStatus): ButtonView {
   const current = `${APP_NAME} ${status.currentVersion} (${channelName(status.channel)})`;
+  const build = `${status.currentVersion} · ${channelName(status.channel)}`;
   const base = { badge: null, progress: null, disabled: false } as const;
   switch (status.state) {
     case "disabled":
-      return { ...base, kind: "hidden", icon: "sync", disabled: true, action: null, label: "Development builds don't update themselves" };
+      return { ...base, kind: "hidden", icon: "sync", disabled: true, action: null, label: "Development builds don't update themselves", title: "Check for updates", detail: build };
     case "idle":
-      return { ...base, kind: "idle", icon: "sync", action: "check", label: `Check for updates — ${current}` };
+      return { ...base, kind: "idle", icon: "sync", action: "check", label: `Check for updates — ${current}`, title: "Check for updates", detail: build };
     case "upToDate":
-      return { ...base, kind: "idle", icon: "sync", action: "check", label: `Up to date: ${current} — click to check again` };
+      return { ...base, kind: "idle", icon: "sync", action: "check", label: `Up to date: ${current} — click to check again`, title: "Up to date", detail: build };
     case "checking":
-      return { ...base, kind: "checking", icon: "sync", disabled: true, action: null, label: `Checking for updates — ${current}` };
+      return { ...base, kind: "checking", icon: "sync", disabled: true, action: null, label: `Checking for updates — ${current}`, title: "Checking…", detail: build };
     case "available":
       return {
         ...base, kind: "available", icon: "download", badge: "count", action: "install",
+        title: "Update available", detail: offerDetail(status),
         label: status.switchToStable
           ? `Switch to stable ${status.version} — click to install`
           : `Update available: ${offerName(status)} — click to install`,
@@ -83,17 +93,19 @@ export function buttonView(status: UpdateStatus): ButtonView {
       const label = installing(status)
         ? `Installing ${offerName(status)}…`
         : `Downloading ${offerName(status)}${fraction === null ? "…" : ` — ${Math.floor(fraction * 100)}%`}`;
-      return { ...base, kind: "downloading", icon: "download", progress: fraction, disabled: true, action: null, label };
+      const title = installing(status) ? "Installing…" : `Downloading…${fraction === null ? "" : ` ${Math.floor(fraction * 100)}%`}`;
+      return { ...base, kind: "downloading", icon: "download", progress: fraction, disabled: true, action: null, label, title, detail: offerDetail(status) };
     }
     case "ready":
       return {
         ...base, kind: "ready", icon: "restart", badge: "dot", action: "restart",
+        title: "Restart to update", detail: offerDetail(status),
         label: status.switchToStable
           ? `Stable ${status.version} is installed — click to restart and switch`
           : `${offerName(status)} is installed — click to restart`,
       };
     case "failed":
-      return { ...base, kind: "error", icon: "sync", badge: "warning", action: "check", label: `Update check failed: ${status.message} — click to retry` };
+      return { ...base, kind: "error", icon: "sync", badge: "warning", action: "check", label: `Update check failed: ${status.message} — click to retry`, title: "Update check failed", detail: status.message };
   }
 }
 

@@ -1,5 +1,6 @@
 import AppKit
 import FairspokenHost
+import FairspokenSpeech
 import Foundation
 import FairspokenCore
 import Observation
@@ -103,6 +104,16 @@ final class ServerController {
         } catch {
             configIssue = error.localizedDescription
         }
+        applyModelSource()
+    }
+
+    /// `FAIRSPOKEN_MODEL_SOURCE`, which wins over the saved model source for this run.
+    var modelSourceFromEnvironment: String? { HostEnvironment.modelSource(in: ServerInfo.environment) }
+
+    /// Points downloads at the model source in effect: the environment's, else the saved one.
+    private func applyModelSource() {
+        guard !presenting else { return }
+        ParakeetModels.setSource(text: modelSourceFromEnvironment ?? configuration.modelSource)
     }
 
     /// Replaces an unreadable config file with defaults (and a new token).
@@ -140,6 +151,7 @@ final class ServerController {
             }
             runState = .running
             applySleepGuard()
+            applyModelSource()
             Self.log.info("Serving on \(config.bindAddr, privacy: .public)")
         } catch {
             runState = .failed(error.localizedDescription)
@@ -211,6 +223,8 @@ final class ServerController {
                 || running.bindAddress != next.bindAddress || running.port != next.port || running.token != next.token
         } ?? false
         configuration = next
+        // The next download uses it; nothing restarts.
+        applyModelSource()
         if needsRestart {
             await restart()
             return .restarted
@@ -239,6 +253,7 @@ final class ServerController {
         guard HostConfiguration.workerCountRange.contains(c.workerCount) else { return "Use 1 to 8 workers." }
         guard HostConfiguration.queueCapacityRange.contains(c.queueCapacity) else { return "The queue holds 1 to 64 jobs." }
         if HostConfiguration.pairingPasswordProblem(c.pairingPassword) != nil { return pairingPasswordHint }
+        if let problem = ModelSource.problem(c.modelSource) { return problem }
         return nil
     }
 
@@ -464,6 +479,8 @@ final class ServerController {
     @ObservationIgnored private var presenting = false
     /// Screenshot mode: Configuration opens with Advanced expanded.
     @ObservationIgnored var revealAdvanced = false
+    /// Screenshot mode: Configuration opens scrolled to the model source.
+    @ObservationIgnored var revealModelSource = false
 
     /// Screenshot mode: the demo simulator, a sample configuration and sample addresses,
     /// shown as serving. Nothing is bound and nothing is written to the real config file.
@@ -482,6 +499,12 @@ final class ServerController {
         runState = .running
         source = .demo
         restartFeed()
+    }
+
+    /// Screenshot mode: a sample model source (never saved or applied).
+    func presentSampleModelSource(_ value: String) {
+        guard presenting else { return }
+        configuration.modelSource = value
     }
 
     /// Screenshot mode: shows Connect as "This Mac only" on a Mac without Tailscale (or back).
