@@ -33,6 +33,8 @@ nonisolated final class FluidAudioBackend: HostSpeechBackend {
         try await ParakeetModels.download(model) { stage in
             switch stage {
             case .downloading(let fraction): progress(.downloading, max(1, min(95, Int(fraction * 95))))
+            // A model from a download link: unpacked, copied into place and checked.
+            case .unpacking: progress(.validating, 97)
             case .compiling: progress(.validating, 96)
             default: break
             }

@@ -1,6 +1,5 @@
 import FairspokenCore
 import FairspokenHost
-import FairspokenSpeech
 import FairspokenUI
 import FairspokenUpdates
 import SwiftUI
@@ -36,7 +35,6 @@ struct ConfigurationView: View {
                 Form {
                     server
                     workers
-                    modelSource
                     limits
                     thisMac
                     // Applies at once, like This Mac; Save and Revert are for the host's file only.
@@ -48,14 +46,10 @@ struct ConfigurationView: View {
                 .frame(maxWidth: 820, alignment: .leading)
                 .padding(.horizontal, 12)
                 .task {
-                    // Screenshot mode: show the Advanced rows, or the model source.
-                    guard controller.revealAdvanced || controller.revealModelSource else { return }
+                    // Screenshot mode: show the Advanced rows.
+                    guard controller.revealAdvanced else { return }
                     try? await Task.sleep(for: .milliseconds(300))
-                    if controller.revealModelSource {
-                        proxy.scrollTo("model-source", anchor: .center)
-                    } else {
-                        proxy.scrollTo("advanced-end", anchor: .bottom)
-                    }
+                    proxy.scrollTo("advanced-end", anchor: .bottom)
                 }
             }
             HStack(spacing: 12) {
@@ -99,7 +93,8 @@ struct ConfigurationView: View {
             if draft.token == old.token { draft.token = next.token }
             if draft.bindAddress == old.bindAddress { draft.bindAddress = next.bindAddress }
             if draft.port == old.port { draft.port = next.port }
-            if draft.modelSource == old.modelSource { draft.modelSource = next.modelSource }
+            // Links are edited on the Models page only.
+            draft.modelLinks = next.modelLinks
         }
     }
 
@@ -153,34 +148,6 @@ struct ConfigurationView: View {
         } footer: {
             Text("Each worker transcribes one dictation at a time. Workers on the same model share it in memory.")
                 .font(.caption).foregroundStyle(Crystal.ink2)
-        }
-    }
-
-    private var modelSource: some View {
-        let fromEnvironment = controller.modelSourceFromEnvironment
-        return Section {
-            LabeledContent("Model source") {
-                ModelSourceField(text: $draft.modelSource,
-                                 commit: { ModelSource.problem($0) },
-                                 test: { text in
-                                     var ids: [String] = []
-                                     for id in draft.workerModels where !ids.contains(id) { ids.append(id) }
-                                     return await ParakeetModels.check(text, models: ids)
-                                 })
-                    .disabled(fromEnvironment != nil)
-            }
-            .id("model-source")
-        } header: {
-            Text("Downloads")
-        } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("A Hugging Face–compatible mirror URL, or a folder with the model files. Leave empty to use Hugging Face.")
-                if let fromEnvironment {
-                    Text("\(HostEnvironment.modelSourceVariable) sets it for this run: \(fromEnvironment)")
-                        .foregroundStyle(Crystal.warn)
-                }
-            }
-            .font(.caption).foregroundStyle(Crystal.ink2)
         }
     }
 

@@ -24,12 +24,14 @@ nonisolated enum HeadlessServer {
                 if HostEnvironment.value("TOKEN", in: ServerInfo.environment) != nil { toSave.token = "" }
                 if HostEnvironment.value("PAIRING_PASSWORD", in: ServerInfo.environment)?.isEmpty == false { toSave.pairingPassword = "" }
                 if HostEnvironment.value("NAME", in: ServerInfo.environment) != nil { toSave.displayName = "" }
-                if HostEnvironment.modelSource(in: ServerInfo.environment) != nil { toSave.modelSource = "" }
+                if ServerInfo.environment[HostEnvironment.modelLinksVariable]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    toSave.modelLinks = [:]
+                }
                 try HostConfigurationStore.save(toSave, to: url)
                 say("Created \(url.path)\(toSave.token.isEmpty ? "" : " with a new token (shown in the app under Connect)")")
             }
             config = resolved
-            ParakeetModels.setSource(text: config.modelSource)
+            ParakeetModels.setLinks(config.modelLinks)
         } catch {
             say("error: \(error.localizedDescription)")
             return 78 // EX_CONFIG
@@ -45,8 +47,7 @@ nonisolated enum HeadlessServer {
         say("\(ServerInfo.displayName) \(ServerInfo.version) listening on http://\(config.bindAddress):\(host.boundPort)"
             + " · \(config.workerCount) worker(s) · \(config.workerModels.joined(separator: ", "))"
             + (host.runtime.authToken == nil ? " · no token (every client is allowed)" : " · token required")
-            + " · \"\(host.runtime.displayName)\" pairing " + (host.runtime.pairingEnabled ? "on" : "off")
-            + " · models from \(ParakeetModels.source.displayName)")
+            + " · \"\(host.runtime.displayName)\" pairing " + (host.runtime.pairingEnabled ? "on" : "off"))
         let sleepGuard = SleepGuard()
         if config.preventSleep { sleepGuard.hold(reason: "\(ServerInfo.displayName) is serving transcription requests") }
 
@@ -85,6 +86,9 @@ nonisolated enum HeadlessServer {
                     say("job \(j.jobId) failed\(j.worker.map { " on worker \($0 + 1)" } ?? ""): \(j.error)")
                 case .workerState(let w):
                     say("worker \(w.worker + 1): \(w.state)\(w.model.map { " (\($0))" } ?? "")")
+                case .modelDownload(let d) where d.stage == "starting":
+                    // Host and path only: a link's query string may carry a token.
+                    say("downloading \(d.model)" + (ParakeetModels.link(for: d.model).map { " from \(ModelLink.shortDisplay($0))" } ?? ""))
                 case .modelDownload(let d) where d.stage == "ready" || d.stage == "error":
                     say("model \(d.model): \(d.stage)\(d.error.map { " – \($0)" } ?? "")")
                 default:
