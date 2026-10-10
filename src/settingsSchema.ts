@@ -68,6 +68,8 @@ export interface Settings {
   formatAiDetection: boolean;
   superMode: SuperMode;
   superModeModel: string;
+  /** "" for Hugging Face, a mirror's base URL, or a folder (model_source.rs). */
+  modelSource: string;
 }
 
 export type LocalPolishPrompt = "tagged" | "instructed" | "speakoflow";
@@ -147,6 +149,7 @@ export const DEFAULTS: Settings = {
   formatAiDetection: false,
   superMode: "off",
   superModeModel: "small",
+  modelSource: "",
 };
 
 // Category ids match the polish endpoint contract and the Rust setting keys.
@@ -203,7 +206,22 @@ export function normalizeSettings(settings: Partial<Settings>): Settings {
     superModeModel: settings.superModeModel && SUPER_MODE_MODELS.includes(settings.superModeModel)
       ? settings.superModeModel
       : DEFAULTS.superModeModel,
+    modelSource: normalizeModelSource(settings.modelSource ?? DEFAULTS.modelSource),
   };
+}
+
+// Mirror of model_source::normalize_setting: trimmed, and a mirror URL or
+// folder path without trailing slashes (a root keeps its own). The backend
+// validates; this only keeps a saved value and its echo equal.
+export function normalizeModelSource(value: string): string {
+  const trimmed = value.replace(/\0/g, "").trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    const base = trimmed.replace(/\/+$/, "");
+    return /^https?:\/\/[^/]/i.test(base) ? base : trimmed;
+  }
+  if (/^[a-z][a-z0-9+.-]+:/i.test(trimmed)) return trimmed;
+  const folder = trimmed.replace(/[\\/]+$/, "");
+  return folder && !/^[a-z]:$/i.test(folder) ? folder : trimmed;
 }
 
 // Mirror of the Rust normalization: only known categories and tones survive,

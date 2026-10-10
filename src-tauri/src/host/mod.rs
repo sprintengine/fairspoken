@@ -22,7 +22,8 @@ use crate::transcription::TranscriptionService;
 use catalog::{ModelInventory, ModelSnapshot};
 use config::{
     apply_config_update, default_host_config_path, load_persisted_config, overlay_persisted_config,
-    persist_live_config, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig, DEFAULT_HOST_MODEL,
+    persist_live_config, resolve_model_source, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig,
+    DEFAULT_HOST_MODEL, MODEL_SOURCE_ENV,
 };
 #[cfg(test)]
 use config::{parse_bool, parse_worker_models, PersistedHostConfig};
@@ -73,8 +74,8 @@ pub fn run_transcription_host() -> Result<(), String> {
     if command.as_ref().is_ok_and(cli::HostCommand::uses_data_dirs) {
         crate::app_dirs::migrate_legacy_dirs();
     }
-    match command {
-        Ok(cli::HostCommand::Serve) => {}
+    let cli_model_source = match command {
+        Ok(cli::HostCommand::Serve { model_source }) => model_source,
         Ok(command) => {
             let code = cli::run(command)?;
             if code != 0 {
@@ -86,7 +87,7 @@ pub fn run_transcription_host() -> Result<(), String> {
             eprintln!("{message}\n\n{}", cli::USAGE);
             std::process::exit(2);
         }
-    }
+    };
 
     let addr = crate::app_dirs::env_var("FAIRSPOKEN_HOST_ADDR")
         .unwrap_or_else(|| "127.0.0.1:48173".to_string());
@@ -114,6 +115,15 @@ pub fn run_transcription_host() -> Result<(), String> {
     let saved_name = persisted
         .as_ref()
         .and_then(|persisted| persisted.name.clone());
+    let saved_model_source = persisted
+        .as_ref()
+        .and_then(|persisted| persisted.model_source.clone());
+    let (model_source, model_source_origin) = resolve_model_source(
+        cli_model_source.as_deref(),
+        crate::app_dirs::env_var(MODEL_SOURCE_ENV).as_deref(),
+        saved_model_source.as_deref(),
+        &config_path,
+    )?;
     let host_name = resolve_host_name(
         crate::app_dirs::env_var(HOST_NAME_ENV),
         saved_name.as_deref(),
@@ -125,7 +135,8 @@ pub fn run_transcription_host() -> Result<(), String> {
     let server = bind_server(&addr)?;
     println!("Fairspoken transcription host {SERVER_VERSION} listening on http://{addr}");
 
-    let models = ModelService::default();
+    println!("Models download from {model_source} ({model_source_origin})");
+    let models = ModelService::default().with_source(model_source);
     let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
     let runtime = Arc::new(HostRuntime::start(
         models.clone(),
@@ -136,6 +147,7 @@ pub fn run_transcription_host() -> Result<(), String> {
     runtime.live.set_update_prefs(update_prefs);
     runtime.live.set_auth(auth);
     runtime.live.set_name(host_name, saved_name);
+    runtime.live.set_saved_model_source(saved_model_source);
     if generated_token {
         // Pairing hands out the token, so it must survive a restart.
         persist_live_config(&runtime.config_path, &runtime.live)
@@ -554,6 +566,7 @@ mod tests {
                 pairing_password: None,
                 name: None,
                 super_mode: None,
+                model_source: None,
             },
         );
         assert_eq!(config.max_active_streams, 32);

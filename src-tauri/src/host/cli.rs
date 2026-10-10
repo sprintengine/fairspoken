@@ -21,6 +21,12 @@ Runs the Fairspoken transcription host (configured with FAIRSPOKEN_HOST_*
 environment variables; see README.md and PROTOCOL.md).
 
 Options:
+  --model-source <URL|FOLDER>     Download models from this Hugging Face
+                                  mirror, or copy them from this folder,
+                                  instead of huggingface.co (overrides
+                                  FAIRSPOKEN_MODEL_SOURCE and the config
+                                  file's modelSource; see
+                                  docs/model-sources.md)
   --version                       Print the version and exit
   --check-update [--channel C]    Check for an update; exit 0 when up to date,
                                   10 when an update is available
@@ -37,7 +43,10 @@ Options:
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum HostCommand {
-    Serve,
+    /// Serve, with `--model-source` when given.
+    Serve {
+        model_source: Option<String>,
+    },
     Version,
     Help,
     CheckUpdate {
@@ -80,6 +89,7 @@ pub(super) fn parse_args(args: &[String]) -> Result<HostCommand, String> {
     let mut channel = None;
     let mut set_channel = None;
     let mut yes = false;
+    let mut model_source = None;
     let mut iter = args.iter().map(String::as_str);
     while let Some(arg) = iter.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -112,6 +122,12 @@ pub(super) fn parse_args(args: &[String]) -> Result<HostCommand, String> {
             }
             "--clear-pairing-password" => set_action(&mut action, "--clear-pairing-password")?,
             "--yes" | "-y" => yes = true,
+            "--model-source" => {
+                let value = inline.or_else(|| iter.next()).ok_or_else(|| {
+                    "--model-source needs a mirror URL or a folder".to_string()
+                })?;
+                model_source = Some(value.to_string());
+            }
             other => return Err(format!("Unknown option: {other}")),
         }
     }
@@ -121,8 +137,11 @@ pub(super) fn parse_args(args: &[String]) -> Result<HostCommand, String> {
     if yes && action != Some("--update") {
         return Err("--yes only goes with --update".to_string());
     }
+    if model_source.is_some() && action.is_some() {
+        return Err("--model-source only goes with serving, without other options".to_string());
+    }
     Ok(match action {
-        None => HostCommand::Serve,
+        None => HostCommand::Serve { model_source },
         Some("--version") => HostCommand::Version,
         Some("--help") => HostCommand::Help,
         Some("--check-update") => HostCommand::CheckUpdate { channel },
@@ -138,7 +157,7 @@ pub(super) fn parse_args(args: &[String]) -> Result<HostCommand, String> {
 /// Runs a non-serving command and returns the process exit status.
 pub(super) fn run(command: HostCommand) -> Result<i32, String> {
     match command {
-        HostCommand::Serve => Ok(0),
+        HostCommand::Serve { .. } => Ok(0),
         HostCommand::Version => {
             println!("transcription-host {SERVER_VERSION}");
             Ok(0)
@@ -371,7 +390,26 @@ mod tests {
 
     #[test]
     fn parses_every_command() {
-        assert_eq!(parse(&[]), Ok(HostCommand::Serve));
+        assert_eq!(parse(&[]), Ok(HostCommand::Serve { model_source: None }));
+        assert_eq!(
+            parse(&["--model-source", "https://mirror.example"]),
+            Ok(HostCommand::Serve {
+                model_source: Some("https://mirror.example".into())
+            })
+        );
+        assert_eq!(
+            parse(&["--model-source=/srv/models"]),
+            Ok(HostCommand::Serve {
+                model_source: Some("/srv/models".into())
+            })
+        );
+        // An explicit empty value chooses Hugging Face over the env and file.
+        assert_eq!(
+            parse(&["--model-source="]),
+            Ok(HostCommand::Serve {
+                model_source: Some(String::new())
+            })
+        );
         assert_eq!(parse(&["--version"]), Ok(HostCommand::Version));
         assert_eq!(parse(&["-h"]), Ok(HostCommand::Help));
         assert_eq!(
@@ -415,6 +453,7 @@ mod tests {
         }
         for args in [
             &[][..],
+            &["--model-source", "/srv/models"],
             &["--check-update"],
             &["--update"],
             &["--set-update-channel", "stable"],
@@ -436,6 +475,8 @@ mod tests {
         assert!(parse(&["--update", "--channel"]).is_err());
         assert!(parse(&["--set-pairing-password=hunter22"]).is_err());
         assert!(parse(&["--set-pairing-password", "--clear-pairing-password"]).is_err());
+        assert!(parse(&["--model-source"]).is_err());
+        assert!(parse(&["--update", "--model-source", "https://mirror.example"]).is_err());
     }
 
     #[test]

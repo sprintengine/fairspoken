@@ -67,6 +67,9 @@ npm run tauri build    # produce an installer in src-tauri/target/release/bundle
 ```
 
 The first launch downloads the Parakeet model (~2.5 GB) into the model cache.
+Models come from Hugging Face; where huggingface.co is blocked, point every
+Fairspoken app at a Hugging Face mirror or a folder of model files with the
+model source setting: see [Model sources](docs/model-sources.md).
 
 Smaller Parakeet-only build (excludes the Whisper engine):
 
@@ -109,6 +112,10 @@ FAIRSPOKEN_HOST_QUEUE_CAPACITY=8
 FAIRSPOKEN_HOST_MAX_ACTIVE_STREAMS=4
 FAIRSPOKEN_HOST_MAX_RECORDING_SECONDS=600
 ```
+
+The host downloads models from Hugging Face unless `--model-source`,
+`FAIRSPOKEN_MODEL_SOURCE` or `modelSource` in its config file names a mirror
+or a folder; see [Model sources](docs/model-sources.md#the-transcription-host).
 
 In the app's settings, set **Transcription location** to **Remote host** and
 enter the host URL and token. The client streams mono PCM while you record and

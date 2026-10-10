@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import "./modelDashboard.css";
 import { createPublisherIcon } from "./publisherIcons";
 
-type Settings = { model: string; transcriptionLocation: string; polishEnabled: boolean; polishProvider: "local" | "cloud"; polishModel: string; cloudAuthToken: string; [key: string]: unknown };
+type Settings = { model: string; transcriptionLocation: string; polishEnabled: boolean; polishProvider: "local" | "cloud"; polishModel: string; cloudAuthToken: string; modelSource?: string; [key: string]: unknown };
 type Model = { id: string; name: string; publisher: string; description: string; bytes: number; installed: boolean; selected: boolean; loaded: boolean; source: string; downloads: number | null; supported: boolean };
 type Download = { model: string; stage: string; downloaded: number; total: number; message: string };
 type Catalog = { polish: Model[]; download: Download | null; metadataError: string | null };
@@ -235,8 +235,8 @@ async function load(refresh = false): Promise<void> {
     if (!refresh && previous) {
       for (const model of catalog.polish) model.downloads = previous.polish.find(m => m.id === model.id)?.downloads ?? model.downloads;
     }
-    download = catalog.download; render();
-    if (refresh) say(catalog.metadataError ?? "Compatible model information refreshed from Hugging Face.", !!catalog.metadataError);
+    download = catalog.download; render(); applyHubSearchAvailability();
+    if (refresh) say(catalog.metadataError ?? (hubSearchAvailable() ? "Compatible model information refreshed from Hugging Face." : "Model information refreshed."), !!catalog.metadataError);
   } finally {
     loading = false;
     if (reloadRequested) {
@@ -294,6 +294,17 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let searchHits: SearchHit[] = [];
 let activeHit = 0;
 let popoverOpen = false;
+// With a model source set (Settings → Transcription → Advanced) the
+// organisation hosts its own models and usually cannot reach the Hub, so the
+// search covers this device only.
+function hubSearchAvailable(): boolean { return !settings?.modelSource?.trim(); }
+function applyHubSearchAvailability(): void {
+  const label = hubSearchAvailable() ? "Search models on this device and Hugging Face" : "Search models on this device";
+  if (searchInput.placeholder === label) return;
+  searchInput.placeholder = label;
+  searchInput.setAttribute("aria-label", `${label.replace("Search models", "Search speech models")}.`);
+  if (searchInput.value.trim()) scheduleSearch();
+}
 function supportedVariant(id: string): { family: string; model?: string } | null {
   const parakeet = /^(?:nvidia\/parakeet-tdt-0\.6b-(v[23])|istupakov\/parakeet-tdt-0\.6b-(v[23])-onnx)$/.exec(id);
   if (parakeet) {
@@ -456,6 +467,11 @@ function scheduleSearch(): void {
     return;
   }
   const local = localHits(query);
+  if (!hubSearchAvailable()) {
+    searchStatus.textContent = local.length ? "" : "No models on this device match that search.";
+    if (document.activeElement === searchInput) renderPopover(local, [], local.length ? null : searchStatus.textContent);
+    return;
+  }
   searchStatus.textContent = "Waiting to search…";
   if (document.activeElement === searchInput) renderPopover(local, [], local.length ? null : "Waiting to search…");
   searchTimer = setTimeout(() => { void searchHub(query, revision, localHits(query)); }, 350);
@@ -485,7 +501,7 @@ searchInput.addEventListener("keydown", event => {
     event.preventDefault();
     const hit = searchHits[activeHit];
     if (popoverOpen && hit) jumpTo(hit);
-    else { clearTimeout(searchTimer); void searchHub(searchInput.value.trim(), ++searchRevision, localHits(searchInput.value.trim())); }
+    else if (hubSearchAvailable()) { clearTimeout(searchTimer); void searchHub(searchInput.value.trim(), ++searchRevision, localHits(searchInput.value.trim())); }
   }
 });
 document.addEventListener("pointerdown", event => {

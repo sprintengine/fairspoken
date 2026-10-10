@@ -25,6 +25,7 @@ mod insertion;
 mod live_preview;
 mod local_models;
 mod machine;
+mod model_source;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
@@ -325,6 +326,13 @@ fn save_settings_locked(
         }
     }
 
+    // Only a newly entered model source is checked, so one stored by hand
+    // (or by a newer build) never blocks saving unrelated changes; it fails
+    // where models are fetched instead, with the same message.
+    if model_source::normalize_setting(&settings.model_source) != current_settings.model_source {
+        model_source::ModelSource::parse(&settings.model_source)?;
+    }
+
     if services
         .audio
         .lock()
@@ -480,11 +488,12 @@ async fn get_local_model_catalog(
 #[tauri::command]
 async fn download_local_model(app: AppHandle, model: String) -> Result<(), String> {
     local_models::spec(&model)?;
+    let source = configured_model_source(&app.state::<AppServices>())?;
     app.state::<AppServices>().local_models.begin_download()?;
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<AppServices>()
             .local_models
-            .download(&app, &model)
+            .download(&app, &model, &source)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -538,6 +547,38 @@ fn get_dictation_models(services: State<'_, AppServices>) -> Vec<ModelStatus> {
             message: String::new(),
         })
         .collect()
+}
+
+/// The saved model source (`Settings::model_source`), parsed.
+fn configured_model_source(services: &AppServices) -> Result<model_source::ModelSource, String> {
+    model_source::ModelSource::parse(&services.settings_snapshot()?.model_source)
+}
+
+/// Settings → Transcription → Model source → Test: whether `source` (as
+/// typed, not yet saved) can serve the first file of `model` (the selected
+/// model when absent). Returns where the file was found; the error says what
+/// failed and where.
+#[tauri::command]
+async fn test_model_source(
+    app: AppHandle,
+    source: String,
+    model: Option<SttModel>,
+) -> Result<String, String> {
+    run_blocking(app, move |_, services| {
+        let parsed = model_source::ModelSource::parse(&source)?;
+        let model = match model {
+            Some(model) => model,
+            None => services.settings_snapshot()?.model,
+        };
+        let file = services.models.first_file(model);
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|err| err.to_string())?;
+        parsed.check(&client, &file)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -701,7 +742,16 @@ fn begin_prepare_transcription_model(
     let settings = services.settings_snapshot()?;
     let model = request.model.unwrap_or(settings.model);
     let model_id = model.model_id().to_string();
-    let models = services.models.clone();
+    let source = match model_source::ModelSource::parse(&settings.model_source) {
+        Ok(source) => source,
+        Err(err) => {
+            services
+                .model_prepare_running
+                .store(false, Ordering::SeqCst);
+            return Err(err);
+        }
+    };
+    let models = services.models.clone().with_source(source);
     let running = Arc::clone(&services.model_prepare_running);
 
     thread::Builder::new()
@@ -3039,6 +3089,7 @@ pub fn run() {
             get_local_model_catalog,
             get_dictation_models,
             search_hugging_face_models,
+            test_model_source,
             set_cursor_preview_size,
             download_local_model,
             cancel_local_model_download,
