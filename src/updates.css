@@ -1,22 +1,41 @@
 @import "./design-system/badge.css";
 @import "./design-system/toast.css";
 
-/* ── Sidebar update button ──────────────────────────────────────────────
-   One rail button, six states (data-state): idle, checking, available,
-   downloading, ready, error. The icon says what a click does; the badge says
-   there is news; the ring says how far a download is. */
-.sidebar .update-button { position: relative; }
-.sidebar .update-button[hidden] { display: none; }
-.update-button .update-icon { display: none; }
+/* ── Sidebar update row ──────────────────────────────────────────────────
+   One row under the status card, six states (data-state): idle, checking,
+   available, downloading, ready, error. The round glyph says what a click
+   does, the badge says there is news and the ring says how far a download
+   is; the two lines beside it name the state and the build. */
+.update-button {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 2px 4px; border: 0; border-radius: var(--sem-radius-control);
+  background: transparent; color: var(--sem-color-text-primary);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.update-button[hidden] { display: none; }
+.update-button:disabled { cursor: default; }
+.update-button:focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
+.update-glyph {
+  position: relative; display: grid; place-items: center; flex: none;
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 1px solid var(--sem-color-border-subtle);
+  background: var(--sem-color-bg-hover);
+  color: var(--sem-color-text-default);
+}
+.update-button:hover:not(:disabled) .update-glyph { background: var(--sem-color-bg-active); }
+.update-icon { display: none; width: 18px; height: 18px; }
 .update-button[data-icon="sync"] .update-icon--sync,
 .update-button[data-icon="download"] .update-icon--download,
 .update-button[data-icon="restart"] .update-icon--restart { display: block; }
-.sidebar .update-button:disabled { cursor: default; opacity: 1; }
-.sidebar .update-button:disabled:hover { background: transparent; color: var(--sem-color-text-muted); }
+.update-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.update-title { font-weight: var(--sem-font-weight-medium); }
+.update-detail { color: var(--sem-color-text-muted); font-size: var(--sem-font-size-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* News reads in the accent: an update to take, or one to restart into. */
-.sidebar .update-button[data-state="available"],
-.sidebar .update-button[data-state="ready"] { color: var(--sem-color-accent-primary); }
+.update-button[data-state="available"] .update-glyph,
+.update-button[data-state="ready"] .update-glyph { color: var(--sem-color-accent-primary); }
+.update-button[data-state="available"] .update-title,
+.update-button[data-state="ready"] .update-title { font-weight: var(--sem-font-weight-emphasis); }
 
 .update-button[data-state="checking"] .update-icon--sync {
   animation: update-spin 1s linear infinite;
@@ -24,11 +43,10 @@
 }
 @keyframes update-spin { to { transform: rotate(360deg); } }
 
-/* Progress ring: the full button, drawn around the shrunken download icon. */
-.update-ring { display: none; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; transform: rotate(-90deg); }
-.sidebar .update-button .update-ring { width: 100%; height: 100%; }
+/* Progress ring: around the glyph, drawn over its edge. */
+.update-ring { display: none; position: absolute; inset: -1px; width: calc(100% + 2px); height: calc(100% + 2px); pointer-events: none; transform: rotate(-90deg); }
 .update-button[data-state="downloading"] .update-ring { display: block; }
-.sidebar .update-button[data-state="downloading"] .update-icon { width: var(--sem-icon-size-sm); height: var(--sem-icon-size-sm); }
+.update-button[data-state="downloading"] .update-icon { width: 15px; height: 15px; }
 .update-ring circle { fill: none; stroke-width: 2.5; }
 .update-ring-track { stroke: var(--sem-color-border-default); }
 .update-ring-fill {
@@ -50,8 +68,8 @@
 .update-button[data-badge="warning"] .update-dot {
   display: block;
   position: absolute;
-  top: var(--sem-space-xs);
-  right: var(--sem-space-xs);
+  top: 0;
+  right: 0;
   width: var(--sem-space-sm);
   height: var(--sem-space-sm);
   border-radius: 50%;
@@ -60,16 +78,12 @@
 }
 .update-button[data-badge="warning"] .update-dot { background: var(--sem-color-status-warn); }
 
-/* The Settings rail glyph wears a dot while an update waits for the user. */
-.sidebar .nav-item[data-screen="settings"] { position: relative; }
+/* The Settings place wears a dot while an update waits for the user. */
 .nav-badge {
-  position: absolute;
-  top: var(--sem-space-xs);
-  right: var(--sem-space-xs);
-  width: var(--sem-space-sm);
-  height: var(--sem-space-sm);
+  width: 7px;
+  height: 7px;
+  flex: none;
   border-radius: 50%;
-  border: 1px solid var(--sem-color-bg-app);
   background: var(--sem-color-accent-primary);
   pointer-events: none;
 }
@@ -82,7 +96,6 @@
 }
 
 /* ── Settings → Updates ─────────────────────────────────────────────── */
-.settings-nav-badge { margin-left: auto; }
 .update-channel-chip {
   display: inline-block;
   margin-left: var(--sem-space-2xs);

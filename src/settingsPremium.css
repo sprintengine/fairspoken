@@ -2,16 +2,7 @@
 
 /* Product composition around shared Section/Field and CardButton contracts.
    Group boundaries describe related controls; individual rows remain flat. */
-.content:has(> #screen-settings.active) { display: flex; padding: 0; overflow: hidden; }
-#screen-settings.active { flex: 1; min-width: 0; min-height: 0; }
-.settings-workspace { display: grid; height: 100%; min-height: 0; }
-.settings-navigation { display: flex; flex-direction: column; border-right: 1px solid var(--sem-color-border-subtle); }
-.settings-navigation button { display: flex; align-items: center; justify-content: flex-start; gap: var(--sem-space-sm); width: 100%; border: 0; background: transparent; font: var(--sem-font-weight-medium) var(--sem-font-size-body)/var(--sem-font-line-default) var(--sem-font-family-ui); text-align: left; cursor: pointer; }
-.settings-navigation button svg { width: var(--sem-icon-size-sm); height: var(--sem-icon-size-sm); flex: none; }
-.settings-navigation button:focus-visible, .appearance-card:focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
-.settings-content { min-width: 0; min-height: 0; overflow: auto; }
-.settings-content .settings-form { width: 100%; }
-.settings-page[hidden] { display: none; }
+.appearance-card:focus-visible { outline: var(--sem-focus-ring); outline-offset: var(--sem-focus-ring-offset); }
 /* The list card is the app's group surface, not a Settings-only chrome. Home,
    Notes, Models and Profile reuse the same section label + card + hairline
    rows so a catalogue of things does not invent a second product. */
@@ -50,12 +41,6 @@
 .preview-main::before { content: ""; width: 55%; height: var(--sem-space-xs); border-radius: var(--sem-radius-chip); background: var(--sem-color-text-muted); }
 .preview-main::after { content: ""; width: 85%; height: 35%; border-block: var(--sem-space-2xs) solid var(--sem-color-bg-selected); background: var(--sem-color-bg-hover); }
 .appearance-label { padding-bottom: var(--sem-space-2xs); }
-/* Keep the settings sidebar visible even at the minimum window size. */
-@media (max-width: 999px) {
-  .settings-workspace { grid-template-columns: calc(var(--sem-size-control-lg) * 4 + var(--sem-space-xl)) minmax(0, 1fr); }
-  .settings-navigation { padding-inline: var(--sem-space-sm); }
-  .settings-content { padding: var(--sem-space-xl); }
-}
 @media (max-width: 700px) {
   .settings-card .row { grid-template-columns: minmax(0, 1fr); gap: var(--sem-space-lg); }
   .settings-card .row-control { justify-content: flex-start; flex-wrap: wrap; }

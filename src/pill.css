@@ -175,7 +175,14 @@ body[data-pill="transcribing"] .pill::after {
   background: var(--ready);
 }
 
-body[data-pill="recording"] .status-dot { background: var(--live); }
+/* Recording: the live dot wears a soft halo, as in the native pill. */
+body[data-pill="recording"] .status-dot {
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
+  background: var(--live);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 28%, transparent);
+}
 body[data-pill="error"] .status-dot { background: var(--error); }
 body[data-pill="starting"] .status-dot { background: var(--text-muted); }
 body[data-pill="transcribing"] .status-dot { background: var(--text-secondary); }
@@ -187,6 +194,7 @@ body[data-pill="transcribing"] .status-dot { background: var(--text-secondary); 
 
 .pill-label {
   color: var(--text-primary);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -249,6 +257,11 @@ body[data-pill="error"] .pill-hint {
   transform-origin: center;
   will-change: transform;
 }
+
+/* While recording the level reads in the live red, quieter at the edges. */
+body[data-pill="recording"] .wave span { background: var(--live); opacity: 0.85; }
+body[data-pill="recording"] .wave span:nth-child(1),
+body[data-pill="recording"] .wave span:nth-child(5) { opacity: 0.55; }
 
 .wave span:nth-child(1) { height: 9px; }
 .wave span:nth-child(2) { height: 16px; }

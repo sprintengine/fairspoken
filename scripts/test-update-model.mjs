@@ -50,6 +50,18 @@ const status = (state, extra = {}) => ({ ...base, state, ...extra });
   assert.equal(buttonView(status("disabled")).kind, "hidden");
 }
 
+// The sidebar row's visible title and detail lines.
+{
+  const lines = (view) => [view.title, view.detail];
+  assert.deepEqual(lines(buttonView(status("idle"))), ["Check for updates", "0.3.0 · Stable"]);
+  assert.deepEqual(lines(buttonView(status("checking"))), ["Checking…", "0.3.0 · Stable"]);
+  assert.deepEqual(lines(buttonView(status("available", { version: "0.3.1", switchToStable: false }))), ["Update available", "Fairspoken 0.3.1"]);
+  assert.deepEqual(lines(buttonView(status("downloading", { version: "0.3.1", switchToStable: false, downloaded: 42, total: 100 }))), ["Downloading… 42%", "Fairspoken 0.3.1"]);
+  assert.equal(buttonView(status("downloading", { version: "0.3.1", switchToStable: false, downloaded: 100, total: 100 })).title, "Installing…");
+  assert.deepEqual(lines(buttonView(status("ready", { version: "0.3.1", switchToStable: true }))), ["Restart to update", "Stable 0.3.1"]);
+  assert.deepEqual(lines(buttonView(status("failed", { message: "offline" }))), ["Update check failed", "offline"]);
+}
+
 // Nightly → stable is labelled as a switch, everywhere it is named.
 {
   const nightly = { currentVersion: "0.4.0-nightly.20261005.4", buildChannel: "nightly", channel: "stable" };
