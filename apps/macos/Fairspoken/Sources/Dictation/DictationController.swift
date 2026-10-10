@@ -110,14 +110,15 @@ final class DictationController {
         }
 
         let s = settings.settings
-        let options = TranscriptionRequestOptions(language: s.language, vocabularyHints: s.vocabularyHints)
+        let hints = VocabularyPacks.hints(userTerms: s.vocabularyHints, enabledPacks: s.enabledPacks)
+        let options = TranscriptionRequestOptions(language: s.language, vocabularyHints: hints)
         let newSession: any TranscriptionSession
         if s.transcriptionLocation == .remoteHost {
             do {
                 let base = try RemoteURLPolicy.validateBaseURL(s.remoteUrl)
                 newSession = RemoteStreamSession(
                     baseURL: base,
-                    options: .init(token: settings.remoteToken, model: s.model, language: s.language, vocabularyHints: s.vocabularyHints),
+                    options: .init(token: settings.remoteToken, model: s.model, language: s.language, vocabularyHints: hints),
                     timeoutSeconds: s.remoteTimeoutSeconds)
                 placement = .remoteHost
             } catch {

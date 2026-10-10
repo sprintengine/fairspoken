@@ -89,6 +89,10 @@ final class ScreenshotHarness {
         await freshFrame()
         if let window = windows.dashboard { await capture(window, as: "settings-host-\(suffix)") }
         model.settings.update { $0.transcriptionLocation = location }
+        model.settingsTab = .vocabulary
+        try? await Task.sleep(for: .milliseconds(800))
+        await freshFrame()
+        if let window = windows.dashboard { await capture(window, as: "settings-vocabulary-\(suffix)") }
         windows.dashboard?.orderOut(nil)
     }
 

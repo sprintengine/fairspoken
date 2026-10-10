@@ -59,6 +59,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var inputGain = 2
     public var postProcess = true
     public var vocabularyHints: [String] = []
+    /// Bundled vocabulary packs the user turned on, by id (`VocabularyPacks`).
+    public var enabledPacks: [String] = []
     public var transcriptCorrections: [TranscriptCorrection] = []
     public var snippets: [Snippet] = []
     public var alwaysOnTop = true
@@ -100,6 +102,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         inputGain = c.lenientInt(.inputGain) ?? d.inputGain
         postProcess = c.lenient(Bool.self, .postProcess) ?? d.postProcess
         vocabularyHints = c.lenient([String].self, .vocabularyHints) ?? d.vocabularyHints
+        enabledPacks = c.lenient([String].self, .enabledPacks) ?? d.enabledPacks
         transcriptCorrections = c.lenient([TranscriptCorrection].self, .transcriptCorrections) ?? d.transcriptCorrections
         snippets = c.lenient([Snippet].self, .snippets) ?? d.snippets
         alwaysOnTop = c.lenient(Bool.self, .alwaysOnTop) ?? d.alwaysOnTop
@@ -132,6 +135,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         while s.remoteUrl.hasSuffix("/") { s.remoteUrl.removeLast() }
         s.cloudAuthToken = s.cloudAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         s.vocabularyHints = Self.normalizeVocabulary(s.vocabularyHints)
+        s.enabledPacks = VocabularyPacks.normalizeEnabled(s.enabledPacks)
         if s.recordingShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.recordingShortcut = AcceleratorString.defaultRecording }
         if s.transcriptStackShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.transcriptStackShortcut = AcceleratorString.defaultTranscriptStack }
         // Unknown ids (e.g. Whisper models from the Tauri app) fall back to the default, as in Rust.

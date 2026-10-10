@@ -515,7 +515,29 @@ private struct VocabularySettings: View {
                 Text("Your spelling is applied to every dictation and sent to your host as hints.")
                     .font(.caption).foregroundStyle(Crystal.ink3)
             }
+            Section {
+                ForEach(VocabularyPacks.all) { pack in
+                    Toggle(isOn: packBinding(pack.id)) {
+                        Text(pack.name)
+                        Text(pack.description)
+                    }
+                }
+            } header: {
+                Text("Packs")
+            } footer: {
+                Text("A pack's key terms are sent to your host after yours, up to 50 in all. They don't count toward your 50.")
+                    .font(.caption).foregroundStyle(Crystal.ink3)
+            }
         }
+    }
+
+    private func packBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { model.settings.settings.enabledPacks.contains(id) }, set: { on in
+            model.settings.update { s in
+                s.enabledPacks.removeAll { $0 == id }
+                if on { s.enabledPacks.append(id) }
+            }
+        })
     }
 
     private func add() {
