@@ -44,6 +44,8 @@ final class AppModel {
 
     init() {
         settings = SettingsStore()
+        // Before anything can download.
+        ParakeetModels.setSource(text: settings.settings.modelSource)
         history = HistoryStore()
         permissions = Permissions()
         models = ModelLibrary()
@@ -90,6 +92,22 @@ final class AppModel {
         } else {
             hotkeys.setFnEnabled(false)
         }
+    }
+
+    /// Saves the model source and points downloads at it; a model that failed to download is
+    /// tried again from the new source. Returns why `text` can't be a source, or nil.
+    @discardableResult
+    func setModelSource(_ text: String) -> String? {
+        let value: String
+        do { value = try ModelSource.normalize(text) } catch { return error.localizedDescription }
+        guard value != settings.settings.modelSource else { return nil }
+        settings.update { $0.modelSource = value }
+        ParakeetModels.setSource(text: value)
+        models.clearDownloadErrors()
+        if case .failed = models.engineState, settings.settings.transcriptionLocation == .local {
+            models.prepare(settings.settings.model)
+        }
+        return nil
     }
 
     /// Keep `recordingShortcut` in settings.json meaningful for the shared schema.

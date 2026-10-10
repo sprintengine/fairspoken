@@ -64,6 +64,15 @@ final class ServerScreenshotHarness {
                 try? await Task.sleep(for: .milliseconds(900))
                 if let window = delegate.mainWindow { capture(window, as: "configuration-advanced-\(name)") }
                 controller.revealAdvanced = false
+                // Configuration scrolled to Downloads, with a sample mirror.
+                controller.presentSampleModelSource("https://artifactory.example.org/artifactory/api/huggingfaceml/huggingface")
+                controller.revealModelSource = true
+                delegate.showWindow(.configuration)
+                await freshFrame()
+                try? await Task.sleep(for: .milliseconds(900))
+                if let window = delegate.mainWindow { capture(window, as: "configuration-model-source-\(name)") }
+                controller.revealModelSource = false
+                controller.presentSampleModelSource("")
             }
             NSApp.terminate(nil)
         }

@@ -79,6 +79,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var polishModel = "speakoflow-mini"
     public var polishTones: [String: String] = [:]
     public var contextAwareness = false
+    /// Where models download from: `""` Hugging Face, an http(s) mirror URL, or a folder
+    /// (`ModelSource`). Shared with the Tauri app.
+    public var modelSource = ""
 
     // Mac-only (ignored by the Rust app).
     /// Put the previous clipboard back after pasting the dictation.
@@ -121,6 +124,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         polishModel = c.lenient(String.self, .polishModel) ?? d.polishModel
         polishTones = c.lenient([String: String].self, .polishTones) ?? d.polishTones
         contextAwareness = c.lenient(Bool.self, .contextAwareness) ?? d.contextAwareness
+        modelSource = c.lenient(String.self, .modelSource) ?? d.modelSource
         restoreClipboard = c.lenient(Bool.self, .restoreClipboard) ?? d.restoreClipboard
         self = normalized()
     }
@@ -138,6 +142,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         s.enabledPacks = VocabularyPacks.normalizeEnabled(s.enabledPacks)
         if s.recordingShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.recordingShortcut = AcceleratorString.defaultRecording }
         if s.transcriptStackShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.transcriptStackShortcut = AcceleratorString.defaultTranscriptStack }
+        // Trimmed, without trailing slashes; a value that can't be a source is kept (trimmed) so
+        // the download reports why, as in the Tauri app.
+        s.modelSource = ModelSource.normalizeSetting(s.modelSource)
         // Unknown ids (e.g. Whisper models from the Tauri app) fall back to the default, as in Rust.
         if SpeechModelCatalog.model(id: s.model) == nil { s.model = SpeechModelCatalog.defaultModelID }
         return s
