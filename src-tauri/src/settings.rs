@@ -1,6 +1,6 @@
 use crate::models::{SttModel, WhisperModel};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -272,11 +272,12 @@ pub struct Settings {
         deserialize_with = "super_mode_model_or_default"
     )]
     pub super_mode_model: WhisperModel,
-    /// Where speech and polish models are downloaded from: empty for
-    /// Hugging Face, a Hugging Face–compatible mirror's base URL, or a folder
-    /// holding the files (`model_source`). Shared with the Swift apps.
-    #[serde(default)]
-    pub model_source: String,
+    /// Download links by model id (`model_link`), set from the Models
+    /// screen: a model with one installs from it instead of its usual
+    /// download. Values are kept as saved (trimmed) so a bad one fails, with
+    /// its reason, when that model downloads.
+    #[serde(default, deserialize_with = "or_default")]
+    pub model_links: BTreeMap<String, String>,
 }
 
 /// Who wrote a dictionary entry. Learned entries come from the edit watcher
@@ -383,13 +384,22 @@ impl Default for Settings {
             format_ai_detection: false,
             super_mode: SuperModeSetting::Off,
             super_mode_model: default_super_mode_model(),
-            model_source: String::new(),
+            model_links: BTreeMap::new(),
         }
     }
 }
 
 const POLISH_TONE_CATEGORIES: &[&str] = &["messaging", "email", "docs", "code", "other"];
 const POLISH_TONE_VALUES: &[&str] = &["default", "casual", "formal", "off"];
+
+/// Trimmed ids and links, without empty ones.
+fn normalize_model_links(links: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    links
+        .into_iter()
+        .map(|(model, link)| (model.trim().to_string(), link.replace('\0', "").trim().to_string()))
+        .filter(|(model, link)| !model.is_empty() && !link.is_empty())
+        .collect()
+}
 
 fn normalize_polish_tones(tones: HashMap<String, String>) -> HashMap<String, String> {
     tones
@@ -523,7 +533,7 @@ fn normalize(settings: Settings) -> Settings {
         ),
         enabled_packs: normalize_enabled_packs(settings.enabled_packs),
         polish_local_model_path: settings.polish_local_model_path.trim().to_string(),
-        model_source: crate::model_source::normalize_setting(&settings.model_source),
+        model_links: normalize_model_links(settings.model_links),
         polish_local_adapters: {
             let mut paths: Vec<String> = Vec::new();
             for path in settings.polish_local_adapters.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
@@ -751,31 +761,41 @@ mod tests {
 
 
     #[test]
-    fn model_source_defaults_to_hugging_face_and_round_trips() {
-        assert_eq!(Settings::default().model_source, "");
-        let old: Settings = serde_json::from_value(serde_json::json!({ "language": "de" })).unwrap();
-        assert_eq!(old.model_source, "");
+    fn model_links_round_trip_and_an_old_model_source_is_ignored() {
+        assert!(Settings::default().model_links.is_empty());
         assert_eq!(
-            serde_json::to_value(Settings::default()).unwrap()["modelSource"],
-            serde_json::json!("")
+            serde_json::to_value(Settings::default()).unwrap()["modelLinks"],
+            serde_json::json!({})
         );
 
-        let path = std::env::temp_dir().join(format!("settings-model-source-{}.json", uuid::Uuid::new_v4()));
-        let mut service = SettingsService { current: Settings::default(), path: path.clone() };
-        service
-            .save(Settings { model_source: "  https://mirror.example/hf/  ".into(), ..Settings::default() })
-            .unwrap();
-        assert_eq!(service.current().model_source, "https://mirror.example/hf");
+        let path = std::env::temp_dir().join(format!("settings-model-links-{}.json", uuid::Uuid::new_v4()));
+        // A file from the build with a global model source loads, keeping
+        // everything else, and the old key is gone after the next save.
+        fs::write(
+            &path,
+            r#"{"language":"de","modelSource":"https://mirror.example/hf","modelLinks":{" parakeet-ultra ":" https://files.example/ultra.zip?token=t ","large-v3":"  "}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path);
+        assert_eq!(loaded.language, "de");
+        assert_eq!(
+            loaded.model_links,
+            BTreeMap::from([("parakeet-ultra".to_string(), "https://files.example/ultra.zip?token=t".to_string())])
+        );
+        let mut service = SettingsService { current: loaded, path: path.clone() };
+        let mut next = service.current();
+        next.model_links.insert("parakeet-tdt-0.6b-v3".into(), r"\\server\share\v3.zip".into());
+        service.save(next).unwrap();
         let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(stored["modelSource"], "https://mirror.example/hf");
-        assert_eq!(load(&path).model_source, "https://mirror.example/hf");
+        assert!(stored.get("modelSource").is_none());
+        assert_eq!(stored["modelLinks"]["parakeet-tdt-0.6b-v3"], r"\\server\share\v3.zip");
+        assert_eq!(load(&path).model_links, service.current().model_links);
 
-        // A folder is stored as typed, trimmed.
-        let folder = std::env::temp_dir().join("models").display().to_string();
-        service
-            .save(Settings { model_source: format!(" {folder}\n"), ..Settings::default() })
-            .unwrap();
-        assert_eq!(load(&path).model_source, folder);
+        // A malformed value reads as no links rather than failing the file.
+        fs::write(&path, r#"{"language":"fr","modelLinks":["oops"]}"#).unwrap();
+        let loaded = load(&path);
+        assert_eq!(loaded.language, "fr");
+        assert!(loaded.model_links.is_empty());
         fs::remove_file(path).unwrap();
     }
 

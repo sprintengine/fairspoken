@@ -138,8 +138,9 @@ first four fields are the Rust host's file (`PersistedHostConfig`), so either ho
   queue capacity, address, port and token restart the server when saved in the window.
 - `bindAddress`: `127.0.0.1` (default, this Mac only; pair with `tailscale serve --bg 48173` to reach
   it on your tailnet over HTTPS), `0.0.0.0` (every network), or one address (e.g. the Tailscale IP).
-- `modelSource` (left out when empty): where models download from; see *Model source* below.
-  `FAIRSPOKEN_MODEL_SOURCE` overrides it for a run. An invalid value stops the server with the reason.
+- `modelLinks` (left out when empty): a download link per model id; see *Model download links* below.
+  `FAIRSPOKEN_MODEL_LINKS` (whitespace-separated `id=link` pairs) sets links for a run over the file's;
+  an unknown id, a pair that isn't `id=link` or an invalid link (in either) stops the server with the reason.
 - Environment variables (headless and testing; the same names as the Rust host):
   `FAIRSPOKEN_HOST_CONFIG_PATH`, and for this run `FAIRSPOKEN_HOST_ADDR`, `FAIRSPOKEN_HOST_TOKEN`,
   `FAIRSPOKEN_HOST_PAIRING_PASSWORD`, `FAIRSPOKEN_HOST_NAME`, `FAIRSPOKEN_HOST_WORKERS`, `FAIRSPOKEN_HOST_QUEUE_CAPACITY`; `FAIRSPOKEN_HOST_MODEL`,
@@ -168,24 +169,35 @@ connection button and a status line such as "Using host: practice-mini.local:481
 (one `GET /v1/health` when Settings or Home opens, or on Test; no background polling). Monitoring a
 host is Fairspoken Server's job (or the web dashboard at the host's `/`); the client has no Server view.
 
-## Model source
+## Model download links
 
-For networks that block huggingface.co: Fairspoken › Settings › Transcription › This Mac › **Model source**,
-and Fairspoken Server › Configuration › Downloads. Saved as `modelSource` (settings.json, shared with the
-Tauri app; host-config.json for the server). Parsing and checks live in `FairspokenCore/ModelSource.swift`.
+For networks that can't reach the standard model download: each card on Fairspoken › **Models** and
+Fairspoken Server › **Models** has **Download from Link…** while the model isn't downloaded. Give it a
+link to an archive of the model (or Choose File… on this Mac or a mounted share); it is saved for that
+model and the download starts, with progress and any error on the card. A card with a saved link shows
+"Downloads from host/path" and **Use Standard Download**, which removes it. Every download of that
+model (Models, first-run loading, the server's Download and `POST /v1/models/download`) uses the link.
 
-- Empty: Hugging Face.
-- `http://` or `https://`: a Hugging Face–compatible mirror (Artifactory/Nexus Hugging Face remote,
-  hf-mirror, Olah). FluidAudio fetches `{base}/{repo}/resolve/{revision}/{file}` and lists files with
-  `{base}/api/models/{repo}/tree/{revision}`, so the mirror must serve both. Plain `http://` works only
-  to local-network names and addresses (App Transport Security); use `https://` otherwise.
-- An absolute path, `~/…` or `file://`: a folder (local or a mounted share) holding
-  `{folder}/FluidInference/<repo>/…`, as `hf download FluidInference/<repo> --local-dir {folder}/FluidInference/<repo>`
-  writes it (`parakeet-tdt-0.6b-v3-coreml`, `parakeet-ultra-coreml`). Installing copies the bundles
-  FluidAudio loads plus the top-level files into its cache, then checks them; an incomplete copy is removed.
-
-Other schemes, credentials in the URL and relative paths are refused. **Test** checks the source can
-serve the selected model (or each worker's model) without downloading it.
+- Saved as `modelLinks` (`{"parakeet-tdt-0.6b-v3": "https://…"}`) in the client's settings.json and the
+  server's host-config.json. The Tauri app's `modelLinks` (ONNX models) is never imported.
+- A link is `http://` or `https://` (query strings kept, `#fragment` dropped, `user:password@` refused;
+  plain `http://` only on the local network, App Transport Security), or an absolute path, `~/…` or
+  `file://` URL of an archive file; at most 2048 characters. Messages and logs show `scheme://host/path`,
+  never the query string.
+- The archive: zip, tar or tar.gz, told apart by content, not name. It is unpacked with `/usr/bin/ditto`
+  or `/usr/bin/tar` in a temporary folder; entries outside it (absolute, `..`, links pointing out),
+  more than 8 GiB or more than 10,000 entries are refused. The model's folder is the shallowest one
+  (the archive's root included) holding its Core ML bundles and `parakeet_vocab.json`
+  (`Preprocessor.mlmodelc`, `Encoder.mlmodelc`, `Decoder.mlmodelc`, `JointDecision.mlmodelc` or
+  `JointDecisionv3.mlmodelc`), so `scripts/models/make-model-bundle.sh <id> mac <out.zip>`'s layout
+  (files at the root) and one nested a folder or more down both work. Those bundles and the other
+  top-level files are copied into FluidAudio's cache through a staging folder and checked with
+  `AsrModels.modelsExist`; the temporary files are removed either way.
+- Parsing, format detection, unpacking and the install live in `FairspokenCore` (`ModelLink.swift`,
+  `ModelArchive.swift`, `ModelLinkInstaller.swift`); `ParakeetModels` in `FairspokenSpeech` supplies
+  the file list, destination and check. An opt-in test installs a real archive into a temporary folder
+  and loads it: `FAIRSPOKEN_REAL_MODEL_LINK=<link or path> FAIRSPOKEN_REAL_MODEL_LOAD=1 swift test` in
+  `Packages/FairspokenSpeech`.
 
 ## Updates
 

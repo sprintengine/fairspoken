@@ -1,5 +1,5 @@
 //! Curated, pinned local cleanup models and a private managed llama.cpp runtime.
-use crate::model_source::{self, HubFile, ModelSource, Opened};
+use crate::model_link::{self, ModelLink};
 use crate::polish::{PolishDecision, PolishOutcome, PolishTargetApp};
 use crate::polish_adapters::{self, AdapterRequest, ValidAdapter};
 use crate::polish_input::{Format, Layout, Tone};
@@ -371,26 +371,13 @@ impl LocalModels {
         });
         let client = crate::polish::shared_client().ok();
         let mut metadata_error = None;
-        // Download counts come from the source's Hub API: Hugging Face's, or
-        // a mirror's at the same path. A folder has none, so none are shown.
-        let source = ModelSource::parse(&settings.model_source);
         let polish = MODELS.iter().map(|m| {
-            let api = match &source {
-                Ok(source) => source.model_api_url(m.repo),
-                Err(err) => {
-                    if refresh { metadata_error = Some(err.clone()); }
-                    None
-                }
-            };
-            let downloads = match api.filter(|_| refresh) {
-                Some(api) => {
-                    let result = client.ok_or_else(|| "Hub client unavailable".to_string()).and_then(|c| {
-                        c.get(api).timeout(Duration::from_secs(8)).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()).map_err(|e| e.to_string())
-                    });
-                    match result { Ok(v) => v["downloads"].as_u64(), Err(_) => { metadata_error = Some(if source.as_ref().is_ok_and(ModelSource::is_hugging_face) { "Hugging Face is unavailable. Showing the built-in compatible catalog.".into() } else { "Your model source is unavailable. Showing the built-in compatible catalog.".into() }); None } }
-                }
-                None => None,
-            };
+            let downloads = if refresh {
+                let result = client.ok_or_else(|| "Hub client unavailable".to_string()).and_then(|c| {
+                    c.get(format!("https://huggingface.co/api/models/{}", m.repo)).timeout(Duration::from_secs(8)).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()).map_err(|e| e.to_string())
+                });
+                match result { Ok(v) => v["downloads"].as_u64(), Err(_) => { metadata_error = Some("Hugging Face is unavailable. Showing the built-in compatible catalog.".into()); None } }
+            } else { None };
             CatalogModel { id: m.id.into(), name: m.name.into(), publisher: m.publisher.into(), description: m.description.into(), bytes: m.bytes, installed: self.installed(m.id) && self.runtime_executable().is_ok(), selected: settings.polish_enabled && settings.polish_provider == PolishProvider::Local && settings.polish_model == m.id && settings.polish_local_model_path.is_empty(), loaded: loaded.as_deref() == Some(m.id), source: format!("https://huggingface.co/{}", m.repo), downloads, supported: runtime_asset().is_ok() }
         }).collect();
         Catalog {
@@ -430,9 +417,9 @@ impl LocalModels {
         }
         let _ = app.emit("local-model-download", state);
     }
-    /// Downloads the runtime (from its GitHub release, whatever the model
-    /// source) and then the model file from `source`.
-    pub fn download(&self, app: &AppHandle, id: &str, source: &ModelSource) -> Result<(), String> {
+    /// Downloads the runtime and then the model file: from `link` when the
+    /// model has a download link (`model_link`), from Hugging Face otherwise.
+    pub fn download(&self, app: &AppHandle, id: &str, link: Option<&ModelLink>) -> Result<(), String> {
         let result: Result<(), String> = (|| {
             let _artifacts = self.artifacts.lock().map_err(|e| e.to_string())?;
             let m = spec(id)?;
@@ -445,8 +432,7 @@ impl LocalModels {
                     asset.0
                 );
                 download_file(
-                    |client| model_source::open_url(client, &url, asset.0),
-                    asset.0,
+                    &url,
                     &archive,
                     asset.1,
                     asset.2,
@@ -465,17 +451,27 @@ impl LocalModels {
                 let _ = fs::remove_file(archive);
                 self.runtime_executable()?;
             }
-            if !self.installed(id) {
-                let file = HubFile::new(m.repo, m.revision, m.file);
-                let message = format!("{} polish model", source.verb());
+            if let (false, Some(link)) = (self.installed(id), link) {
+                self.install_from_link(m, link, |stage, done, total| {
+                    let (message, total) = match stage {
+                        model_link::Stage::Downloading => (format!("Downloading {}", m.name), total.unwrap_or(0)),
+                        model_link::Stage::Unpacking => (format!("Unpacking {}", m.name), total.unwrap_or(0)),
+                        model_link::Stage::Checking => (format!("Checking {}", m.name), 0),
+                    };
+                    self.progress(app, id, "model", done, total, &message)
+                })?;
+            } else if !self.installed(id) {
+                let url = format!(
+                    "https://huggingface.co/{}/resolve/{}/{}",
+                    m.repo, m.revision, m.file
+                );
                 download_file(
-                    |client| source.open(client, &file),
-                    &format!("{} from {source}", m.file),
+                    &url,
                     &self.model_path(m),
                     m.bytes,
                     m.sha256,
                     &self.download_cancel,
-                    |n| self.progress(app, id, "model", n, m.bytes, &message),
+                    |n| self.progress(app, id, "model", n, m.bytes, "Downloading polish model"),
                 )?;
             }
             check_cancel(&self.download_cancel)?;
@@ -505,6 +501,28 @@ impl LocalModels {
             ),
         }
         result
+    }
+    /// Installs `m`'s GGUF from its download link: a zip or tar holding it,
+    /// or the file itself, checked against its pinned size and SHA-256.
+    fn install_from_link(
+        &self,
+        m: &ModelSpec,
+        link: &ModelLink,
+        progress: impl FnMut(model_link::Stage, u64, Option<u64>),
+    ) -> Result<(), String> {
+        model_link::Install {
+            link,
+            model: m.name,
+            files: &[m.file],
+            dest: &self.root,
+            work_dir: &self.root,
+        }
+        .run(
+            &model_link::client()?,
+            &self.download_cancel,
+            |_, path| polish_file_matches(path, m.bytes, m.sha256),
+            progress,
+        )
     }
     fn runtime_executable(&self) -> Result<PathBuf, String> {
         find_executable(&self.root.join("runtime-b10930")).ok_or_else(|| {
@@ -1576,11 +1594,25 @@ fn install_runtime(archive: &Path, target: &Path) -> Result<(), String> {
     }
     fs::rename(staging, target).map_err(|e| e.to_string())
 }
-/// Fetches what `open` opens into `path`, keeping it only when it is exactly
-/// `bytes` long with the SHA-256 `digest`. `what` names it in that error.
+/// Whether `path` is exactly `bytes` long with the SHA-256 `digest`.
+fn polish_file_matches(path: &Path, bytes: u64, digest: &str) -> Result<bool, String> {
+    if fs::metadata(path).map_err(|e| e.to_string())?.len() != bytes {
+        return Ok(false);
+    }
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>() == digest)
+}
 fn download_file(
-    open: impl FnOnce(&Client) -> Result<Opened, String>,
-    what: &str,
+    url: &str,
     path: &Path,
     bytes: u64,
     digest: &str,
@@ -1595,7 +1627,11 @@ fn download_file(
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| e.to_string())?;
-        let mut response = open(&client)?.reader;
+        let mut response = client
+            .get(url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| format!("Download failed: {e}"))?;
         let mut file = File::create(&partial).map_err(|e| e.to_string())?;
         let mut hash = Sha256::new();
         let mut total = 0;
@@ -1610,7 +1646,7 @@ fn download_file(
             }
             total += n as u64;
             if total > bytes {
-                return Err(format!("{what} is larger than expected. Please retry."));
+                return Err("Download exceeded its expected size".into());
             }
             file.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
             hash.update(&buffer[..n]);
@@ -1628,7 +1664,7 @@ fn download_file(
                 .collect::<String>()
                 != digest
         {
-            return Err(format!("{what} failed its size or checksum check. Please retry."));
+            return Err("Download checksum failed. Please retry.".into());
         }
         file.sync_all().map_err(|e| e.to_string())?;
         drop(file);
@@ -2138,51 +2174,45 @@ mod tests {
             }
         });
         let hash = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
-        let open = |client: &Client| model_source::open_url(client, &url, "model.gguf");
-        assert!(download_file(open, "model.gguf", &path, 5, "wrong", &AtomicBool::new(false), |_| {}).is_err());
+        assert!(download_file(&url, &path, 5, "wrong", &AtomicBool::new(false), |_| {}).is_err());
         assert!(!path.exists());
         assert!(!path.with_extension("partial").exists());
-        assert!(download_file(open, "model.gguf", &path, 6, hash, &AtomicBool::new(false), |_| {}).is_err());
-        download_file(open, "model.gguf", &path, 5, hash, &AtomicBool::new(false), |_| {}).unwrap();
+        assert!(download_file(&url, &path, 6, hash, &AtomicBool::new(false), |_| {}).is_err());
+        download_file(&url, &path, 5, hash, &AtomicBool::new(false), |_| {}).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "hello");
-        assert!(download_file(open, "model.gguf", &path, 5, hash, &AtomicBool::new(true), |_| {}).is_err());
+        assert!(download_file(&url, &path, 5, hash, &AtomicBool::new(true), |_| {}).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "hello");
         worker.join().unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn polish_models_download_from_a_mirror_or_copy_from_a_folder() {
-        let file = HubFile::new("ggml-org/Qwen3.5-0.8B-GGUF", "8fea620810c4afa23dd6443f999a48574c1611a3", "Qwen3.5-0.8B-Q4_0.gguf");
+    fn a_polish_model_installs_from_its_link_only_when_size_and_checksum_match() {
+        use crate::model_link::tests::{serve, zip_bytes};
         let hash = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
-        let models = tempfile::tempdir().unwrap();
-        let path = models.path().join("model.gguf");
-
-        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-        let mirror = ModelSource::parse(&format!("http://{}/", server.server_addr())).unwrap();
-        let worker = std::thread::spawn(move || {
-            let request = server.recv().unwrap();
-            let url = request.url().to_string();
-            request.respond(tiny_http::Response::from_string("hello")).unwrap();
-            url
-        });
-        download_file(|c| mirror.open(c, &file), "model.gguf", &path, 5, hash, &AtomicBool::new(false), |_| {}).unwrap();
-        assert_eq!(
-            worker.join().unwrap(),
-            "/ggml-org/Qwen3.5-0.8B-GGUF/resolve/8fea620810c4afa23dd6443f999a48574c1611a3/Qwen3.5-0.8B-Q4_0.gguf"
-        );
-        fs::remove_file(&path).unwrap();
-
-        let shared = tempfile::tempdir().unwrap();
-        let folder = ModelSource::Folder(shared.path().to_path_buf());
-        let err = download_file(|c| folder.open(c, &file), "model.gguf", &path, 5, hash, &AtomicBool::new(false), |_| {}).unwrap_err();
-        assert!(err.starts_with("Qwen3.5-0.8B-Q4_0.gguf not found in "), "{err}");
-        let repo = shared.path().join("ggml-org").join("Qwen3.5-0.8B-GGUF");
-        fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join("Qwen3.5-0.8B-Q4_0.gguf"), "hello").unwrap();
-        download_file(|c| folder.open(c, &file), "model.gguf", &path, 5, hash, &AtomicBool::new(false), |_| {}).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "hello");
-        assert!(repo.join("Qwen3.5-0.8B-Q4_0.gguf").is_file());
+        let spec = ModelSpec { id: "test", name: "Test GGUF", publisher: "", repo: "", revision: "", file: "test.gguf", bytes: 5, sha256: hash, description: "", prompt: PolishPrompt::Instructed };
+        let root = tempfile::tempdir().unwrap();
+        let models = LocalModels::new(root.path().to_path_buf());
+        let (base, server) = serve(vec![
+            (200, zip_bytes(&[("gguf/test.gguf", b"hello")])),
+            (200, b"hello".to_vec()),
+            (200, b"jello".to_vec()),
+        ]);
+        let link = ModelLink::parse(&format!("{base}/test.zip?sig=1")).unwrap();
+        let mut stages = Vec::new();
+        models.install_from_link(&spec, &link, |stage, _, _| stages.push(stage)).unwrap();
+        assert_eq!(fs::read_to_string(root.path().join("test.gguf")).unwrap(), "hello");
+        assert!(stages.contains(&model_link::Stage::Unpacking));
+        fs::remove_file(root.path().join("test.gguf")).unwrap();
+        // The bare file is fine too.
+        models.install_from_link(&spec, &link, |_, _, _| {}).unwrap();
+        assert_eq!(fs::read_to_string(root.path().join("test.gguf")).unwrap(), "hello");
+        fs::remove_file(root.path().join("test.gguf")).unwrap();
+        let err = models.install_from_link(&spec, &link, |_, _, _| {}).unwrap_err();
+        assert_eq!(err, format!("The download from {base}/test.zip isn't the Test GGUF file: it failed its size or checksum check."));
+        assert!(!root.path().join("test.gguf").exists());
+        server.join().unwrap();
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
     #[test]

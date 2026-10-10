@@ -35,15 +35,16 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
     public var displayName = ""
     /// Hold an IOPM assertion against idle sleep while serving.
     public var preventSleep = true
-    /// Where models download from (`ModelSource`): empty for Hugging Face, an http(s) mirror
-    /// URL, or a folder. `FAIRSPOKEN_MODEL_SOURCE` overrides it for a run.
-    public var modelSource = ""
+    /// Download links for models, by model id: an archive of the model's Core ML files
+    /// (`ModelLink`). A model without one uses the standard download. `FAIRSPOKEN_MODEL_LINKS`
+    /// sets links for a run, over these.
+    public var modelLinks: [String: String] = [:]
 
     public init() {}
 
     enum CodingKeys: String, CodingKey {
         case maxActiveStreams, maxRecordingSeconds, useGpu, workerModels, workerCount, queueCapacity
-        case bindAddress, port, token, pairingPassword, preventSleep, modelSource
+        case bindAddress, port, token, pairingPassword, preventSleep, modelLinks
         case displayName = "name"
     }
 
@@ -62,7 +63,7 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
         pairingPassword = try c.decodeIfPresent(String.self, forKey: .pairingPassword) ?? d.pairingPassword
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? d.displayName
         preventSleep = try c.decodeIfPresent(Bool.self, forKey: .preventSleep) ?? d.preventSleep
-        modelSource = try c.decodeIfPresent(String.self, forKey: .modelSource) ?? d.modelSource
+        modelLinks = try c.decodeIfPresent([String: String].self, forKey: .modelLinks) ?? d.modelLinks
     }
 
     /// The optional fields are left out while unset, so a file without pairing reads the same
@@ -81,7 +82,7 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
         if !pairingPassword.isEmpty { try c.encode(pairingPassword, forKey: .pairingPassword) }
         if !displayName.isEmpty { try c.encode(displayName, forKey: .displayName) }
         try c.encode(preventSleep, forKey: .preventSleep)
-        if !modelSource.isEmpty { try c.encode(modelSource, forKey: .modelSource) }
+        if !modelLinks.isEmpty { try c.encode(modelLinks, forKey: .modelLinks) }
     }
 
     /// Clamps every number into range and fits the model list to the worker count, the way
@@ -97,8 +98,8 @@ public struct HostConfiguration: Codable, Sendable, Equatable {
         c.bindAddress = c.bindAddress.trimmingCharacters(in: .whitespaces)
         if c.bindAddress.isEmpty { c.bindAddress = "127.0.0.1" }
         c.displayName = Self.cleanName(c.displayName) ?? ""
-        // Trimmed, without trailing slashes. An invalid value is kept so `resolve` reports it.
-        c.modelSource = ModelSource.normalizeSetting(c.modelSource)
+        // Trimmed, blank ones dropped. An invalid link is kept so `resolve` reports it.
+        c.modelLinks = ModelLink.normalizeMap(c.modelLinks)
         let valid = c.workerModels.map { knownModels.contains($0) ? $0 : Self.defaultModel }
         if valid.count != c.workerCount {
             c.workerModels = Array(repeating: valid.first ?? Self.defaultModel, count: c.workerCount)
@@ -175,14 +176,31 @@ public enum HostEnvironment {
     static let prefix = "FAIRSPOKEN_HOST_"
     static let legacyPrefix = "MULTIVOICE_HOST_"
 
-    /// The model source for this run, over the config file's (`FAIRSPOKEN_MODEL_SOURCE`, the
-    /// Tauri app's name; there is no legacy spelling).
-    public static let modelSourceVariable = "FAIRSPOKEN_MODEL_SOURCE"
+    /// Model download links for this run, over the config file's: whitespace-separated
+    /// `id=link` pairs (the Rust host's name; there is no legacy spelling).
+    public static let modelLinksVariable = "FAIRSPOKEN_MODEL_LINKS"
 
-    /// `FAIRSPOKEN_MODEL_SOURCE` when set and not blank.
-    public static func modelSource(in environment: [String: String]) -> String? {
-        guard let value = environment[modelSourceVariable], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return value
+    /// The links `FAIRSPOKEN_MODEL_LINKS` sets, normalised; nil when it is unset or blank.
+    /// Throws for a pair that isn't `id=link`, a model id not in `knownModels` (listing the
+    /// valid ones) or a link that isn't one. A link with spaces in its path can't be written
+    /// here (use `%20` in a `file://` URL, or the config file).
+    public static func modelLinks(in environment: [String: String], knownModels: Set<String>) throws(HostConfigurationStore.StoreError) -> [String: String]? {
+        guard let value = environment[modelLinksVariable], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        var links: [String: String] = [:]
+        for pair in value.split(whereSeparator: \.isWhitespace) {
+            guard let equals = pair.firstIndex(of: "="), equals != pair.startIndex else {
+                throw .invalid("\(modelLinksVariable): “\(ModelLink.display(String(pair)))” isn't model-id=link.")
+            }
+            let id = String(pair[..<equals])
+            let link = String(pair[pair.index(after: equals)...])
+            guard knownModels.contains(id) else {
+                throw .invalid("\(modelLinksVariable): unknown model “\(ModelLink.display(id))”. Use one of: \(knownModels.sorted().joined(separator: ", ")).")
+            }
+            do { links[id] = try ModelLink.normalize(link) } catch {
+                throw .invalid("\(modelLinksVariable): \(id): \(error.localizedDescription)")
+            }
+        }
+        return links
     }
 
     /// `FAIRSPOKEN_HOST_<suffix>`, else `MULTIVOICE_HOST_<suffix>`.
@@ -243,7 +261,7 @@ public enum HostConfigurationStore {
     /// edited in the app and through `POST /v1/config`; without one, `FAIRSPOKEN_HOST_*`
     /// variables seed it. Restart-only settings (address, token, pairing password, name,
     /// workers, queue) set in the environment override the file for this run, as they are what
-    /// a LaunchAgent or a test harness passes; so does `FAIRSPOKEN_MODEL_SOURCE`.
+    /// a LaunchAgent or a test harness passes; so do the links in `FAIRSPOKEN_MODEL_LINKS`.
     public static func resolve(file: HostConfiguration?, environment: [String: String], knownModels: Set<String>) throws(StoreError) -> HostConfiguration {
         var config = file ?? HostConfiguration()
         func string(_ suffix: String) -> String? { HostEnvironment.value(suffix, in: environment) }
@@ -263,13 +281,13 @@ public enum HostConfigurationStore {
         } else if HostConfiguration.pairingPasswordProblem(config.pairingPassword) != nil {
             throw .invalid("The host config's pairingPassword must be \(HostConfiguration.pairingPasswordLength.lowerBound) to \(HostConfiguration.pairingPasswordLength.upperBound) characters (fix or delete it)")
         }
-        if let source = HostEnvironment.modelSource(in: environment) {
-            do { config.modelSource = try ModelSource.normalize(source) } catch {
-                throw .invalid("\(HostEnvironment.modelSourceVariable): \(error.localizedDescription)")
+        let environmentLinks = try HostEnvironment.modelLinks(in: environment, knownModels: knownModels) ?? [:]
+        for (id, link) in config.modelLinks.sorted(by: { $0.key < $1.key }) where environmentLinks[id] == nil {
+            if let problem = ModelLink.problem(link) {
+                throw .invalid("The host config's link for \(id) is invalid (fix or delete it): \(problem)")
             }
-        } else if let problem = ModelSource.problem(config.modelSource) {
-            throw .invalid("The host config's modelSource is invalid (fix or delete it): \(problem)")
         }
+        config.modelLinks.merge(environmentLinks) { _, run in run }
         if let workers = int("WORKERS") { config.workerCount = workers.clamped(to: HostConfiguration.workerCountRange) }
         if let queue = int("QUEUE_CAPACITY") { config.queueCapacity = queue }
         if file == nil {

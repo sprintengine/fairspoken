@@ -14,6 +14,8 @@ let speechLog = Logger(subsystem: "ie.fairspoken.speech", category: "engine")
 public enum ParakeetModels {
     public enum Stage: Sendable, Equatable {
         case downloading(Double)
+        /// Unpacking and installing a model downloaded from a link.
+        case unpacking
         case compiling
         case loading
         case warming
@@ -46,16 +48,17 @@ public enum ParakeetModels {
         return (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
-    /// Downloads (if needed) without loading, from the current `source`. From Hugging Face or a
-    /// mirror, FluidAudio compiles the models for this Mac as the last step, reported as
-    /// `.compiling`; a folder install is a copy (compiled on first load).
+    /// Downloads (if needed) without loading. A model with a download link (`setLinks`) is
+    /// fetched from it, unpacked and installed (`.downloading`, then `.unpacking`); otherwise
+    /// FluidAudio downloads it and compiles it for this Mac as the last step (`.compiling`).
     public static func download(_ id: String, progress: @escaping @Sendable (Stage) -> Void) async throws {
-        guard let v = version(for: id), let files = sourceFiles(for: id) else { throw SpeechEngineError.unknownModel(id) }
+        guard let v = version(for: id), let required = requiredFiles(for: id) else { throw SpeechEngineError.unknownModel(id) }
         if isInstalled(id) { return }
-        if let problem = currentProblem.withLock({ $0 }) { throw problem }
-        let source = self.source
-        if case .folder = source {
-            try await installFromFolder(source, version: v, files: files, progress: progress)
+        if let raw = link(for: id) {
+            let link = try ModelLink.parse(raw)
+            try await install(id, from: link, into: AsrModels.defaultCacheDirectory(for: v), required: required, progress: progress) { dir in
+                AsrModels.modelsExist(at: dir, version: v) ? [] : ModelDirectoryInstaller.missingFiles(in: dir, required: required)
+            }
             return
         }
         do {
@@ -68,97 +71,61 @@ public enum ParakeetModels {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw ModelSourceError.downloadFailed(location: source.location(of: files.repo), reason: ModelSourceProbe.describe(error))
+            throw SpeechEngineError.downloadFailed(name(of: id), ModelLinkError.describe(error))
         }
     }
 
-    // MARK: Source
-
-    /// The FluidAudio repository of a model and the files `AsrModels.modelsExist` checks for.
-    public struct SourceFiles: Sendable, Equatable {
-        /// `FluidInference/parakeet-tdt-0.6b-v3-coreml`
-        public var repo: String
-        public var revision: String
-        public var required: [String]
+    /// Installs `id` from `link` into `destination`, reporting the archive download as
+    /// `.downloading` and unpacking and copying as `.unpacking`. `verify` lists what is still
+    /// missing from the installed folder. Public so a check can install into a folder of its own.
+    public static func install(_ id: String, from link: ModelLink, into destination: URL, required: [String],
+                               progress: @escaping @Sendable (Stage) -> Void,
+                               verify: @escaping @Sendable (URL) -> [String]) async throws {
+        speechLog.info("Downloading \(id, privacy: .public) from \(link.display, privacy: .public)")
+        try await ModelLinkInstaller.install(link: link, modelName: name(of: id), required: required, destination: destination,
+                                             progress: { stage in
+                                                 switch stage {
+                                                 case .downloading(let f): progress(.downloading(f))
+                                                 case .unpacking, .installing: progress(.unpacking)
+                                                 }
+                                             }, verify: verify)
+        speechLog.info("Installed \(id, privacy: .public) from \(link.display, privacy: .public)")
     }
 
-    public static func sourceFiles(for id: String) -> SourceFiles? {
+    static func name(of id: String) -> String { SpeechModelCatalog.model(id: id)?.name ?? id }
+
+    // MARK: Links
+
+    /// The Core ML bundles and the vocabulary `AsrModels.modelsExist` checks for: what a model's
+    /// archive must hold.
+    public static func requiredFiles(for id: String) -> [String]? {
         guard let v = version(for: id) else { return nil }
         let names = ModelNames.ASR.self
-        let repo: Repo
         let models: Set<String>
         switch v {
-        case .v3: repo = .parakeetV3; models = names.requiredModelsV3(precision: .int8)
-        case .ultra: repo = .parakeetUltra; models = names.requiredModelsV3()
-        case .v2: repo = .parakeetV2; models = names.requiredModels
+        case .v3: models = names.requiredModelsV3(precision: .int8)
+        case .ultra: models = names.requiredModelsV3()
+        case .v2: models = names.requiredModels
         default: return nil
         }
-        return SourceFiles(repo: repo.remotePath, revision: repo.revision, required: models.sorted() + [names.vocabularyFile])
+        return models.sorted() + [names.vocabularyFile]
     }
 
-    private static let currentSource = Mutex<ModelSource>(.huggingFace)
-    /// Why the configured text isn't a source (a hand-edited file); downloads fail with it.
-    private static let currentProblem = Mutex<ModelSourceError?>(nil)
+    private static let currentLinks = Mutex<[String: String]>([:])
 
-    /// Where downloads come from. Set it before the first download and whenever the setting
-    /// changes; a download in progress keeps the source it started with.
-    public static var source: ModelSource { currentSource.withLock { $0 } }
-
-    /// Points FluidAudio's registry at Hugging Face or the mirror (for a folder, downloads
-    /// don't use it).
-    public static func setSource(_ source: ModelSource) {
-        currentSource.withLock { $0 = source }
-        if case .mirror(let url) = source {
-            ModelRegistry.baseURL = url.absoluteString
-        } else {
-            // FluidAudio's own default, which honours REGISTRY_URL / MODEL_REGISTRY_URL.
-            let env = ProcessInfo.processInfo.environment
-            ModelRegistry.baseURL = env["REGISTRY_URL"] ?? env["MODEL_REGISTRY_URL"] ?? ModelSource.huggingFaceURL.absoluteString
-        }
-        speechLog.info("Model source: \(source.displayName, privacy: .public)")
-    }
-
-    /// The settings value. An invalid one (settings keep it so the error shows) makes downloads
-    /// fail with the reason rather than quietly use Hugging Face.
-    public static func setSource(text: String) {
-        do {
-            setSource(try ModelSource.parse(text))
-            currentProblem.withLock { $0 = nil }
-        } catch {
-            setSource(.huggingFace)
-            currentProblem.withLock { $0 = error }
-            speechLog.error("Model source: \(error.localizedDescription, privacy: .public)")
+    /// The download links in effect, by model id (settings, or the server's configuration and
+    /// environment). Set them before the first download and whenever they change; a download in
+    /// progress keeps the link it started with. A model without one uses the standard download.
+    public static func setLinks(_ links: [String: String]) {
+        let clean = ModelLink.normalizeMap(links)
+        currentLinks.withLock { $0 = clean }
+        for (id, link) in clean.sorted(by: { $0.key < $1.key }) {
+            speechLog.info("\(id, privacy: .public) downloads from \(ModelLink.display(link), privacy: .public)")
         }
     }
 
-    /// The Test button: can `text` serve each of `ids`? Nothing is downloaded.
-    public static func check(_ text: String, models ids: [String]) async -> ModelSourceCheck {
-        let source: ModelSource
-        do { source = try ModelSource.parse(text) } catch { return ModelSourceCheck(ok: false, message: error.localizedDescription) }
-        var found: [String] = []
-        for id in ids {
-            guard let files = sourceFiles(for: id) else { continue }
-            let result = await ModelSourceProbe.check(source, repo: files.repo, revision: files.revision, requiredFiles: files.required)
-            guard result.ok else { return result }
-            found.append(result.message)
-        }
-        return ModelSourceCheck(ok: true, message: found.joined(separator: " "))
-    }
-
-    /// Copies `{folder}/{repo}` into FluidAudio's cache off the calling thread, reporting the copy
-    /// as `.downloading`, and keeps it only if FluidAudio finds every file it loads.
-    private static func installFromFolder(_ source: ModelSource, version v: AsrModelVersion, files: SourceFiles,
-                                          progress: @escaping @Sendable (Stage) -> Void) async throws {
-        guard let from = source.repoDirectory(files.repo) else { throw ModelSourceError.folderMissing(path: source.displayName) }
-        let destination = AsrModels.defaultCacheDirectory(for: v)
-        progress(.downloading(0))
-        try await Task.detached(priority: .userInitiated) {
-            try ModelFolderInstaller.install(from: from, to: destination, required: files.required, progress: { progress(.downloading($0)) }) { dir in
-                AsrModels.modelsExist(at: dir, version: v) ? [] : ModelFolderInstaller.missingFiles(in: dir, required: files.required)
-            }
-        }.value
-        speechLog.info("Installed \(files.repo, privacy: .public) from \(from.path(percentEncoded: false), privacy: .public)")
-    }
+    /// The link `id` downloads from, as stored; nil for the standard download.
+    public static func link(for id: String) -> String? { currentLinks.withLock { $0[id] } }
 
     /// Removes a model's files. Only ever deletes inside FluidAudio's model cache.
     public static func delete(_ id: String) throws {
@@ -194,9 +161,12 @@ public enum SpeechEngineError: LocalizedError, Sendable {
     case unknownModel(String)
     case notLoaded
     case notInstalled(String)
+    /// The model's name and why its standard download failed.
+    case downloadFailed(String, String)
 
     public var errorDescription: String? {
         switch self {
+        case .downloadFailed(let name, let reason): "Couldn't download \(name): \(reason)"
         case .unknownModel(let id): "Unknown speech model \(id)."
         case .notLoaded: "The speech model is still loading."
         case .notInstalled(let id): "Model \(id) is not installed on this host"

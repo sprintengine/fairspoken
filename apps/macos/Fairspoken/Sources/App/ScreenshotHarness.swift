@@ -67,6 +67,7 @@ final class ScreenshotHarness {
             await freshFrame()
             if let window = windows.dashboard { await capture(window, as: "\(section.rawValue)-\(suffix)") }
         }
+        await modelLinkShots(suffix: suffix)
         // Home while listening, to show the live mic rings.
         windows.showDashboard(.home)
         model.dictation.showcase(.listening(since: Date().addingTimeInterval(-7)))
@@ -81,12 +82,6 @@ final class ScreenshotHarness {
         try? await Task.sleep(for: .milliseconds(1000))
         await freshFrame()
         if let window = windows.dashboard { await capture(window, as: "settings-transcription-\(suffix)") }
-        // The same tab with a model source filled in (screenshot settings are never saved or applied).
-        model.settings.update { $0.modelSource = "/Volumes/Practice Share/models" }
-        try? await Task.sleep(for: .milliseconds(400))
-        await freshFrame()
-        if let window = windows.dashboard { await capture(window, as: "settings-model-source-\(suffix)") }
-        model.settings.update { $0.modelSource = "" }
         // The same tab with My host chosen (the sample host; no tailnet scan, so no real machines).
         let location = model.settings.settings.transcriptionLocation
         model.settings.update { $0.transcriptionLocation = .remoteHost }
@@ -100,6 +95,30 @@ final class ScreenshotHarness {
         await freshFrame()
         if let window = windows.dashboard { await capture(window, as: "settings-vocabulary-\(suffix)") }
         windows.dashboard?.orderOut(nil)
+    }
+
+    /// Models with "Download from Link…" open on a model that isn't downloaded, then with the
+    /// link saved. Screenshot settings are never saved, and nothing downloads.
+    private func modelLinkShots(suffix: String) async {
+        let id = "parakeet-tdt-0.6b-v2"
+        let sample = "https://artifactory.example.org/artifactory/models/parakeet-tdt-0.6b-v2-mac.zip"
+        model.models.presentedAsAvailable = [id]
+        model.models.refresh()
+        model.linkDraft = sample
+        model.linkEditorModel = id
+        windows.showDashboard(.models)
+        try? await Task.sleep(for: .milliseconds(1200))
+        await freshFrame()
+        if let window = windows.dashboard { await capture(window, as: "models-link-open-\(suffix)") }
+        model.linkEditorModel = nil
+        // The query (a token) is never shown.
+        model.settings.update { $0.modelLinks[id] = sample + "?X-JFrog-Art-Api=sample-token" }
+        try? await Task.sleep(for: .milliseconds(600))
+        await freshFrame()
+        if let window = windows.dashboard { await capture(window, as: "models-link-saved-\(suffix)") }
+        model.settings.update { $0.modelLinks = [:] }
+        model.models.presentedAsAvailable = []
+        model.models.refresh()
     }
 
     /// The sidebar update button in each state (the window, Home), the available toast, and

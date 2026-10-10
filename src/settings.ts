@@ -58,9 +58,6 @@ const superModeHelp = required<HTMLElement>("superModeHelp");
 const superModeHelpLocal = superModeHelp.textContent ?? "";
 const superModeModelSelect = required<HTMLSelectElement>("superModeModelSelect");
 const superModeModelRow = required<HTMLElement>("superModeModelRow");
-const modelSource = required<HTMLInputElement>("modelSource");
-const modelSourceStatus = required<HTMLElement>("modelSourceStatus");
-const modelSourceTest = required<HTMLButtonElement>("modelSourceTest");
 const modelDownload = required<HTMLElement>("modelDownload");
 const modelField = required<HTMLElement>("modelField");
 const remoteHostPanel = required<HTMLElement>("remoteHostPanel");
@@ -101,8 +98,6 @@ const POLISH_MODEL_NAMES: Record<string, string> = {
 };
 
 let currentSettings: Settings = { ...DEFAULTS };
-// Why the last save failed, for the rows that show it inline.
-let lastSaveError = "";
 // Builds without a Fairspoken Cloud endpoint hide every cloud choice.
 let cloudAvailable = true;
 
@@ -200,7 +195,6 @@ function applyToForm(settings: Settings): void {
   useGpu.checked = settings.useGpu;
   superModeSelect.value = settings.superMode;
   superModeModelSelect.value = settings.superModeModel;
-  setField(modelSource, settings.modelSource);
   polishEnabled.checked = settings.polishEnabled;
   contextAwareness.checked = settings.contextAwareness;
   formatAiDetection.checked = settings.formatAiDetection;
@@ -265,7 +259,6 @@ function readFromForm(): Settings {
     useGpu: useGpu.checked,
     superMode: superModeSelect.value as SuperMode,
     superModeModel: superModeModelSelect.value,
-    modelSource: modelSource.value,
     insertAtCursor: insertAtCursor.checked,
     accessibilityInsert: accessibilityInsert.checked,
     fnPushToTalk: fnPushToTalk.checked,
@@ -289,7 +282,6 @@ function showSaveStatus(message: string, error = false): void {
 async function persistSettings(): Promise<boolean> {
   const nextSettings = readFromForm();
   showSaveStatus("Saving…");
-  lastSaveError = "";
   try {
     await invoke("save_settings", { settings: nextSettings });
     currentSettings = { ...nextSettings,
@@ -301,7 +293,6 @@ async function persistSettings(): Promise<boolean> {
     return true;
   } catch (error) {
     const message = errorMessage(error);
-    lastSaveError = message;
     addEvent("error", message);
     applyToForm(currentSettings);
     showSaveStatus(`Could not save: ${message}`, true);
@@ -416,41 +407,6 @@ modelSelect.addEventListener("change", () => {
 
 cloudTest.addEventListener("click", () => {
   void testRemoteHost(cloudStatus, cloudTest, "Fairspoken Cloud");
-});
-
-// Model source: where models download from. A save that the backend refuses
-// (a relative path, an ftp:// URL, a URL with a password) says why inline;
-// Test checks the field as typed, saved or not, against the selected model.
-function showModelSourceStatus(message: string, error = false): void {
-  modelSourceStatus.textContent = message;
-  modelSourceStatus.classList.toggle("error", error);
-  modelSourceStatus.hidden = !message;
-}
-
-// A later good save clears a refused save's message, never a Test result
-// (clicking Test commits the field, so its save lands alongside the test).
-let modelSourceSaveError = "";
-modelSource.addEventListener("change", () => {
-  void persistSettings()
-    .then((saved) => {
-      if (!saved) {
-        modelSourceSaveError = lastSaveError;
-        showModelSourceStatus(lastSaveError, true);
-      } else if (modelSourceSaveError && modelSourceStatus.textContent === modelSourceSaveError) {
-        modelSourceSaveError = "";
-        showModelSourceStatus("");
-      }
-    })
-    .catch(reportAsyncError);
-});
-
-modelSourceTest.addEventListener("click", () => {
-  modelSourceTest.disabled = true;
-  showModelSourceStatus("Checking…");
-  invoke<string>("test_model_source", { source: modelSource.value, model: modelSelect.value })
-    .then((found) => showModelSourceStatus(found))
-    .catch((error) => showModelSourceStatus(errorMessage(error), true))
-    .finally(() => { modelSourceTest.disabled = false; });
 });
 
 // Every other control saves the whole form on change. `before` runs first

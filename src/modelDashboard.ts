@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import "./modelDashboard.css";
 import { createPublisherIcon } from "./publisherIcons";
 
-type Settings = { model: string; transcriptionLocation: string; polishEnabled: boolean; polishProvider: "local" | "cloud"; polishModel: string; cloudAuthToken: string; modelSource?: string; [key: string]: unknown };
+type Settings = { model: string; transcriptionLocation: string; polishEnabled: boolean; polishProvider: "local" | "cloud"; polishModel: string; cloudAuthToken: string; modelLinks?: Record<string, string>; [key: string]: unknown };
 type Model = { id: string; name: string; publisher: string; description: string; bytes: number; installed: boolean; selected: boolean; loaded: boolean; source: string; downloads: number | null; supported: boolean };
 type Download = { model: string; stage: string; downloaded: number; total: number; message: string };
 type Catalog = { polish: Model[]; download: Download | null; metadataError: string | null };
@@ -162,6 +162,99 @@ function variantPicker(family: string, name: string, choices: { value: string; l
   paint();
   return field;
 }
+// Download links (model_link.rs): a model with one downloads from that link,
+// typically a .zip on the organisation's own server, instead of its usual
+// download. Open editors and what is typed in them survive re-renders.
+const linkDrafts = new Map<string, string>();
+const linkErrors = new Map<string, string>();
+const savedLink = (model: string): string | undefined => settings.modelLinks?.[model];
+// Host and path only: a query string may carry an access token.
+function linkLabel(link: string): string {
+  try {
+    const url = new URL(link);
+    if (url.protocol === "http:" || url.protocol === "https:") return `${url.host}${url.pathname}`;
+    if (url.protocol === "file:") return `${url.host ? `//${url.host}` : ""}${decodeURIComponent(url.pathname)}`;
+  } catch { /* a path */ }
+  return link.split(/[?#]/)[0];
+}
+function openLinkEditor(model: string): void {
+  linkDrafts.set(model, savedLink(model) ?? ""); linkErrors.delete(model); render();
+  document.getElementById(`model-link-input-${model}`)?.focus();
+}
+// The saved link (with a way back to the standard download) and, when open,
+// the link field. `start` begins the model's download once a link is saved.
+function linkSection(model: string, name: string, start: () => Promise<void>): HTMLElement[] {
+  const parts: HTMLElement[] = [];
+  const saved = savedLink(model);
+  if (saved) {
+    const line = document.createElement("div"); line.className = "model-link-saved";
+    const text = document.createElement("span"); text.textContent = "Downloads from ";
+    const where = document.createElement("span"); where.className = "model-link-url"; where.textContent = linkLabel(saved); where.title = linkLabel(saved);
+    text.append(where);
+    const reset = button("Use the standard download", async () => {
+      settings = await invoke<Settings>("set_model_link", { model, link: null });
+      linkDrafts.delete(model); linkErrors.delete(model); render();
+      say(`${name} will use the standard download.`);
+    });
+    reset.className = "ds-button ds-button--ghost ds-button--inline"; reset.id = `model-link-reset-${model}`;
+    line.append(text, reset); parts.push(line);
+  }
+  if (!linkDrafts.has(model)) return parts;
+  const form = document.createElement("form"); form.className = "model-link-editor"; form.noValidate = true;
+  const field = document.createElement("div"); field.className = "model-link-field";
+  const input = document.createElement("input");
+  input.className = "ds-input ds-input--well model-link-input"; input.id = `model-link-input-${model}`; input.type = "text";
+  input.placeholder = "https://… or a path to a .zip"; input.maxLength = 2048; input.autocomplete = "off"; input.spellcheck = false;
+  input.setAttribute("autocapitalize", "off"); input.setAttribute("aria-label", `Download link for ${name}`);
+  input.value = linkDrafts.get(model) ?? "";
+  const submit = document.createElement("button"); submit.type = "submit"; submit.className = "ds-button ds-button--primary"; submit.textContent = "Download"; submit.id = `model-link-submit-${model}`;
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ds-button ds-button--ghost"; cancel.textContent = "Cancel";
+  const help = document.createElement("p"); help.className = "ds-field-help"; help.id = `model-link-help-${model}`;
+  help.textContent = "A link to a .zip of this model, for example from your organisation's server.";
+  const error = document.createElement("p"); error.className = "ds-field-error"; error.id = `model-link-error-${model}`; error.setAttribute("role", "alert");
+  const showError = (message: string) => {
+    error.textContent = message; error.hidden = !message; help.hidden = !!message;
+    input.setAttribute("aria-invalid", String(!!message));
+    input.setAttribute("aria-describedby", message ? error.id : help.id);
+  };
+  showError(linkErrors.get(model) ?? "");
+  const close = () => { linkDrafts.delete(model); linkErrors.delete(model); render(); };
+  input.addEventListener("input", () => { linkDrafts.set(model, input.value); if (!error.hidden) { linkErrors.delete(model); showError(""); } });
+  input.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); close(); document.getElementById(`model-link-open-${model}`)?.focus(); } });
+  cancel.addEventListener("click", close);
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    const link = input.value.trim();
+    if (!link) { showError("Enter a link to a .zip of the model."); input.focus(); return; }
+    submit.disabled = cancel.disabled = input.disabled = true;
+    void (async () => {
+      try { settings = await invoke<Settings>("set_model_link", { model, link }); }
+      catch (e) {
+        linkErrors.set(model, String(e)); linkDrafts.set(model, input.value); render();
+        document.getElementById(`model-link-input-${model}`)?.focus(); return;
+      }
+      linkDrafts.delete(model); linkErrors.delete(model);
+      try { await start(); } catch (e) { say(String(e), true); }
+    })();
+  });
+  field.append(input, submit, cancel); form.append(field, help, error); parts.push(form);
+  return parts;
+}
+function linkButton(model: string): HTMLButtonElement {
+  const node = button("Download from link…", async () => openLinkEditor(model));
+  node.id = `model-link-open-${model}`;
+  return node;
+}
+async function startSpeechDownload(model: string): Promise<void> {
+  speechDownload = model; render();
+  try { await invoke("begin_prepare_transcription_model", { request: { model } }); }
+  catch (e) { speechDownload = null; render(); throw e; }
+}
+async function startPolishDownload(m: Model): Promise<void> {
+  download = { model: m.id, stage: "runtime", downloaded: 0, total: 0, message: "Starting download…" }; render();
+  try { await invoke("download_local_model", { model: m.id }); say(`${m.name} downloaded. Choose Use to enable it.`); }
+  finally { await load(); }
+}
 function busyDownload(): boolean { return !!download && ["runtime", "model"].includes(download.stage); }
 function progressUpdate(value: Download): void {
   download = value;
@@ -191,13 +284,14 @@ function render(): void {
       value: option.model,
       label: `${parakeet ? parakeetVariant(option.model).label : option.model}${option.cached ? " · Downloaded" : ""}`,
     })), m.model);
-    r.element.querySelector(".ds-list-row-content")!.append(picker);
+    const name = parakeet ? `Parakeet ${parakeetVariant(m.model).label.split(" · ")[0]}` : `Whisper ${m.model}`;
+    if (m.cached || speechDownload !== null) linkDrafts.delete(m.model);
+    r.element.querySelector(".ds-list-row-content")!.append(picker, ...linkSection(m.model, name, () => startSpeechDownload(m.model)));
     r.actions.append(button(m.cached ? (selected ? "Selected" : "Use") : speechDownload === m.model ? "Downloading…" : "Download", async () => {
       if (m.cached) return choose({ model: m.model, transcriptionLocation: "local" });
-      speechDownload = m.model; render();
-      try { await invoke("begin_prepare_transcription_model", { request: { model: m.model } }); }
-      catch (e) { speechDownload = null; render(); throw e; }
+      await startSpeechDownload(m.model);
     }, (selected && m.cached) || speechDownload !== null));
+    if (!m.cached && speechDownload === null && !linkDrafts.has(m.model)) r.actions.append(linkButton(m.model));
     const progress = speechProgress.get(m.model); const current = rows.get(m.model)!;
     if (progress && !progress.done) { current.status.textContent = progress.message; current.progress.hidden = false; current.progress.value = progress.percentage; }
     speechList.append(r.element);
@@ -214,12 +308,13 @@ function render(): void {
     } else {
       r.actions.append(button(m.installed ? (m.selected ? "Selected" : "Use") : "Download", async () => {
         if (m.installed) return choose({ polishProvider: "local", polishModel: m.id, polishEnabled: true });
-        download = { model: m.id, stage: "runtime", downloaded: 0, total: 0, message: "Starting download…" }; render();
-        try { await invoke("download_local_model", { model: m.id }); say(`${m.name} downloaded. Choose Use to enable it.`); }
-        finally { await load(); }
+        await startPolishDownload(m);
       }, !m.supported || (m.selected && m.installed) || busyDownload()));
       if (m.installed) r.actions.append(button("Remove", async () => { await invoke("remove_local_model", { model: m.id }); await load(); }, busyDownload()));
+      else if (m.supported && !busyDownload() && !linkDrafts.has(m.id)) r.actions.append(linkButton(m.id));
     }
+    if (m.installed || !m.supported || busyDownload()) linkDrafts.delete(m.id);
+    if (m.supported) r.element.querySelector(".ds-list-row-content")!.append(...linkSection(m.id, m.name, () => startPolishDownload(m)));
     polishList.append(r.element);
   }
   if (download) progressUpdate(download);
@@ -235,8 +330,8 @@ async function load(refresh = false): Promise<void> {
     if (!refresh && previous) {
       for (const model of catalog.polish) model.downloads = previous.polish.find(m => m.id === model.id)?.downloads ?? model.downloads;
     }
-    download = catalog.download; render(); applyHubSearchAvailability();
-    if (refresh) say(catalog.metadataError ?? (hubSearchAvailable() ? "Compatible model information refreshed from Hugging Face." : "Model information refreshed."), !!catalog.metadataError);
+    download = catalog.download; render();
+    if (refresh) say(catalog.metadataError ?? "Compatible model information refreshed from Hugging Face.", !!catalog.metadataError);
   } finally {
     loading = false;
     if (reloadRequested) {
@@ -294,17 +389,6 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let searchHits: SearchHit[] = [];
 let activeHit = 0;
 let popoverOpen = false;
-// With a model source set (Settings → Transcription → Advanced) the
-// organisation hosts its own models and usually cannot reach the Hub, so the
-// search covers this device only.
-function hubSearchAvailable(): boolean { return !settings?.modelSource?.trim(); }
-function applyHubSearchAvailability(): void {
-  const label = hubSearchAvailable() ? "Search models on this device and Hugging Face" : "Search models on this device";
-  if (searchInput.placeholder === label) return;
-  searchInput.placeholder = label;
-  searchInput.setAttribute("aria-label", `${label.replace("Search models", "Search speech models")}.`);
-  if (searchInput.value.trim()) scheduleSearch();
-}
 function supportedVariant(id: string): { family: string; model?: string } | null {
   const parakeet = /^(?:nvidia\/parakeet-tdt-0\.6b-(v[23])|istupakov\/parakeet-tdt-0\.6b-(v[23])-onnx)$/.exec(id);
   if (parakeet) {
@@ -467,11 +551,6 @@ function scheduleSearch(): void {
     return;
   }
   const local = localHits(query);
-  if (!hubSearchAvailable()) {
-    searchStatus.textContent = local.length ? "" : "No models on this device match that search.";
-    if (document.activeElement === searchInput) renderPopover(local, [], local.length ? null : searchStatus.textContent);
-    return;
-  }
   searchStatus.textContent = "Waiting to search…";
   if (document.activeElement === searchInput) renderPopover(local, [], local.length ? null : "Waiting to search…");
   searchTimer = setTimeout(() => { void searchHub(query, revision, localHits(query)); }, 350);
@@ -501,7 +580,7 @@ searchInput.addEventListener("keydown", event => {
     event.preventDefault();
     const hit = searchHits[activeHit];
     if (popoverOpen && hit) jumpTo(hit);
-    else if (hubSearchAvailable()) { clearTimeout(searchTimer); void searchHub(searchInput.value.trim(), ++searchRevision, localHits(searchInput.value.trim())); }
+    else { clearTimeout(searchTimer); void searchHub(searchInput.value.trim(), ++searchRevision, localHits(searchInput.value.trim())); }
   }
 });
 document.addEventListener("pointerdown", event => {

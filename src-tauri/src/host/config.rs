@@ -1,9 +1,10 @@
 use super::pairing::{deserialize_password_change, validate_pairing_password, HostAuth};
 use super::lock_unpoisoned;
 use super::update::UpdatePrefs;
-use crate::model_source::ModelSource;
+use crate::model_link::ModelLink;
 use crate::models::SttModel;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -20,9 +21,9 @@ pub(super) const MAX_HOST_MAX_ACTIVE_STREAMS: u32 = 32;
 pub(super) const MIN_HOST_MAX_RECORDING_SECONDS: u16 = 10;
 pub(super) const MAX_HOST_MAX_RECORDING_SECONDS: u16 = 600;
 pub(super) const DEFAULT_HOST_MODEL: SttModel = SttModel::Parakeet;
-/// Where the host downloads models from (`model_source`), below
-/// `--model-source` and above the config file's `modelSource`.
-pub(super) const MODEL_SOURCE_ENV: &str = "FAIRSPOKEN_MODEL_SOURCE";
+/// Whitespace-separated `model-id=link` pairs (`resolve_model_links`), below
+/// `--model-link` and above the config file's `modelLinks`.
+pub(super) const MODEL_LINKS_ENV: &str = "FAIRSPOKEN_MODEL_LINKS";
 
 #[derive(Clone)]
 pub(super) struct HostRuntimeConfig {
@@ -130,11 +131,10 @@ pub(super) struct PersistedHostConfig {
     /// then keep the environment's value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) super_mode: Option<super::super_mode::SuperModePolicy>,
-    /// Where models download from (`model_source`); absent is Hugging Face.
-    /// `--model-source` and `FAIRSPOKEN_MODEL_SOURCE` override it. The same
-    /// key the Swift host reads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) model_source: Option<String>,
+    /// Download links by model id (`model_link`); `--model-link` and
+    /// `FAIRSPOKEN_MODEL_LINKS` override them per model.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) model_links: BTreeMap<String, String>,
 }
 
 impl PersistedHostConfig {
@@ -151,34 +151,68 @@ impl PersistedHostConfig {
             pairing_password: None,
             name: None,
             super_mode: None,
-            model_source: None,
+            model_links: BTreeMap::new(),
         }
     }
 }
 
-/// Where the host's models come from, and which setting chose it: the
-/// command line, then the environment, then the config file, then Hugging
-/// Face. A blank environment variable counts as unset; an explicit
-/// `--model-source ""` chooses Hugging Face. Invalid values fail startup,
-/// like any other operator configuration, naming where they came from.
-pub(super) fn resolve_model_source(
-    cli: Option<&str>,
+/// A model's download link and the setting it came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ResolvedLink {
+    pub(super) link: ModelLink,
+    pub(super) origin: String,
+}
+
+/// Each model's download link, per model: `--model-link` (`cli`, in
+/// order), then `FAIRSPOKEN_MODEL_LINKS` (`env`), then the config file's
+/// `modelLinks` (`file`), then none. An empty link on a higher level means
+/// the usual download. An id that isn't one of `valid_ids`, a malformed
+/// pair or a bad link fails startup, naming where it came from.
+pub(super) fn resolve_model_links(
+    cli: &[(String, String)],
     env: Option<&str>,
-    file: Option<&str>,
+    file: &BTreeMap<String, String>,
     config_path: &Path,
-) -> Result<(ModelSource, String), String> {
-    let (raw, origin) = if let Some(cli) = cli {
-        (cli, "--model-source".to_string())
-    } else if let Some(env) = env.filter(|value| !value.trim().is_empty()) {
-        (env, MODEL_SOURCE_ENV.to_string())
-    } else if let Some(file) = file.filter(|value| !value.trim().is_empty()) {
-        (file, format!("modelSource in {}", config_path.display()))
-    } else {
-        return Ok((ModelSource::HuggingFace, "default".to_string()));
-    };
-    ModelSource::parse(raw)
-        .map(|source| (source, origin.clone()))
-        .map_err(|err| format!("{origin}: {err}"))
+    valid_ids: &[&str],
+) -> Result<BTreeMap<String, ResolvedLink>, String> {
+    let file_origin = format!("modelLinks in {}", config_path.display());
+    let mut layers: Vec<(String, String, String)> = file
+        .iter()
+        .map(|(model, link)| (model.trim().to_string(), link.clone(), file_origin.clone()))
+        .collect();
+    for pair in env.unwrap_or("").split_whitespace() {
+        let (model, link) = pair
+            .split_once('=')
+            .filter(|(model, _)| !model.is_empty() && !model.contains([':', '/', '\\']))
+            .ok_or_else(|| {
+                format!(
+                    "{MODEL_LINKS_ENV}: {} isn't a model-id=link pair",
+                    pair.split(['?', '#']).next().unwrap_or(pair)
+                )
+            })?;
+        layers.push((model.to_string(), link.to_string(), MODEL_LINKS_ENV.to_string()));
+    }
+    layers.extend(
+        cli.iter()
+            .map(|(model, link)| (model.clone(), link.clone(), "--model-link".to_string())),
+    );
+
+    let mut links = BTreeMap::new();
+    for (model, raw, origin) in layers {
+        if !valid_ids.contains(&model.as_str()) {
+            return Err(format!(
+                "{origin}: unknown model id \"{model}\". Valid ids: {}",
+                valid_ids.join(", ")
+            ));
+        }
+        if raw.trim().is_empty() {
+            links.remove(&model);
+            continue;
+        }
+        let link = ModelLink::parse(&raw).map_err(|err| format!("{origin} for {model}: {err}"))?;
+        links.insert(model, ResolvedLink { link, origin });
+    }
+    Ok(links)
 }
 
 pub(super) fn default_host_config_path() -> PathBuf {
@@ -278,7 +312,7 @@ pub(super) fn persist_live_config(path: &Path, live: &HostLiveConfig) -> Result<
             pairing_password: auth.saved_pairing_password,
             name: live.saved_name(),
             super_mode: Some(live.super_mode),
-            model_source: live.saved_model_source(),
+            model_links: live.saved_model_links(),
         },
     )
 }
@@ -354,9 +388,9 @@ pub(super) struct HostLiveConfig {
     /// The display name in `/v1/hello`, and the config file's `name` (kept
     /// as found so a rewrite of the file doesn't drop or bake in a default).
     name: Mutex<(String, Option<String>)>,
-    /// The config file's `modelSource`, kept as found so rewriting the file
-    /// never drops it or bakes in a command-line or environment value.
-    saved_model_source: Mutex<Option<String>>,
+    /// The config file's `modelLinks`, kept as found so rewriting the file
+    /// never drops them or bakes in command-line or environment links.
+    saved_model_links: Mutex<BTreeMap<String, String>>,
     /// Restart-only: whether clients may get super mode at all.
     pub(super) super_mode: super::super_mode::SuperModePolicy,
 }
@@ -371,7 +405,7 @@ impl HostLiveConfig {
             update_prefs: Mutex::new(UpdatePrefs::default()),
             auth: Mutex::new(HostAuth::default()),
             name: Mutex::new((String::new(), None)),
-            saved_model_source: Mutex::new(None),
+            saved_model_links: Mutex::new(BTreeMap::new()),
             super_mode: config.super_mode,
         }
     }
@@ -404,12 +438,12 @@ impl HostLiveConfig {
         *lock_unpoisoned(&self.name) = (display, saved);
     }
 
-    fn saved_model_source(&self) -> Option<String> {
-        lock_unpoisoned(&self.saved_model_source).clone()
+    fn saved_model_links(&self) -> BTreeMap<String, String> {
+        lock_unpoisoned(&self.saved_model_links).clone()
     }
 
-    pub(super) fn set_saved_model_source(&self, saved: Option<String>) {
-        *lock_unpoisoned(&self.saved_model_source) = saved;
+    pub(super) fn set_saved_model_links(&self, saved: BTreeMap<String, String>) {
+        *lock_unpoisoned(&self.saved_model_links) = saved;
     }
 
     pub(super) fn update_prefs(&self) -> UpdatePrefs {
@@ -593,75 +627,94 @@ pub(super) fn parse_bool(value: &str) -> Option<bool> {
 }
 
 #[cfg(test)]
-mod model_source_tests {
+mod model_link_tests {
     use super::*;
 
+    const IDS: [&str; 3] = ["parakeet-tdt-0.6b-v3", "parakeet-ultra", "large-v3"];
+
     fn resolve(
-        cli: Option<&str>,
+        cli: &[(&str, &str)],
         env: Option<&str>,
-        file: Option<&str>,
-    ) -> Result<(ModelSource, String), String> {
-        resolve_model_source(cli, env, file, Path::new("host-config.json"))
+        file: &[(&str, &str)],
+    ) -> Result<BTreeMap<String, ResolvedLink>, String> {
+        let cli: Vec<(String, String)> =
+            cli.iter().map(|(m, l)| (m.to_string(), l.to_string())).collect();
+        let file: BTreeMap<String, String> =
+            file.iter().map(|(m, l)| (m.to_string(), l.to_string())).collect();
+        resolve_model_links(&cli, env, &file, Path::new("host-config.json"), &IDS)
     }
 
-    fn mirror(base: &str) -> ModelSource {
-        ModelSource::Mirror(base.to_string())
-    }
-
-    #[test]
-    fn command_line_beats_environment_beats_config_file_beats_default() {
-        let (cli, env, file) = (
-            Some("https://cli.example"),
-            Some("https://env.example/"),
-            Some("https://file.example"),
-        );
-        assert_eq!(
-            resolve(cli, env, file).unwrap(),
-            (mirror("https://cli.example"), "--model-source".into())
-        );
-        assert_eq!(
-            resolve(None, env, file).unwrap(),
-            (mirror("https://env.example"), MODEL_SOURCE_ENV.into())
-        );
-        assert_eq!(
-            resolve(None, None, file).unwrap(),
-            (
-                mirror("https://file.example"),
-                "modelSource in host-config.json".into()
-            )
-        );
-        assert_eq!(
-            resolve(None, None, None).unwrap(),
-            (ModelSource::HuggingFace, "default".into())
-        );
-        // A blank variable or file value is unset; a blank flag is a choice.
-        assert_eq!(resolve(None, Some(" "), file).unwrap().0, mirror("https://file.example"));
-        assert_eq!(resolve(None, None, Some("")).unwrap().0, ModelSource::HuggingFace);
-        assert_eq!(resolve(Some(""), env, file).unwrap().0, ModelSource::HuggingFace);
+    fn shown(links: &BTreeMap<String, ResolvedLink>) -> Vec<(String, String, String)> {
+        links
+            .iter()
+            .map(|(model, resolved)| (model.clone(), resolved.link.to_string(), resolved.origin.clone()))
+            .collect()
     }
 
     #[test]
-    fn an_invalid_source_fails_naming_where_it_came_from() {
-        let err = resolve(None, Some("ftp://env.example"), None).unwrap_err();
-        assert!(err.starts_with("FAIRSPOKEN_MODEL_SOURCE: "), "{err}");
-        let err = resolve(None, None, Some("relative/models")).unwrap_err();
-        assert!(err.starts_with("modelSource in host-config.json: "), "{err}");
-        // A valid higher-precedence value wins over an invalid lower one.
-        assert!(resolve(Some("https://cli.example"), Some("ftp://x"), None).is_ok());
+    fn command_line_beats_environment_beats_config_file_per_model() {
+        let links = resolve(
+            &[("parakeet-ultra", "https://cli.example/ultra.zip?t=1")],
+            Some("  parakeet-ultra=https://env.example/ultra.zip\n parakeet-tdt-0.6b-v3=https://env.example/v3.zip?sig=x "),
+            &[
+                ("parakeet-ultra", "https://file.example/ultra.zip"),
+                ("parakeet-tdt-0.6b-v3", "https://file.example/v3.zip"),
+                ("large-v3", "https://file.example/large.zip"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            shown(&links),
+            [
+                ("large-v3".into(), "https://file.example/large.zip".into(), "modelLinks in host-config.json".into()),
+                ("parakeet-tdt-0.6b-v3".into(), "https://env.example/v3.zip".into(), MODEL_LINKS_ENV.into()),
+                ("parakeet-ultra".into(), "https://cli.example/ultra.zip".into(), "--model-link".into()),
+            ]
+        );
+        // The query is kept for the download, only hidden when shown.
+        assert_eq!(
+            links["parakeet-ultra"].link,
+            ModelLink::parse("https://cli.example/ultra.zip?t=1").unwrap()
+        );
+        assert!(resolve(&[], None, &[]).unwrap().is_empty());
+        assert!(resolve(&[], Some("   "), &[]).unwrap().is_empty());
+        // An empty link on a higher level means the usual download.
+        let links = resolve(&[("large-v3", "")], None, &[("large-v3", "https://file.example/large.zip")]).unwrap();
+        assert!(links.is_empty());
     }
 
     #[test]
-    fn the_config_file_keeps_its_model_source_when_rewritten() {
+    fn unknown_ids_and_bad_links_fail_naming_where_they_came_from() {
+        let err = resolve(&[("parakeet", "https://x.example/p.zip")], None, &[]).unwrap_err();
+        assert_eq!(
+            err,
+            "--model-link: unknown model id \"parakeet\". Valid ids: parakeet-tdt-0.6b-v3, parakeet-ultra, large-v3"
+        );
+        let err = resolve(&[], Some("whisper=https://x.example/w.zip"), &[]).unwrap_err();
+        assert!(err.starts_with("FAIRSPOKEN_MODEL_LINKS: unknown model id \"whisper\""), "{err}");
+        let err = resolve(&[], None, &[("tiny", "/srv/tiny.zip")]).unwrap_err();
+        assert!(err.starts_with("modelLinks in host-config.json: unknown model id \"tiny\""), "{err}");
+        let err = resolve(&[], Some("https://x.example/v3.zip?token=s3cret"), &[]).unwrap_err();
+        assert_eq!(err, "FAIRSPOKEN_MODEL_LINKS: https://x.example/v3.zip isn't a model-id=link pair");
+        assert!(!err.contains("s3cret"), "{err}");
+        let err = resolve(&[], Some("large-v3=ftp://x.example/l.zip"), &[]).unwrap_err();
+        assert!(err.starts_with("FAIRSPOKEN_MODEL_LINKS for large-v3: "), "{err}");
+        let err = resolve(&[("large-v3", "https://u:p@x.example/l.zip")], None, &[]).unwrap_err();
+        assert!(err.contains("user name or password"), "{err}");
+    }
+
+    #[test]
+    fn the_config_file_keeps_its_links_and_ignores_an_old_model_source() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("host-config.json");
         let model = SttModel::Parakeet.model_id();
         fs::write(
             &path,
-            format!(r#"{{"maxActiveStreams":4,"maxRecordingSeconds":600,"useGpu":true,"workerModels":["{model}"],"modelSource":"https://mirror.example"}}"#),
+            format!(r#"{{"maxActiveStreams":4,"maxRecordingSeconds":600,"useGpu":true,"workerModels":["{model}"],"modelSource":"https://mirror.example","modelLinks":{{"{model}":"https://files.example/v3.zip?token=t"}}}}"#),
         )
         .unwrap();
         let persisted = load_persisted_config(&path).unwrap().unwrap();
-        assert_eq!(persisted.model_source.as_deref(), Some("https://mirror.example"));
+        assert_eq!(persisted.model_links[model], "https://files.example/v3.zip?token=t");
 
         let live = HostLiveConfig::new(&HostRuntimeConfig {
             worker_count: 1,
@@ -672,14 +725,16 @@ mod model_source_tests {
             worker_models: vec![SttModel::Parakeet],
             super_mode: super::super::super_mode::SuperModePolicy::Allow,
         });
-        live.set_saved_model_source(persisted.model_source);
+        live.set_saved_model_links(persisted.model_links);
         persist_live_config(&path, &live).unwrap();
+        let rewritten = fs::read_to_string(&path).unwrap();
+        assert!(!rewritten.contains("modelSource"), "{rewritten}");
         let rewritten = load_persisted_config(&path).unwrap().unwrap();
-        assert_eq!(rewritten.model_source.as_deref(), Some("https://mirror.example"));
+        assert_eq!(rewritten.model_links[model], "https://files.example/v3.zip?token=t");
 
-        // Without one, the key stays out of the file.
-        live.set_saved_model_source(None);
+        // Without any, the key stays out of the file.
+        live.set_saved_model_links(BTreeMap::new());
         persist_live_config(&path, &live).unwrap();
-        assert!(!fs::read_to_string(&path).unwrap().contains("modelSource"));
+        assert!(!fs::read_to_string(&path).unwrap().contains("modelLinks"));
     }
 }

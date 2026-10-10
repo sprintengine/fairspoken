@@ -225,7 +225,6 @@ private struct AudioSettings: View {
 private struct TranscriptionSettings: View {
     @Environment(AppModel.self) private var model
     @State private var showManual = false
-    @State private var modelSource = ""
 
     var body: some View {
         let s = model.settings.settings
@@ -258,21 +257,6 @@ private struct TranscriptionSettings: View {
                             Text(state.label)
                         }
                     }
-                    LabeledContent("Model source") {
-                        ModelSourceField(text: $modelSource,
-                                         commit: { text in
-                                             let problem = model.setModelSource(text)
-                                             // Show the value as saved (trimmed, no trailing slash).
-                                             if problem == nil { modelSource = model.settings.settings.modelSource }
-                                             return problem
-                                         },
-                                         test: { await ParakeetModels.check($0, models: [model.settings.settings.model]) })
-                    }
-                }
-            } footer: {
-                if !remote {
-                    Text("A Hugging Face–compatible mirror URL, or a folder with the model files. Leave empty to use Hugging Face.")
-                        .font(.caption).foregroundStyle(Crystal.ink3)
                 }
             }
             if remote {
@@ -280,10 +264,7 @@ private struct TranscriptionSettings: View {
                 ManualHostSection(expanded: $showManual)
             }
         }
-        .onAppear {
-            model.hostStatus.refresh()
-            modelSource = model.settings.settings.modelSource
-        }
+        .onAppear { model.hostStatus.refresh() }
         // A host that takes a token opens manual entry with the token field waiting.
         .onChange(of: model.hostFinder.needsToken) { _, host in if host != nil { showManual = true } }
     }

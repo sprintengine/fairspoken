@@ -104,16 +104,23 @@ final class ServerController {
         } catch {
             configIssue = error.localizedDescription
         }
-        applyModelSource()
+        applyModelLinks()
     }
 
-    /// `FAIRSPOKEN_MODEL_SOURCE`, which wins over the saved model source for this run.
-    var modelSourceFromEnvironment: String? { HostEnvironment.modelSource(in: ServerInfo.environment) }
+    /// The links `FAIRSPOKEN_MODEL_LINKS` sets for this run, over the saved ones (an invalid
+    /// value stops the server when it starts, with the reason).
+    let linksFromEnvironment: [String: String] =
+        (try? HostEnvironment.modelLinks(in: ServerInfo.environment, knownModels: Set(FluidAudioBackend.servedModels))) ?? [:]
 
-    /// Points downloads at the model source in effect: the environment's, else the saved one.
-    private func applyModelSource() {
+    /// The links downloads use: the saved ones (`configuration.modelLinks`, the file's) with the
+    /// environment's over them.
+    var effectiveModelLinks: [String: String] {
+        configuration.modelLinks.merging(linksFromEnvironment) { _, run in run }
+    }
+
+    private func applyModelLinks() {
         guard !presenting else { return }
-        ParakeetModels.setSource(text: modelSourceFromEnvironment ?? configuration.modelSource)
+        ParakeetModels.setLinks(effectiveModelLinks)
     }
 
     /// Replaces an unreadable config file with defaults (and a new token).
@@ -146,12 +153,14 @@ final class ServerController {
             // The runtime's copy: it holds the token generated for a pairing password, if any.
             hostConfiguration = started.runtime.configuration
             configuration = started.runtime.configuration
+            // Keep the file's links here; the environment's apply for this run only.
+            configuration.modelLinks = file?.normalized(knownModels: knownModels).modelLinks ?? [:]
             started.runtime.setLiveChangeHandler { [weak self] settings in
                 Task { @MainActor in self?.adoptLiveSettings(settings) }
             }
             runState = .running
             applySleepGuard()
-            applyModelSource()
+            applyModelLinks()
             Self.log.info("Serving on \(config.bindAddr, privacy: .public)")
         } catch {
             runState = .failed(error.localizedDescription)
@@ -211,6 +220,8 @@ final class ServerController {
     /// `POST /v1/config`), the rest restarts the server.
     func save(_ draft: HostConfiguration) async -> SaveOutcome {
         var next = draft
+        // Links are edited on the Models page; a draft opened earlier doesn't undo them.
+        next.modelLinks = configuration.modelLinks
         next.bindAddress = next.bindAddress.trimmingCharacters(in: .whitespaces)
         next.token = next.token.trimmingCharacters(in: .whitespacesAndNewlines)
         if let problem = Self.validate(next) { return .failed(problem) }
@@ -223,8 +234,6 @@ final class ServerController {
                 || running.bindAddress != next.bindAddress || running.port != next.port || running.token != next.token
         } ?? false
         configuration = next
-        // The next download uses it; nothing restarts.
-        applyModelSource()
         if needsRestart {
             await restart()
             return .restarted
@@ -253,7 +262,9 @@ final class ServerController {
         guard HostConfiguration.workerCountRange.contains(c.workerCount) else { return "Use 1 to 8 workers." }
         guard HostConfiguration.queueCapacityRange.contains(c.queueCapacity) else { return "The queue holds 1 to 64 jobs." }
         if HostConfiguration.pairingPasswordProblem(c.pairingPassword) != nil { return pairingPasswordHint }
-        if let problem = ModelSource.problem(c.modelSource) { return problem }
+        for (id, link) in c.modelLinks.sorted(by: { $0.key < $1.key }) {
+            if let problem = ModelLink.problem(link) { return "The link for \(id): \(problem)" }
+        }
         return nil
     }
 
@@ -354,6 +365,54 @@ final class ServerController {
         } catch {
             notice = "Couldn't delete the model: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: Download links
+
+    /// The model card whose "Download from Link…" field is open, and what it holds.
+    var linkEditorModel: String?
+    var linkDraft = ""
+
+    func openLinkEditor(for id: String) {
+        linkDraft = configuration.modelLinks[id] ?? ""
+        linkEditorModel = id
+    }
+
+    /// Saves `text` as `id`'s download link (host-config.json) and downloads the model from it.
+    /// Returns why it can't, or nil.
+    func downloadFromLink(_ id: String, _ text: String) -> String? {
+        guard linksFromEnvironment[id] == nil else { return "\(HostEnvironment.modelLinksVariable) sets this model's link for this run." }
+        let value: String
+        do { value = try ModelLink.normalize(text) } catch { return error.localizedDescription }
+        var links = configuration.modelLinks
+        links[id] = value
+        if let problem = saveModelLinks(links) { return problem }
+        linkEditorModel = nil
+        if !presenting { download(id) }
+        return nil
+    }
+
+    /// Back to the standard download for `id`.
+    func removeModelLink(_ id: String) {
+        var links = configuration.modelLinks
+        links[id] = nil
+        if let problem = saveModelLinks(links) { notice = problem }
+    }
+
+    /// Writes the links into the file as it is on disk (other fields untouched) and applies them.
+    private func saveModelLinks(_ links: [String: String]) -> String? {
+        if !presenting {
+            do {
+                var persisted = try HostConfigurationStore.load(configURL) ?? configuration
+                persisted.modelLinks = links
+                try HostConfigurationStore.save(persisted, to: configURL)
+            } catch {
+                return "Couldn't save the link: \(error.localizedDescription)"
+            }
+        }
+        configuration.modelLinks = links
+        applyModelLinks()
+        return nil
     }
 
     func assign(model: String, toWorker index: Int) {
@@ -479,8 +538,8 @@ final class ServerController {
     @ObservationIgnored private var presenting = false
     /// Screenshot mode: Configuration opens with Advanced expanded.
     @ObservationIgnored var revealAdvanced = false
-    /// Screenshot mode: Configuration opens scrolled to the model source.
-    @ObservationIgnored var revealModelSource = false
+    /// Screenshot mode: nothing is saved, applied or downloaded.
+    var isPresenting: Bool { presenting }
 
     /// Screenshot mode: the demo simulator, a sample configuration and sample addresses,
     /// shown as serving. Nothing is bound and nothing is written to the real config file.
@@ -501,10 +560,10 @@ final class ServerController {
         restartFeed()
     }
 
-    /// Screenshot mode: a sample model source (never saved or applied).
-    func presentSampleModelSource(_ value: String) {
+    /// Screenshot mode: a sample download link (never saved or applied).
+    func presentSampleModelLink(_ id: String, _ value: String?) {
         guard presenting else { return }
-        configuration.modelSource = value
+        configuration.modelLinks[id] = value
     }
 
     /// Screenshot mode: shows Connect as "This Mac only" on a Mac without Tailscale (or back).
