@@ -78,8 +78,9 @@ let tailscaleStatusFixture = #"""
 
 struct FakeRunner: CommandRunning {
     var output: CommandOutput
-    func run(_ executable: String, arguments: [String], timeout: Duration) async throws -> CommandOutput {
+    func run(_ executable: String, arguments: [String], environment: [String: String], timeout: Duration) async throws -> CommandOutput {
         #expect(arguments == ["status", "--json"])
+        #expect(environment["TAILSCALE_BE_CLI"] == "1")
         return output
     }
 }
@@ -206,6 +207,10 @@ struct TailscaleStatusTests {
         }
         await #expect(throws: TailnetDiscoveryError.tailscaleFailed("something odd")) {
             try await discovery(t, status: "", stderr: "something odd\nmore", exit: 1).discover()
+        }
+        // Nothing on stderr: what Tailscale printed instead of JSON is the reason.
+        await #expect(throws: TailnetDiscoveryError.tailscaleFailed("The Tailscale GUI failed to start: (Tailscale.CLIError error 3.)")) {
+            try await discovery(t, status: "The Tailscale GUI failed to start: (Tailscale.CLIError error 3.)\n").discover()
         }
     }
 }
