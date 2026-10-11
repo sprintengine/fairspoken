@@ -19,6 +19,8 @@ struct ModelsView: View {
             ForEach(models, id: \.id) { m in
                 ModelCard(model: m, info: SpeechModelCatalog.model(id: m.id), download: stats.modelDownload?.model == m.id ? stats.modelDownload : nil,
                           actionsDisabled: locked,
+                          // Screenshots show the link controls as they are when serving live.
+                          linkActionsDisabled: locked && !controller.isPresenting,
                           onDownload: { controller.download(m.id) }, onDelete: { confirmDelete = m.id })
             }
             if models.isEmpty {
@@ -76,11 +78,16 @@ private struct ModelCard: View {
     var info: SpeechModelInfo?
     var download: HostStats.ModelDownload?
     var actionsDisabled: Bool
+    var linkActionsDisabled: Bool
     var onDownload: () -> Void
     var onDelete: () -> Void
+    @Environment(ServerController.self) private var controller
 
     var body: some View {
         let downloading = download.map { $0.stage != "ready" && $0.stage != "error" } ?? false
+        let link = controller.effectiveModelLinks[model.id]
+        let linkFromEnvironment = controller.linksFromEnvironment[model.id] != nil
+        let editing = controller.linkEditorModel == model.id && !model.installed
         SurfaceCard {
             HStack(alignment: .top, spacing: 16) {
                 FairspokenMark(size: 30, monochrome: model.installed ? Crystal.ink2 : Crystal.ink3)
@@ -96,11 +103,33 @@ private struct ModelCard: View {
                     if downloading, let d = download {
                         HStack(spacing: 10) {
                             ProgressView(value: d.percentage / 100).tint(Crystal.serverAccent).frame(width: 240)
-                            Text(d.stage == "validating" ? "Optimising for this Mac…" : "\(d.stage.capitalized) \(Int(d.percentage))%")
+                            // From a link, validating is unpacking and checking (it compiles on first load).
+                            Text(d.stage == "validating" ? (link != nil ? "Unpacking…" : "Optimising for this Mac…") : "\(d.stage.capitalized) \(Int(d.percentage))%")
                                 .font(.caption).foregroundStyle(Crystal.ink2)
                         }
                     } else if let error = download?.error {
                         ErrorLabel(text: error).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if editing {
+                        ModelLinkEditor(text: Bindable(controller).linkDraft, tint: Crystal.serverAccent,
+                                        submit: { controller.downloadFromLink(model.id, $0) },
+                                        cancel: { controller.linkEditorModel = nil })
+                            .frame(maxWidth: 560)
+                            .padding(.top, 6)
+                    } else if let link {
+                        HStack(alignment: .firstTextBaseline, spacing: 14) {
+                            ModelLinkSummary(link: link, note: linkFromEnvironment
+                                ? "\(HostEnvironment.modelLinksVariable) sets this model's link for this run." : nil)
+                            if !linkFromEnvironment {
+                                Button("Use Standard Download") { controller.removeModelLink(model.id) }
+                                    .buttonStyle(.link).font(.caption)
+                                    .disabled(linkActionsDisabled || downloading)
+                                    .help("Download this model the usual way instead of from the link")
+                            }
+                        }
+                        .padding(.top, 4)
                     }
                 }
                 Spacer()
@@ -116,6 +145,11 @@ private struct ModelCard: View {
                         Button(downloading ? "Downloading…" : "Download", systemImage: "arrow.down.circle", action: onDownload)
                             .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(Crystal.serverAccent)
                             .disabled(actionsDisabled || downloading)
+                        Button("Download from Link…") { controller.openLinkEditor(for: model.id) }
+                            .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                            .disabled(linkActionsDisabled || downloading || editing || linkFromEnvironment)
+                            .help(linkFromEnvironment ? "\(HostEnvironment.modelLinksVariable) sets this model's link for this run."
+                                : "Download a .zip of this model from a link you give, for example your organisation's server")
                         if !model.assignedWorkers.isEmpty {
                             ErrorLabel(text: "Assigned but missing").font(.caption)
                         }

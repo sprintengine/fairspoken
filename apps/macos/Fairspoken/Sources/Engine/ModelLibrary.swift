@@ -10,6 +10,7 @@ final class ModelLibrary {
     enum EngineState: Equatable {
         case idle
         case downloading(Double)
+        case unpacking
         case compiling
         case loading
         case warming
@@ -19,7 +20,7 @@ final class ModelLibrary {
         var isReady: Bool { self == .ready }
         var isBusy: Bool {
             switch self {
-            case .downloading, .compiling, .loading, .warming: true
+            case .downloading, .unpacking, .compiling, .loading, .warming: true
             default: false
             }
         }
@@ -28,6 +29,7 @@ final class ModelLibrary {
             switch self {
             case .idle: "Not loaded"
             case .downloading(let f): "Downloading \(Int(f * 100))%"
+            case .unpacking: "Unpacking…"
             case .compiling: "Optimising for this Mac…"
             case .loading: "Loading onto the Neural Engine…"
             case .warming: "Warming up…"
@@ -40,6 +42,7 @@ final class ModelLibrary {
     enum ItemState: Equatable {
         case available
         case downloading(Double)
+        case unpacking
         case compiling
         case installed
     }
@@ -49,7 +52,7 @@ final class ModelLibrary {
     private(set) var items: [String: ItemState] = [:]
     private(set) var diskBytes: [String: Int64] = [:]
     private(set) var lastLoadSeconds: Double?
-    /// Why the last gallery download of a model failed (says what and where), until the next try.
+    /// Why the last download of a model failed (says what and where), until the next try.
     private(set) var downloadErrors: [String: String] = [:]
 
     let engine = FluidAudioEngine()
@@ -69,8 +72,8 @@ final class ModelLibrary {
     func refresh() {
         for model in SpeechModelCatalog.all {
             if case .downloading = items[model.id] { continue }
-            if items[model.id] == .compiling { continue }
-            items[model.id] = FluidAudioEngine.isInstalled(model.id) ? .installed : .available
+            if items[model.id] == .compiling || items[model.id] == .unpacking { continue }
+            items[model.id] = FluidAudioEngine.isInstalled(model.id) && !presentedAsAvailable.contains(model.id) ? .installed : .available
         }
         Task.detached(priority: .utility) {
             var sizes: [String: Int64] = [:]
@@ -89,6 +92,7 @@ final class ModelLibrary {
         activeModelID = id
         loadTask?.cancel()
         engineState = .loading
+        downloadErrors[id] = nil
         let started = Date()
         let report: @Sendable (FluidAudioEngine.Stage) -> Void = { [weak self] stage in
             Task { @MainActor in self?.apply(stage, for: id) }
@@ -107,6 +111,9 @@ final class ModelLibrary {
                     guard let self, self.activeModelID == id else { return }
                     Self.log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
                     self.engineState = .failed("Couldn't load the model: \(error.localizedDescription)")
+                    // A model that never arrived shows why on its card too.
+                    if !FluidAudioEngine.isInstalled(id) { self.downloadErrors[id] = error.localizedDescription }
+                    if self.items[id] != .installed { self.items[id] = nil }
                     self.refresh()
                 }
             }
@@ -115,10 +122,15 @@ final class ModelLibrary {
 
     private func apply(_ stage: FluidAudioEngine.Stage, for id: String) {
         guard activeModelID == id, engineState != .ready else { return }
+        // A late report after the load failed would leave the card looking busy.
+        if case .failed = engineState { return }
         switch stage {
         case .downloading(let f):
             engineState = .downloading(f)
             items[id] = .downloading(f)
+        case .unpacking:
+            engineState = .unpacking
+            items[id] = .unpacking
         case .compiling:
             engineState = .compiling
             items[id] = .compiling
@@ -139,6 +151,7 @@ final class ModelLibrary {
             Task { @MainActor in
                 switch stage {
                 case .downloading(let f): self?.items[id] = .downloading(f)
+                case .unpacking: self?.items[id] = .unpacking
                 case .compiling: self?.items[id] = .compiling
                 default: break
                 }
@@ -161,7 +174,10 @@ final class ModelLibrary {
         }
     }
 
-    func clearDownloadErrors() { downloadErrors = [:] }
+    func clearDownloadError(_ id: String) { downloadErrors[id] = nil }
+
+    /// Screenshot mode: shows a model as not downloaded, whatever is on disk.
+    @ObservationIgnored var presentedAsAvailable: Set<String> = []
 
     /// Removes a model's files. The active model is never deleted.
     func delete(_ id: String) {

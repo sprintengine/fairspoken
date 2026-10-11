@@ -14,7 +14,7 @@
     postProcess: true, vocabularyHints: [], transcriptCorrections: [], recordingShortcut: "CommandOrControl+Shift+Digit1",
     recordingShortcutMode: "push-to-talk", transcriptStackShortcut: "CommandOrControl+Shift+Digit2", insertAtCursor: true,
     accessibilityInsert: false, fnPushToTalk: true, polishEnabled: true, polishProvider: "local", polishModel: "qwen3.5-2b",
-    polishTones: {}, contextAwareness: true, modelSource: "",
+    polishTones: {}, contextAwareness: true, modelLinks: {},
   };
   const speech = ["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2", "small", "medium", "large-v3", "large-v3-turbo"]
     .map((model) => ({ model, cached: model.startsWith("parakeet") || model === "large-v3-turbo" }));

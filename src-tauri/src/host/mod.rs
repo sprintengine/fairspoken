@@ -22,8 +22,8 @@ use crate::transcription::TranscriptionService;
 use catalog::{ModelInventory, ModelSnapshot};
 use config::{
     apply_config_update, default_host_config_path, load_persisted_config, overlay_persisted_config,
-    persist_live_config, resolve_model_source, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig,
-    DEFAULT_HOST_MODEL, MODEL_SOURCE_ENV,
+    persist_live_config, resolve_model_links, HostConfigUpdate, HostLiveConfig, HostRuntimeConfig,
+    DEFAULT_HOST_MODEL, MODEL_LINKS_ENV,
 };
 #[cfg(test)]
 use config::{parse_bool, parse_worker_models, PersistedHostConfig};
@@ -74,8 +74,8 @@ pub fn run_transcription_host() -> Result<(), String> {
     if command.as_ref().is_ok_and(cli::HostCommand::uses_data_dirs) {
         crate::app_dirs::migrate_legacy_dirs();
     }
-    let cli_model_source = match command {
-        Ok(cli::HostCommand::Serve { model_source }) => model_source,
+    let cli_model_links = match command {
+        Ok(cli::HostCommand::Serve { model_links }) => model_links,
         Ok(command) => {
             let code = cli::run(command)?;
             if code != 0 {
@@ -115,14 +115,17 @@ pub fn run_transcription_host() -> Result<(), String> {
     let saved_name = persisted
         .as_ref()
         .and_then(|persisted| persisted.name.clone());
-    let saved_model_source = persisted
+    let saved_model_links = persisted
         .as_ref()
-        .and_then(|persisted| persisted.model_source.clone());
-    let (model_source, model_source_origin) = resolve_model_source(
-        cli_model_source.as_deref(),
-        crate::app_dirs::env_var(MODEL_SOURCE_ENV).as_deref(),
-        saved_model_source.as_deref(),
+        .map(|persisted| persisted.model_links.clone())
+        .unwrap_or_default();
+    let valid_model_ids: Vec<&str> = SttModel::all().into_iter().map(SttModel::model_id).collect();
+    let model_links = resolve_model_links(
+        &cli_model_links,
+        crate::app_dirs::env_var(MODEL_LINKS_ENV).as_deref(),
+        &saved_model_links,
         &config_path,
+        &valid_model_ids,
     )?;
     let host_name = resolve_host_name(
         crate::app_dirs::env_var(HOST_NAME_ENV),
@@ -135,8 +138,15 @@ pub fn run_transcription_host() -> Result<(), String> {
     let server = bind_server(&addr)?;
     println!("Fairspoken transcription host {SERVER_VERSION} listening on http://{addr}");
 
-    println!("Models download from {model_source} ({model_source_origin})");
-    let models = ModelService::default().with_source(model_source);
+    for (model, resolved) in &model_links {
+        println!("{model} installs from {} ({})", resolved.link, resolved.origin);
+    }
+    let models = ModelService::default().with_links(
+        model_links
+            .into_iter()
+            .map(|(model, resolved)| (model, resolved.link))
+            .collect(),
+    );
     let metrics = Arc::new(Mutex::new(HostMetrics::new(&config)));
     let runtime = Arc::new(HostRuntime::start(
         models.clone(),
@@ -147,7 +157,7 @@ pub fn run_transcription_host() -> Result<(), String> {
     runtime.live.set_update_prefs(update_prefs);
     runtime.live.set_auth(auth);
     runtime.live.set_name(host_name, saved_name);
-    runtime.live.set_saved_model_source(saved_model_source);
+    runtime.live.set_saved_model_links(saved_model_links);
     if generated_token {
         // Pairing hands out the token, so it must survive a restart.
         persist_live_config(&runtime.config_path, &runtime.live)
@@ -566,7 +576,7 @@ mod tests {
                 pairing_password: None,
                 name: None,
                 super_mode: None,
-                model_source: None,
+                model_links: Default::default(),
             },
         );
         assert_eq!(config.max_active_streams, 32);

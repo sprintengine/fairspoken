@@ -18,6 +18,13 @@ let package = Package(
         .target(name: "FairspokenSpeech", dependencies: [
             .product(name: "FluidAudio", package: "FluidAudio"),
             "FairspokenCore",
-        ])
+        ]),
+        // Opt-in checks against real models (skipped unless FAIRSPOKEN_REAL_MODEL_LINK is set);
+        // not part of scripts/test.sh.
+        .testTarget(name: "FairspokenSpeechTests", dependencies: [
+            "FairspokenSpeech",
+            "FairspokenCore",
+            .product(name: "FluidAudio", package: "FluidAudio"),
+        ]),
     ]
 )

@@ -112,7 +112,14 @@ struct ModelCard: View {
 
                 Spacer(minLength: 0)
                 Divider().overlay(Crystal.hairline)
-                actions(state: state, active: active)
+                if model.linkEditorModel == info.id, state == .available {
+                    ModelLinkEditor(text: Bindable(model).linkDraft, tint: Crystal.clientAccent,
+                                    submit: { model.downloadFromLink(info.id, $0) },
+                                    cancel: { model.linkEditorModel = nil })
+                } else {
+                    actions(state: state, active: active)
+                    linkRow(state: state)
+                }
             }
         }
         .overlay {
@@ -144,6 +151,10 @@ struct ModelCard: View {
                     Text("Downloading \(Int(fraction * 100))%").font(.caption).foregroundStyle(Crystal.ink2)
                 }
                 .tint(Crystal.clientAccent)
+            case .unpacking:
+                ProgressView().controlSize(.small)
+                Text("Unpacking…").font(.callout).foregroundStyle(Crystal.ink2)
+                Spacer()
             case .compiling:
                 ProgressView().controlSize(.small)
                 Text("Optimising for this Mac…").font(.callout).foregroundStyle(Crystal.ink2)
@@ -167,6 +178,27 @@ struct ModelCard: View {
             }
         }
         .frame(minHeight: 30)
+    }
+
+    /// The saved download link, if any, and the link actions while the model isn't downloaded.
+    @ViewBuilder private func linkRow(state: ModelLibrary.ItemState) -> some View {
+        let saved = model.settings.settings.modelLinks[info.id]
+        if saved != nil || state == .available {
+            VStack(alignment: .leading, spacing: 6) {
+                if let saved { ModelLinkSummary(link: saved) }
+                HStack(spacing: 14) {
+                    if state == .available {
+                        Button("Download from Link…") { model.openLinkEditor(for: info.id) }
+                    }
+                    if saved != nil {
+                        Button("Use Standard Download") { model.removeModelLink(info.id) }
+                            .help("Download this model the usual way instead of from the link")
+                    }
+                }
+                .buttonStyle(.link).font(.caption)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     /// The live engine state, on the card of the model in use.

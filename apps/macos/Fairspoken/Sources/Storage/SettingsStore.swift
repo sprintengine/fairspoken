@@ -39,12 +39,14 @@ final class SettingsStore {
         var imported = false
         if let data = try? Data(contentsOf: url) {
             raw = (try? JSONDecoder().decode(JSONValue.self, from: data))?.objectValue ?? [:]
+            // A setting earlier builds had (a download mirror or folder); links replaced it.
+            raw["modelSource"] = nil
             loaded = (try? JSONDecoder().decode(AppSettings.self, from: data)) ?? AppSettings()
         } else if let data = try? Data(contentsOf: AppInfo.tauriDirectory.appendingPathComponent("settings.json")),
-                  let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
-            // One-time import from the Tauri app (plan §2.8).
-            raw = (try? JSONDecoder().decode(JSONValue.self, from: data))?.objectValue ?? [:]
-            loaded = decoded
+                  let tauri = AppSettings.importingTauri(data) {
+            // One-time import from the Tauri app (plan §2.8), without its ONNX model links.
+            raw = tauri.raw
+            loaded = tauri.settings
             imported = true
             Self.log.info("Imported settings from the Tauri app")
         }

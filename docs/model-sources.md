@@ -1,216 +1,94 @@
-# Model sources
+# Installing models from your own server
 
-Fairspoken downloads its speech models (and, in the desktop app, its local
-polish models) from Hugging Face. If your organisation blocks huggingface.co,
-host the models on your own network and point Fairspoken at your copy with
-the **model source** setting.
+Fairspoken downloads its speech and text polish models from the internet the
+first time they are used. If your network blocks that, put a zip of each model
+on a server your users can reach and give the app a link to it. The app
+downloads the zip, unpacks it and installs the model as if it had downloaded
+it the usual way, with the same checks.
 
-It works the same way in every Fairspoken app:
+## 1. Build the zip
 
-| App | Where to set it |
-| --- | --- |
-| Desktop app (Windows, Linux, macOS; Tauri) | Settings → Transcription → Advanced → **Model source**, or `modelSource` in `settings.json` |
-| Transcription host (`transcription-host`) | `--model-source`, `FAIRSPOKEN_MODEL_SOURCE`, or `modelSource` in `host-config.json` (see [below](#the-transcription-host)) |
-| Fairspoken for Mac and Fairspoken Server (Swift) | Their Settings, or `modelSource` in their settings and host config files |
+On a machine with internet access, run the bundle script from this repository
+once per model and per app:
 
-**Test** next to the field in the desktop app checks that the source can
-serve the first file of the selected model, without saving anything or
-downloading the whole model, and shows either where it found the file or
-exactly what failed.
-
-## The three kinds of value
-
-| Value | Meaning |
-| --- | --- |
-| *(empty)* | Hugging Face, `https://huggingface.co`. The default. |
-| `http://…` or `https://…` | The base URL of a **Hugging Face–compatible mirror**. |
-| Anything else: an absolute path, `~/…`, or a `file://` URL | A **local or network folder** holding the model files. |
-
-Leading and trailing spaces are ignored, as are trailing slashes. The value
-can be at most 2048 characters. These are refused with a message saying why:
-
-- URLs with any other scheme (`ftp://`, `smb://`, `s3://`, …). Mount a network
-  share and use its path instead (`/Volumes/models`, `\\server\share\models`).
-- URLs with a user name or password in them (`https://user:pass@…`).
-- Relative paths (`models`, `./models`, `..\models`).
-
-### A mirror URL
-
-Each file is fetched from
-
-```
-{base}/{repo}/resolve/{revision}/{file}
+```bash
+scripts/models/make-model-bundle.sh parakeet-tdt-0.6b-v3 desktop parakeet-tdt-0.6b-v3-desktop.zip
+scripts/models/make-model-bundle.sh parakeet-tdt-0.6b-v3 mac     parakeet-tdt-0.6b-v3-mac.zip
 ```
 
-exactly as from Hugging Face, with `https://huggingface.co` replaced by your
-base URL. For example, with the base `https://mirror.example/hf`, Parakeet
-TDT 0.6B v3's encoder comes from
+It needs only `bash`, `curl` and `zip` (or `python3`), and works on macOS and
+Linux. The desktop app and the Mac apps run different model files, so they
+need different zips:
 
-```
-https://mirror.example/hf/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx
-```
-
-Any server that answers that layout works: an Artifactory or Nexus Hugging
-Face remote repository, [hf-mirror](https://hf-mirror.com), Olah, or a plain
-static file server whose folders are laid out the same way (one folder per
-revision under `resolve/`, so a pinned revision is a folder named after the
-commit).
-
-The desktop app also asks the mirror for `{base}/api/models/{repo}` when you
-press **Refresh** on the Models screen, to show download counts for the polish
-models; a mirror without that API only means no counts are shown.
-
-**The Swift apps need more from a mirror.** Fairspoken for Mac and Fairspoken
-Server list a model's files before downloading it, through the Hub's
-file-listing API:
-
-```
-{base}/api/models/{repo}/tree/{revision}
-```
-
-Artifactory, Nexus and hf-mirror serve it; a plain static file server does
-not. For the Swift apps, use a folder (below) instead of a static server.
-
-### A folder
-
-The folder holds each repository as `{folder}/{owner}/{repo-name}/`, with the
-repository's files inside it, in the layout
-
-```
-hf download owner/repo-name --local-dir {folder}/owner/repo-name
-```
-
-produces. The revision is not part of the folder layout, so download the
-revision listed below. Files are **copied** (never linked) into the app's
-usual model directory and get the same size and checksum checks as a download
-where the app has them, so a wrong or partial copy is refused rather than
-loaded. The folder can be on a network share; it only needs to be readable
-while models are being installed.
-
-A missing file is reported with the folder it was looked for in, e.g.
-`encoder-model.onnx not found in /Volumes/models/istupakov/parakeet-tdt-0.6b-v3-onnx`.
-
-## The models to mirror
-
-To fill a folder, run these on a machine that can reach Hugging Face (with the
-[`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli)), then copy
-`$FOLDER` to your share. Fetch only the models your users choose. A mirror
-that proxies Hugging Face (Artifactory, Nexus, hf-mirror) needs no
-preparation.
-
-### Desktop app and transcription host (Rust)
-
-Speech models:
-
-| Model (setting id) | Repository | Revision | Files |
+| Model id | Model | `desktop` zip: Fairspoken for Windows, Linux and macOS, and `transcription-host` | `mac` zip: Fairspoken for Mac and Fairspoken Server |
 | --- | --- | --- | --- |
-| Parakeet TDT 0.6B v3 (`parakeet-tdt-0.6b-v3`, the default) | `istupakov/parakeet-tdt-0.6b-v3-onnx` | `main` | `encoder-model.onnx`, `encoder-model.onnx.data`, `decoder_joint-model.onnx`, `vocab.txt` |
-| Parakeet TDT 0.6B v2, English (`parakeet-tdt-0.6b-v2`) | `istupakov/parakeet-tdt-0.6b-v2-onnx` | `0bbb45a3365852604aef28b538a8f066f4ccaa85` | the same four files |
-| Parakeet Ultra (`parakeet-ultra`) | `altunenes/parakeet-rs` | `4d2a8bc71f5c896ec40faa59732e6716295edaf2` | the same four files, in its `parakeet-ultra/` folder |
-| Whisper (`tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`) | `ggerganov/whisper.cpp` | `main` | `ggml-{id}.bin`, e.g. `ggml-large-v3-turbo.bin` |
+| `parakeet-tdt-0.6b-v3` | Parakeet 0.6B v3 (the default) | Yes | Yes |
+| `parakeet-ultra` | Parakeet Ultra | Yes | Yes |
+| `parakeet-tdt-0.6b-v2` | Parakeet 0.6B v2 (English) | Yes | Yes |
+| `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo` | Whisper | Yes | No |
+| `speakoflow-mini`, `qwen3.5-0.8b`, `qwen3.5-2b`, `qwen3.5-4b` | Text polish | Yes | No |
 
-```bash
-FOLDER=/srv/fairspoken-models
-FILES="encoder-model.onnx encoder-model.onnx.data decoder_joint-model.onnx vocab.txt"
+What is in a zip: the model's files at the top level, nothing else. For the
+desktop app these are files such as `encoder-model.onnx`, `ggml-base.bin` or
+`Qwen3.5-2B-Q4_K_M.gguf`; for the Mac apps, Core ML bundles such as
+`Encoder.mlmodelc`, which stay folders, and `parakeet_vocab.json`. The apps
+also accept a zip whose files sit in a folder inside it, a `.tar` or `.tar.gz`
+instead of a zip, and for a one-file model (Whisper, text polish) the file
+itself.
 
-# Parakeet TDT 0.6B v3 (the default)
-hf download istupakov/parakeet-tdt-0.6b-v3-onnx $FILES \
-  --local-dir "$FOLDER/istupakov/parakeet-tdt-0.6b-v3-onnx"
+## 2. Put it where your users can reach it
 
-# Parakeet TDT 0.6B v2 (English)
-hf download istupakov/parakeet-tdt-0.6b-v2-onnx $FILES \
-  --revision 0bbb45a3365852604aef28b538a8f066f4ccaa85 \
-  --local-dir "$FOLDER/istupakov/parakeet-tdt-0.6b-v2-onnx"
+Any of these works:
 
-# Parakeet Ultra
-hf download altunenes/parakeet-rs \
-  parakeet-ultra/encoder-model.onnx parakeet-ultra/encoder-model.onnx.data \
-  parakeet-ultra/decoder_joint-model.onnx parakeet-ultra/vocab.txt \
-  --revision 4d2a8bc71f5c896ec40faa59732e6716295edaf2 \
-  --local-dir "$FOLDER/altunenes/parakeet-rs"
+- A generic repository in Artifactory or Nexus, for example
+  `https://artifactory.example.org/artifactory/fairspoken-models/parakeet-tdt-0.6b-v3-desktop.zip`.
+- An intranet web server, SharePoint or similar.
+- A network share, for example `\\fileserver\models\parakeet-tdt-0.6b-v3-desktop.zip`
+  or `/Volumes/Models/parakeet-tdt-0.6b-v3-desktop.zip`.
 
-# Whisper: one file per model; repeat for each one you use
-hf download ggerganov/whisper.cpp ggml-large-v3-turbo.bin \
-  --local-dir "$FOLDER/ggerganov/whisper.cpp"
-```
+The apps can't sign in to a server. Use a link that downloads without a
+sign-in: anonymous read access, or a link with an access token in it. Links
+may have a query string (`?token=…`); the apps never show it or write it to
+their logs. Links with a user name and password in them
+(`https://user:password@…`) are refused.
 
-Local polish models (desktop app only; one `.gguf` file each):
+## 3. Give the app the link
 
-| Model | Repository | Revision | File |
-| --- | --- | --- | --- |
-| SpeakoFlow Mini | `SpeakoFlow/speakoflow-mini` | `835431771f72820251fe6c6b4b07f12b000e2647` | `SpeakoFlow-Mini-0.8B-Q8_0.gguf` |
-| Qwen3.5 0.8B | `ggml-org/Qwen3.5-0.8B-GGUF` | `8fea620810c4afa23dd6443f999a48574c1611a3` | `Qwen3.5-0.8B-Q4_0.gguf` |
-| Qwen3.5 2B | `lmstudio-community/Qwen3.5-2B-GGUF` | `bb84e11355a036e28f080c7793fa6d22b7c4e344` | `Qwen3.5-2B-Q4_K_M.gguf` |
-| Qwen3.5 4B | `unsloth/Qwen3.5-4B-GGUF` | `e87f176479d0855a907a41277aca2f8ee7a09523` | `Qwen3.5-4B-Q4_K_M.gguf` |
+**Desktop and Mac apps:** on the **Models** screen, choose **Download from
+link…** next to the model, paste the link and choose **Download**. The app
+remembers the link (it shows the server and path under the model) and uses it
+whenever that model is downloaded again. **Use the standard download** forgets
+it.
 
-```bash
-hf download SpeakoFlow/speakoflow-mini SpeakoFlow-Mini-0.8B-Q8_0.gguf \
-  --revision 835431771f72820251fe6c6b4b07f12b000e2647 \
-  --local-dir "$FOLDER/SpeakoFlow/speakoflow-mini"
-```
-
-Local polish also needs the llama.cpp runtime, which the desktop app
-downloads from the llama.cpp GitHub releases
-(`https://github.com/ggml-org/llama.cpp/releases/download/b10930/…`), not
-from the model source. Allow that address, or leave local polish off.
-
-When Fairspoken updates a model, its repository or revision in this table
-changes too; refresh your folder from the new table after upgrading.
-
-### Fairspoken for Mac and Fairspoken Server (Swift)
-
-The Swift apps run Core ML conversions of the same Parakeet models, published
-by FluidInference, at revision `main`, laid out the same way:
-
-| Model | Repository |
-| --- | --- |
-| Parakeet TDT 0.6B v3 | `FluidInference/parakeet-tdt-0.6b-v3-coreml` |
-| Parakeet Ultra | `FluidInference/parakeet-ultra-coreml` |
-| Parakeet TDT 0.6B v2 | `FluidInference/parakeet-tdt-0.6b-v2-coreml` |
-
-```bash
-hf download FluidInference/parakeet-tdt-0.6b-v3-coreml \
-  --local-dir "$FOLDER/FluidInference/parakeet-tdt-0.6b-v3-coreml"
-```
-
-One folder can serve every app: the Rust and Swift repositories have
-different names, so they sit side by side.
-
-## The transcription host
-
-The standalone `transcription-host` takes the model source from, highest
-first:
-
-1. `--model-source <url|folder>` on the command line. `--model-source=""`
-   forces Hugging Face over the two below.
-2. The `FAIRSPOKEN_MODEL_SOURCE` environment variable (an empty value counts
-   as unset).
-3. `modelSource` in the host config file (`host-config.json`; the path is in
-   `FAIRSPOKEN_HOST_CONFIG_PATH`, or the host's config directory).
-4. Hugging Face.
-
-```bash
-transcription-host --model-source https://artifactory.example.org/api/huggingfaceml/hf
-FAIRSPOKEN_MODEL_SOURCE=/srv/fairspoken-models transcription-host
-```
+The links are saved in the app's settings file as `modelLinks`, by model id,
+so you can also set them there before the app first starts:
 
 ```json
-{
-  "maxActiveStreams": 4,
-  "maxRecordingSeconds": 600,
-  "useGpu": true,
-  "workerModels": ["parakeet-tdt-0.6b-v3"],
-  "modelSource": "https://mirror.example/hf"
+"modelLinks": {
+  "parakeet-tdt-0.6b-v3": "https://artifactory.example.org/artifactory/fairspoken-models/parakeet-tdt-0.6b-v3-desktop.zip"
 }
 ```
 
-The host prints the source it uses at startup (`Models download from …`) and
-refuses to start when the value is invalid, naming where it came from. It
-applies to model downloads started from the dashboard. Fairspoken Server
-reads the same `modelSource` key from its config file.
+Text polish also needs a small runtime, which the desktop app downloads from
+GitHub (`github.com/ggml-org/llama.cpp`) the first time; a link covers the
+model file only.
 
-## Searching Hugging Face
+### Transcription hosts
 
-With a model source set, the desktop app's Models screen searches only the
-models on this device and no longer queries the Hugging Face Hub, which your
-users are assumed not to reach.
+`transcription-host` takes a link per model from, highest first:
+
+1. `--model-link <model-id>=<link>` on the command line, once per model.
+   An empty link (`--model-link parakeet-ultra=`) means the usual download.
+2. `FAIRSPOKEN_MODEL_LINKS`: `model-id=link` pairs separated by spaces. Write
+   a path with spaces in it as a `file://` link with `%20`, or use the config
+   file.
+3. `modelLinks` in the host config file (`host-config.json`), as above.
+
+```bash
+transcription-host --model-link parakeet-tdt-0.6b-v3=https://files.example.org/models/parakeet-tdt-0.6b-v3-desktop.zip
+FAIRSPOKEN_MODEL_LINKS="parakeet-tdt-0.6b-v3=/srv/models/parakeet-v3.zip large-v3-turbo=/srv/models/whisper-turbo.zip" transcription-host
+```
+
+The host prints each link it will use at startup, and refuses to start when a
+model id is unknown or a link is malformed, saying which. Fairspoken Server
+reads `modelLinks` from its config file the same way, with the `mac` zips.

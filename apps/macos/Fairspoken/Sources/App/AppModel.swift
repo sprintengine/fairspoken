@@ -45,7 +45,7 @@ final class AppModel {
     init() {
         settings = SettingsStore()
         // Before anything can download.
-        ParakeetModels.setSource(text: settings.settings.modelSource)
+        ParakeetModels.setLinks(settings.settings.modelLinks)
         history = HistoryStore()
         permissions = Permissions()
         models = ModelLibrary()
@@ -94,20 +94,37 @@ final class AppModel {
         }
     }
 
-    /// Saves the model source and points downloads at it; a model that failed to download is
-    /// tried again from the new source. Returns why `text` can't be a source, or nil.
-    @discardableResult
-    func setModelSource(_ text: String) -> String? {
+    /// The model card whose "Download from Link…" field is open, and what it holds.
+    var linkEditorModel: String?
+    var linkDraft = ""
+
+    func openLinkEditor(for id: String) {
+        linkDraft = settings.settings.modelLinks[id] ?? ""
+        linkEditorModel = id
+    }
+
+    /// Saves `text` as `id`'s download link and downloads the model from it (the model in use
+    /// that failed to load is loaded too). Returns why `text` can't be a link, or nil.
+    func downloadFromLink(_ id: String, _ text: String) -> String? {
         let value: String
-        do { value = try ModelSource.normalize(text) } catch { return error.localizedDescription }
-        guard value != settings.settings.modelSource else { return nil }
-        settings.update { $0.modelSource = value }
-        ParakeetModels.setSource(text: value)
-        models.clearDownloadErrors()
-        if case .failed = models.engineState, settings.settings.transcriptionLocation == .local {
-            models.prepare(settings.settings.model)
+        do { value = try ModelLink.normalize(text) } catch { return error.localizedDescription }
+        settings.update { $0.modelLinks[id] = value }
+        ParakeetModels.setLinks(settings.settings.modelLinks)
+        linkEditorModel = nil
+        models.clearDownloadError(id)
+        if id == models.activeModelID, case .failed = models.engineState, settings.settings.transcriptionLocation == .local {
+            models.prepare(id)
+        } else {
+            models.download(id)
         }
         return nil
+    }
+
+    /// Back to the standard download for `id`.
+    func removeModelLink(_ id: String) {
+        settings.update { $0.modelLinks[id] = nil }
+        ParakeetModels.setLinks(settings.settings.modelLinks)
+        models.clearDownloadError(id)
     }
 
     /// Keep `recordingShortcut` in settings.json meaningful for the shared schema.

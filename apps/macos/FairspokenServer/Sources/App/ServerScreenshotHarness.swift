@@ -64,15 +64,22 @@ final class ServerScreenshotHarness {
                 try? await Task.sleep(for: .milliseconds(900))
                 if let window = delegate.mainWindow { capture(window, as: "configuration-advanced-\(name)") }
                 controller.revealAdvanced = false
-                // Configuration scrolled to Downloads, with a sample mirror.
-                controller.presentSampleModelSource("https://artifactory.example.org/artifactory/api/huggingfaceml/huggingface")
-                controller.revealModelSource = true
-                delegate.showWindow(.configuration)
+                // Models with "Download from Link…" open on the model that isn't downloaded, then
+                // with the link saved (never written to the real config file).
+                let id = "parakeet-tdt-0.6b-v2"
+                let sample = "https://artifactory.example.org/artifactory/models/parakeet-tdt-0.6b-v2-mac.zip"
+                controller.linkDraft = sample
+                controller.linkEditorModel = id
+                delegate.showWindow(.models)
                 await freshFrame()
                 try? await Task.sleep(for: .milliseconds(900))
-                if let window = delegate.mainWindow { capture(window, as: "configuration-model-source-\(name)") }
-                controller.revealModelSource = false
-                controller.presentSampleModelSource("")
+                if let window = delegate.mainWindow { capture(window, as: "models-link-open-\(name)") }
+                controller.linkEditorModel = nil
+                controller.presentSampleModelLink(id, sample + "?X-JFrog-Art-Api=sample-token")
+                await freshFrame()
+                try? await Task.sleep(for: .milliseconds(900))
+                if let window = delegate.mainWindow { capture(window, as: "models-link-saved-\(name)") }
+                controller.presentSampleModelLink(id, nil)
             }
             NSApp.terminate(nil)
         }
