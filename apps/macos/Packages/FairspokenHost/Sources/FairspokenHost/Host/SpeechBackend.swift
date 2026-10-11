@@ -67,6 +67,8 @@ public final class StubSpeechBackend: HostSpeechBackend, @unchecked Sendable {
     public var prepareDelay: Duration
     public var downloadStepDelay: Duration
     public var failNextTranscription = false
+    /// Refuses shorter audio the way FluidAudio does (0 accepts anything).
+    public var minimumSamples = 0
     public private(set) var transcribeCalls: [(worker: Int, samples: Int)] = []
 
     public init(installed: Set<String> = ["parakeet-tdt-0.6b-v3", "parakeet-ultra"],
@@ -98,6 +100,9 @@ public final class StubSpeechBackend: HostSpeechBackend, @unchecked Sendable {
         let model = lock.withLock { loaded[worker] }
         guard model != nil else { throw HostBackendError.notLoaded("worker \(worker)") }
         lock.withLock { transcribeCalls.append((worker, samples16k.count)) }
+        if samples16k.count < minimumSamples {
+            throw NSError(domain: "stub", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid audio data provided. Must be at least 300ms of 16kHz audio."])
+        }
         if transcribeDelay > .zero { try await Task.sleep(for: transcribeDelay) }
         let fail = lock.withLock { () -> Bool in defer { failNextTranscription = false }; return failNextTranscription }
         if fail { throw NSError(domain: "stub", code: 1, userInfo: [NSLocalizedDescriptionKey: "Stub transcription failed"]) }

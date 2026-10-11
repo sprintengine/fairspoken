@@ -37,7 +37,7 @@ struct PillView: View {
         case .transcribing:
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text("Transcribing").font(.callout.weight(.semibold))
+                Text(dictation.transcribingNote ?? "Transcribing").font(.callout.weight(.semibold))
             }
             .accessibilityLabel("Transcribing")
         case .done(let result):
@@ -45,7 +45,7 @@ struct PillView: View {
                 Image(systemName: icon(for: result.delivery)).foregroundStyle(Crystal.ok)
                     .symbolEffect(.bounce, value: result.text)
                 Text(headline(for: result)).font(.callout.weight(.semibold)).lineLimit(1)
-                Text("\(result.words) words · \(Format.ms(Double(result.latencyMs)))")
+                Text(result.delivery.isRecovered ? "\(result.words) words · in Recent" : "\(result.words) words · \(Format.ms(Double(result.latencyMs)))")
                     .font(.callout).foregroundStyle(Crystal.ink2).lineLimit(1)
             }
         case .failed(let message):
@@ -78,6 +78,7 @@ struct PillView: View {
         case .pasted: "checkmark.circle.fill"
         case .copied: "doc.on.clipboard.fill"
         case .shownInApp: "text.badge.checkmark"
+        case .recovered: "arrow.clockwise.circle.fill"
         }
     }
 
@@ -86,6 +87,7 @@ struct PillView: View {
         case .pasted(let app): app.map { "Inserted into \($0)" } ?? "Inserted"
         case .copied(let reason): reason
         case .shownInApp: "Done"
+        case .recovered(let copied): copied ? "Recovered dictation copied" : "Recovered a dictation"
         }
     }
 

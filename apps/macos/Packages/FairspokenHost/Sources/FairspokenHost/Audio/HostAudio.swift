@@ -186,6 +186,20 @@ public struct StreamFrameReader: Sendable {
     }
 }
 
+/// Parakeet (FluidAudio) refuses audio under 300 ms ("Invalid audio data provided. Must be at least
+/// 300ms of 16kHz audio."). A stream's tail is that short whenever the user lets go just after a
+/// cut, and that error used to fail the whole dictation, minutes of it, so anything shorter
+/// than a second is padded with trailing silence before it is decoded.
+public enum DecodePadding {
+    public static let minimumSeconds = 1.0
+
+    public static func padded(_ samples16k: [Float]) -> [Float] {
+        let minimum = Int(minimumSeconds * 16_000)
+        guard !samples16k.isEmpty, samples16k.count < minimum else { return samples16k }
+        return samples16k + [Float](repeating: 0, count: minimum - samples16k.count)
+    }
+}
+
 /// Decides where to cut a stream into segments that are decoded while the client is still
 /// speaking. Parakeet's encoder sees 15 s windows, and a decode of anything up to that takes
 /// 40–80 ms on the Neural Engine, so once 12 s are buffered the audio is cut at the quietest

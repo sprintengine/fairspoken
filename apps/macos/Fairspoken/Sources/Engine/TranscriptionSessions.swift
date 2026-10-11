@@ -28,23 +28,7 @@ nonisolated final class LocalBatchSession: TranscriptionSession, @unchecked Send
 /// and `remoteTimeoutSeconds` both as the connect timeout and as the wait for the
 /// transcript after the stream ends.
 nonisolated final class RemoteStreamSession: TranscriptionSession, @unchecked Sendable {
-    enum RemoteError: LocalizedError {
-        case timedOut(Int)
-        case invalidResponse(String)
-        case noSpeech
-        case http(String)
-        case unreachable(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .timedOut(let s): "Remote transcription host did not respond within \(s)s of the recording ending"
-            case .invalidResponse(let d): "Remote streaming transcription response was invalid: \(d)"
-            case .noSpeech: "Remote streaming transcription returned no speech"
-            case .http(let m): m
-            case .unreachable(let d): "Remote transcription host is unreachable: \(d)"
-            }
-        }
-    }
+    typealias RemoteError = RemoteTranscriptionError
 
     private let writer: BodyStreamWriter
     private let responseTask: Task<(Data, URLResponse), Error>
@@ -99,16 +83,8 @@ nonisolated final class RemoteStreamSession: TranscriptionSession, @unchecked Se
             return try await group.next()!
         }
         guard let http = response as? HTTPURLResponse else { throw RemoteError.invalidResponse("not HTTP") }
-        guard (200..<300).contains(http.statusCode) else {
-            throw RemoteError.http(RemoteProtocol.errorMessage(statusCode: http.statusCode, body: data))
-        }
-        let result: RemoteTranscriptionResponse
-        do { result = try JSONDecoder().decode(RemoteTranscriptionResponse.self, from: data) } catch {
-            throw RemoteError.invalidResponse(error.localizedDescription)
-        }
-        guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw RemoteError.noSpeech }
         let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
-        return TranscriptionOutput(text: result.text, modelMs: ms, model: result.model, backend: result.backend, placement: .remoteHost)
+        return try RemoteError.interpret(status: http.statusCode, body: data, elapsedMs: ms)
     }
 
     func cancel() {
@@ -170,7 +146,7 @@ nonisolated enum RemoteHostClient {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
-            throw RemoteStreamSession.RemoteError.http(RemoteProtocol.errorMessage(statusCode: status, body: data))
+            throw RemoteTranscriptionError.http(status: status, message: RemoteProtocol.errorMessage(statusCode: status, body: data))
         }
         return try JSONDecoder().decode(RemoteHealth.self, from: data)
     }

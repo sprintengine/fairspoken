@@ -120,6 +120,24 @@ final class ModelLibrary {
         }
     }
 
+    /// Waits for the model `prepare` is loading.
+    func waitUntilReady(timeout: Duration) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !engineState.isReady {
+            if case .failed(let message) = engineState { throw NSError(domain: "engine", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+            if ContinuousClock.now > deadline { throw NSError(domain: "engine", code: 2, userInfo: [NSLocalizedDescriptionKey: "The speech model is still loading"]) }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// Transcribes on this Mac with `id`, an installed model, loading it first if need be: the
+    /// fallback for a dictation the host couldn't transcribe.
+    func transcribeOnThisMac(_ samples16k: [Float], model id: String, options: TranscriptionRequestOptions) async throws -> TranscriptionOutput {
+        prepare(id)
+        try await waitUntilReady(timeout: .seconds(120))
+        return try await engine.transcribe(samples16k, options: options)
+    }
+
     private func apply(_ stage: FluidAudioEngine.Stage, for id: String) {
         guard activeModelID == id, engineState != .ready else { return }
         // A late report after the load failed would leave the card looking busy.
