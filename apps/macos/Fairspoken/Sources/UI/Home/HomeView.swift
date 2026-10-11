@@ -20,6 +20,7 @@ struct HomeView: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     StatsStrip()
+                    if !model.pending.items.isEmpty { PendingDictationsCard() }
                     RecentDictationsCard()
                 }
                 .padding(.horizontal, Layout.pageH)
@@ -64,7 +65,7 @@ struct TryDictationCard: View {
     private var title: String {
         switch model.dictation.phase {
         case .listening: "Listening…"
-        case .transcribing: "Transcribing…"
+        case .transcribing: model.dictation.transcribingNote.map { "\($0)…" } ?? "Transcribing…"
         case .failed: "Try again"
         default: model.dictation.lastInAppResult == nil ? "Ready" : "You said"
         }
@@ -336,6 +337,100 @@ private struct WeekBars: View {
         .chartYAxis(.hidden)
         .frame(width: 56, height: 36)
         .accessibilityLabel("Words per day this week")
+    }
+}
+
+// MARK: - Not transcribed yet
+
+/// Dictations every attempt failed on. Their audio is kept on this Mac until one is
+/// transcribed; Fairspoken retries on its own, and here they can be retried now, exported or deleted.
+struct PendingDictationsCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var confirmDelete: PendingDictation?
+
+    var body: some View {
+        let pending = model.pending
+        GlassCard(cornerRadius: Layout.card, padding: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Not transcribed yet").cardHeading()
+                            .accessibilityAddTraits(.isHeader)
+                        Text("Kept on this Mac until transcribed. \(AppInfo.displayName) keeps retrying.")
+                            .font(.caption).foregroundStyle(Crystal.ink2)
+                    }
+                    Spacer()
+                    if pending.items.count > 1 {
+                        Button("Retry All", systemImage: "arrow.clockwise") {
+                            Task { await pending.retryAll(manual: true) }
+                        }
+                        .cardButton()
+                        .controlSize(.small)
+                        .disabled(!pending.retrying.isEmpty)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+                VStack(spacing: 2) {
+                    ForEach(pending.items) { item in
+                        row(item, retrying: pending.retrying.contains(item.id))
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Delete this recording?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+                            presenting: confirmDelete) { item in
+            Button("Delete Recording", role: .destructive) { model.pending.delete(item.id) }
+        } message: { _ in
+            Text("It hasn't been transcribed, so the dictation will be gone. Export the audio first to keep it.")
+        }
+    }
+
+    private func row(_ item: PendingDictation, retrying: Bool) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "waveform.badge.exclamationmark")
+                .foregroundStyle(Crystal.warn)
+                .frame(width: 28, height: 28)
+                .background(Crystal.well, in: .rect(cornerRadius: 7))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(item.appName ?? "Dictation") · \(PillView.clock(item.durationSeconds))")
+                    .foregroundStyle(Crystal.ink).lineLimit(1)
+                Text(retrying ? "Transcribing…" : item.lastError ?? "Not transcribed yet")
+                    .font(.caption).foregroundStyle(Crystal.ink2).lineLimit(2).truncationMode(.tail)
+                    .help(item.lastError ?? "")
+            }
+            Spacer(minLength: 8)
+            Text(Format.relative(item.date)).font(.caption).foregroundStyle(Crystal.ink3).monospacedDigit()
+            if retrying {
+                ProgressView().controlSize(.small).frame(width: 60)
+            } else {
+                Button("Retry") { Task { await model.pending.retry(item.id, manual: true) } }
+                    .cardButton()
+                    .controlSize(.small)
+                    .help("Transcribe it now; the text goes to the clipboard and Recent")
+            }
+            Menu {
+                actions(item)
+            } label: {
+                Image(systemName: "ellipsis.circle").foregroundStyle(Crystal.ink2)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(retrying)
+            .accessibilityLabel("More")
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 8)
+        .accessibilityElement(children: .contain)
+        .contextMenu { if !retrying { actions(item) } }
+    }
+
+    @ViewBuilder private func actions(_ item: PendingDictation) -> some View {
+        Button("Export Audio…") { model.pending.export(item.id) }
+        Button("Delete…", role: .destructive) { confirmDelete = item }
     }
 }
 

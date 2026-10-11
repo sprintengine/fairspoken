@@ -151,6 +151,39 @@ struct RouterTests {
         await h.shutdown()
     }
 
+    /// A dictation the client kept after a failure is re-sent as its WAV file, as is.
+    @Test func aKeptDictationIsAcceptedAsABatchUpload() async throws {
+        let h = Harness()
+        await h.startWorkers()
+        let wav = WAVFile.encode(TestAudio.samples(seconds: 2.5), sampleRate: 16_000)
+        let response = await h.request("POST", "/v1/transcriptions", headers: ["Content-Type": "audio/wav", "x-fairspoken-client": "fairspoken-macos"],
+                                       body: [UInt8](wav))
+        #expect(response.status == 200)
+        #expect(response.json["durationSeconds"] as? Double == 2.5)
+        #expect(h.backend.transcribeCalls.map(\.samples) == [40_000])
+        await h.shutdown()
+    }
+
+    /// The user lets go just after a cut. The tail is then shorter than Parakeet accepts (300 ms),
+    /// which used to fail the whole dictation with a 500; now it is padded and nothing is lost.
+    @Test func aTailTooShortForTheEngineIsPaddedNotFatal() async throws {
+        let h = Harness()
+        h.backend.minimumSamples = 4_800
+        await h.startWorkers()
+        // 12 s of tone with a 20 ms gap at 11.9 s: the segmenter cuts there, leaving 90 ms.
+        var samples = TestAudio.samples(seconds: 12)
+        for i in 190_400..<190_720 { samples[i] = 0 }
+        let input = stride(from: 0, to: samples.count, by: 1_600).map {
+            [UInt8](StreamFrameCodec.encode(sampleRate: 16_000, samples: Array(samples[$0..<min($0 + 1_600, samples.count)])))
+        }
+        let (response, _) = await streamRequest(h, frames: input, pace: .milliseconds(1))
+        #expect(response?.status == 200)
+        #expect(response?.json["durationSeconds"] as? Double == 12.0)
+        let calls = h.backend.transcribeCalls
+        #expect(calls.map(\.samples) == [190_560, 16_000]) // the segment, then the 90 ms tail padded to 1 s
+        await h.shutdown()
+    }
+
     @Test func streamErrors() async throws {
         let h = Harness()
         await h.startWorkers()

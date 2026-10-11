@@ -381,8 +381,8 @@ public final class HostRuntime: Sendable {
             metrics.workerModelReady(index, model: model)
             switch job.audio {
             case .recording(let recording):
-                result = .success(try await backend.transcribe(worker: index, samples16k: Resampler.to16k(recording.samples[...], sampleRate: recording.sampleRate),
-                                                               language: job.language))
+                result = .success(try await decode(Resampler.to16k(recording.samples[...], sampleRate: recording.sampleRate),
+                                                   worker: index, language: job.language))
             case .stream(let feed):
                 let streamed = try await transcribeStream(feed, worker: index, language: job.language)
                 duration = streamed.duration
@@ -414,6 +414,11 @@ public final class HostRuntime: Sendable {
         }
     }
 
+    /// Every decode goes through here, so none is too short for the engine (`DecodePadding`).
+    private func decode(_ samples16k: [Float], worker: Int, language: String) async throws -> String {
+        try await backend.transcribe(worker: worker, samples16k: DecodePadding.padded(samples16k), language: language)
+    }
+
     private struct StreamedTranscript {
         var text: String
         var duration: Double
@@ -439,7 +444,7 @@ public final class HostRuntime: Sendable {
                 if let cut = segmenter.cutPoint(pending[...], sampleRate: rate) {
                     let segment = Resampler.to16k(pending[..<cut], sampleRate: rate)
                     pending.removeFirst(cut)
-                    let text = try await backend.transcribe(worker: worker, samples16k: segment, language: language)
+                    let text = try await decode(segment, worker: worker, language: language)
                     if !text.trimmingCharacters(in: .whitespaces).isEmpty { texts.append(text.trimmingCharacters(in: .whitespaces)) }
                 }
             }
@@ -447,7 +452,7 @@ public final class HostRuntime: Sendable {
         if Task.isCancelled { throw StreamAborted() }
         let finishedAt = feed.endedAt ?? ContinuousClock.now
         if !pending.isEmpty {
-            let text = try await backend.transcribe(worker: worker, samples16k: Resampler.to16k(pending[...], sampleRate: rate), language: language)
+            let text = try await decode(Resampler.to16k(pending[...], sampleRate: rate), worker: worker, language: language)
             if !text.trimmingCharacters(in: .whitespaces).isEmpty { texts.append(text.trimmingCharacters(in: .whitespaces)) }
         }
         return StreamedTranscript(text: texts.joined(separator: " "), duration: Double(total) / Double(max(1, rate)), uploadFinishedAt: finishedAt)

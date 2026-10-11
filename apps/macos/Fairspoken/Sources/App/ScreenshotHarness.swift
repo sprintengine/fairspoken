@@ -172,7 +172,8 @@ final class ScreenshotHarness {
         var controllers: [DictationController] = []
         var feeders: [Task<Void, Never>] = []
         for (_, phase) in phases {
-            let c = DictationController(settings: model.settings, models: model.models, history: model.history, permissions: model.permissions)
+            let c = DictationController(settings: model.settings, models: model.models, history: model.history, permissions: model.permissions,
+                                        pending: model.pending)
             c.showcase(phase)
             feeders.append(feedLevels(into: c.meter))
             controllers.append(c)

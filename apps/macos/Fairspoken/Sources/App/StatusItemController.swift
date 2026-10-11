@@ -12,6 +12,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let windows: WindowCoordinator
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "Start Dictation", action: #selector(toggleDictation), keyEquivalent: "")
+    private let pendingItem = NSMenuItem(title: "", action: #selector(openHome), keyEquivalent: "")
     private let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(updateAction), keyEquivalent: "")
 
     init(model: AppModel, windows: WindowCoordinator) {
@@ -26,6 +27,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         toggleItem.target = self
         menu.addItem(toggleItem)
+        pendingItem.target = self
+        menu.addItem(pendingItem)
         menu.addItem(.separator())
         menu.addItem(entry("Open \(AppInfo.displayName)", #selector(openHome), "o"))
         menu.addItem(entry("Models", #selector(openModels), ""))
@@ -66,6 +69,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         statusLine.title = remote ? "My host · \(model.hostStatus.stateLabel)"
             : "\(model.models.activeModel.shortName) · \(state.label)"
         toggleItem.title = model.dictation.phase.isListening ? "Stop Dictation" : "Start Dictation   \(HotkeyController.currentShortcutSymbols)"
+        let waiting = model.pending.items.count
+        pendingItem.isHidden = waiting == 0
+        pendingItem.title = waiting == 1 ? "1 Dictation Not Transcribed Yet…" : "\(waiting) Dictations Not Transcribed Yet…"
         let update = model.updates.presentation
         updateItem.title = update.menuTitle
         updateItem.setAccessibilityLabel(update.accessibilityLabel)

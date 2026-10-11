@@ -15,8 +15,12 @@ final class HostStatus {
 
     private(set) var state: State = .notConfigured
     private(set) var checkedAt: Date?
+    /// Called when a check finds the host after it wasn't (or before any check).
+    @ObservationIgnored var onConnected: (() -> Void)?
     @ObservationIgnored private let settings: SettingsStore
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// The last check's answer (`state` is `.checking` while one runs).
+    @ObservationIgnored private var lastAnswer: State?
 
     init(settings: SettingsStore) {
         self.settings = settings
@@ -76,8 +80,11 @@ final class HostStatus {
                 result = .failed(error.localizedDescription)
             }
             guard let self, !Task.isCancelled else { return }
+            let wasConnected = self.lastAnswer.map { if case .connected = $0 { true } else { false } } ?? false
             self.state = result
+            self.lastAnswer = result
             self.checkedAt = Date()
+            if case .connected = result, !wasConnected { self.onConnected?() }
         }
     }
 }
