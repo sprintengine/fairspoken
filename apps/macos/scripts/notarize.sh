@@ -53,7 +53,8 @@ import_keychain() {
   security create-keychain -p "$password" "$keychain"
   security set-keychain-settings -lut "$lock" "$keychain"
   security unlock-keychain -p "$password" "$keychain"
-  security import "$p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
+  # mktemp leaves no .p12 extension for `security` to infer the format from.
+  security import "$p12" -f pkcs12 -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
   rm -f "$p12"
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
   # shellcheck disable=SC2046 # one keychain path per word
