@@ -160,20 +160,22 @@ public struct CommandOutput: Sendable, Equatable {
 
 /// The subprocess seam (the real one is `ProcessCommandRunner`).
 public protocol CommandRunning: Sendable {
-    func run(_ executable: String, arguments: [String], timeout: Duration) async throws -> CommandOutput
+    /// `environment` is added to (and overrides) the app's own environment.
+    func run(_ executable: String, arguments: [String], environment: [String: String], timeout: Duration) async throws -> CommandOutput
 }
 
 /// Runs a program with `Process`, collecting both pipes; terminates it after `timeout`.
 public struct ProcessCommandRunner: CommandRunning {
     public init() {}
 
-    public func run(_ executable: String, arguments: [String], timeout: Duration) async throws -> CommandOutput {
+    public func run(_ executable: String, arguments: [String], environment: [String: String], timeout: Duration) async throws -> CommandOutput {
         let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: executable)
                 process.arguments = arguments
+                process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
                 let out = Pipe(), err = Pipe()
                 process.standardOutput = out
                 process.standardError = err
@@ -213,6 +215,9 @@ public struct TailnetDiscovery: Sendable {
         "/usr/local/bin/tailscale",
         "/opt/homebrew/bin/tailscale",
     ]
+    /// The binary inside Tailscale.app only acts as the CLI when it sees `TERM` (a shell) or this;
+    /// launched from Finder, without either, it tries to open the GUI and exits 0 with no JSON.
+    static let cliEnvironment = ["TAILSCALE_BE_CLI": "1"]
     /// Peers that can't run a host aren't probed.
     static let skippedOSes: Set<String> = ["ios", "android", "tvos"]
 
@@ -270,7 +275,7 @@ public struct TailnetDiscovery: Sendable {
         guard let cli = locateCLI() else { throw .tailscaleNotInstalled }
         let output: CommandOutput
         do {
-            output = try await runner.run(cli, arguments: ["status", "--json"], timeout: cliTimeout)
+            output = try await runner.run(cli, arguments: ["status", "--json"], environment: Self.cliEnvironment, timeout: cliTimeout)
         } catch {
             throw .tailscaleFailed(error.localizedDescription)
         }
@@ -278,7 +283,7 @@ public struct TailnetDiscovery: Sendable {
     }
 
     /// Reads the CLI's answer. The JSON (when there is any) says whether Tailscale is up;
-    /// without it, stderr says why.
+    /// without it, stderr (else whatever went to stdout) says why.
     public static func interpretStatus(_ output: CommandOutput) throws(TailnetDiscoveryError) -> TailscaleStatus {
         if let status = try? JSONDecoder().decode(TailscaleStatus.self, from: output.stdout) {
             switch status.backendState {
@@ -297,7 +302,8 @@ public struct TailnetDiscovery: Sendable {
             "connection refused", "failed to start"].contains(where: lower.contains) {
             throw .tailscaleNotRunning
         }
-        let firstLine = message.split(separator: "\n").first.map(String.init)
+        let stdout = String(decoding: output.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = (message.isEmpty ? stdout : message).split(separator: "\n").first.map(String.init)
         throw .tailscaleFailed(firstLine ?? "tailscale exited with status \(output.status)")
     }
 
