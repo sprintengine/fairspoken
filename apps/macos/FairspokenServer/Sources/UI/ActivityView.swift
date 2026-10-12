@@ -12,7 +12,8 @@ struct ActivityView: View {
         CrystalPage {
             PageHeader(title: "Activity", subtitle: subtitle)
             NoticeBanner()
-            if controller.source == .live && !controller.runState.isRunning {
+            // A failed start is explained at the top of every page (StartProblemBanner).
+            if controller.source == .live && controller.runState == .stopped {
                 NotServingBanner()
             }
             MetricsRow(live: controller.live, stats: controller.stats)
@@ -47,16 +48,8 @@ private struct NotServingBanner: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if case .failed(let message) = controller.runState {
-                Image(systemName: "exclamationmark.triangle.fill").font(.title3).foregroundStyle(Crystal.error)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Not serving").font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink)
-                    Text(message).font(.caption).foregroundStyle(Crystal.ink2).lineLimit(2)
-                }
-            } else {
-                Image(systemName: "pause.circle.fill").font(.title3).foregroundStyle(Crystal.warn)
-                Text("Stopped. Clients can't connect.").font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink)
-            }
+            Image(systemName: "pause.circle.fill").font(.title3).foregroundStyle(Crystal.warn)
+            Text("Stopped. Clients can't connect.").font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink)
             Spacer()
         }
         .padding(14)

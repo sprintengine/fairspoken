@@ -4,7 +4,7 @@ import Observation
 import SystemConfiguration
 
 /// Settings › Transcription › Find my host: scans the tailnet for Fairspoken hosts (or probes
-/// a typed machine name), pairs with a password, and saves the result as "My host".
+/// a typed machine name), pairs with a password, and saves the result as the network device.
 @Observable
 final class HostFinder {
     enum Scan: Equatable {
@@ -126,7 +126,7 @@ final class HostFinder {
         pairing = nil
     }
 
-    /// Saves the host as "My host" (token in the Keychain), switches dictation to it and tests it.
+    /// Saves the host as the network device (token in the Keychain), switches dictation to it and tests it.
     private func use(_ url: URL, token: String) {
         settings.update {
             $0.remoteUrl = url.absoluteString

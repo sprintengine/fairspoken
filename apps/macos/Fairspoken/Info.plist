@@ -46,26 +46,18 @@
 	<key>SUEnableSystemProfiling</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>$(MV_DISPLAY_NAME) listens only while you hold or toggle your dictation shortcut, and turns your speech into text on this Mac.</string>
+	<string>$(MV_DISPLAY_NAME) listens only while you hold or toggle your dictation shortcut, and turns your speech into text on this device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>$(MV_DISPLAY_NAME) connects to the transcription host you configure on your local network or tailnet.</string>
+	<string>$(MV_DISPLAY_NAME) connects to the transcription server you choose on your local network or Tailscale network.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Plain HTTP is allowed only where the app's own URL policy allows it:
-		     loopback, private/link-local/CGNAT addresses, single-label and .local names
-		     (NSAllowsLocalNetworking) and Tailscale MagicDNS names (ts.net below). -->
-		<key>NSAllowsLocalNetworking</key>
+		<!-- Plain HTTP is allowed only where the app's own URL policy (RemoteURLPolicy) allows it:
+		     loopback, private and link-local addresses, Tailscale's 100.64/10, single-label,
+		     .local and ts.net names. ATS can't express an address range, and NSAllowsLocalNetworking
+		     doesn't cover 100.64/10, so a host at its Tailscale IP was refused (-1022) before any
+		     request left the Mac. The policy above is the gate instead. -->
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>ts.net</key>
-			<dict>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-			</dict>
-		</dict>
 	</dict>
 </dict>
 </plist>

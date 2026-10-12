@@ -126,13 +126,13 @@ public enum TailnetDiscoveryError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .tailscaleNotInstalled:
-            "Tailscale isn't installed on this Mac. Install it from tailscale.com, or type your host's machine name below."
+            "Tailscale isn't installed on this device. Install it from tailscale.com, or enter the address below."
         case .tailscaleNotRunning:
             "Tailscale isn't running. Open Tailscale and connect, then try again."
         case .tailscaleLoggedOut:
-            "Tailscale is logged out. Log in to your tailnet, then try again."
+            "Tailscale is logged out. Log in to Tailscale, then try again."
         case .tailscaleNeedsApproval:
-            "This Mac is waiting to be approved in your tailnet's admin console."
+            "This device is waiting to be approved in the Tailscale admin console."
         case .tailscaleFailed(let detail):
             "Couldn't read Tailscale's status: \(detail)"
         case .emptyEntry:

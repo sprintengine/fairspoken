@@ -33,7 +33,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 SprintEngine</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>$(MV_DISPLAY_NAME) accepts transcription requests from Fairspoken on other computers on your network or tailnet.</string>
+	<string>$(MV_DISPLAY_NAME) accepts transcription requests from Fairspoken on your other devices, over your local network or Tailscale network.</string>
 	<!-- Sparkle 2 (Packages/FairspokenUpdates). One appcast holds both channels: nightly items carry
 	     <sparkle:channel>nightly</sparkle:channel>. Debug builds may override the feed with the
 	     FAIRSPOKEN_APPCAST_URL default (apps/macos/README.md › Updates). -->

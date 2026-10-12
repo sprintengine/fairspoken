@@ -2,7 +2,7 @@ import Foundation
 import FairspokenCore
 import Observation
 
-/// Reachability of the user's own transcription host ("My host"): one `GET /v1/health`
+/// Reachability of the user's own transcription host ("Network device"): one `GET /v1/health`
 /// when asked (Settings, Home and the Test button), never a background poll.
 @Observable
 final class HostStatus {
@@ -31,13 +31,13 @@ final class HostStatus {
         return url.port.map { "\(host):\($0)" } ?? host
     }
 
-    /// "Using host: practice-mini.local:48173 · connected".
+    /// "Using practice-mini.local:48173 · connected".
     var summary: String {
         switch state {
-        case .notConfigured: "No host set"
-        case .checking: "Using host: \(hostName) · checking…"
-        case .connected: "Using host: \(hostName) · connected"
-        case .failed: "Using host: \(hostName) · not reachable"
+        case .notConfigured: "No network device set"
+        case .checking: "Using \(hostName) · checking…"
+        case .connected: "Using \(hostName) · connected"
+        case .failed: "Using \(hostName) · not reachable"
         }
     }
 
@@ -69,7 +69,7 @@ final class HostStatus {
             let result: State
             do {
                 let health = try await RemoteHostClient.health(baseURL: url, token: token)
-                result = health.ok ? .connected(version: health.serverVersion) : .failed("The host says it isn't ready")
+                result = health.ok ? .connected(version: health.serverVersion) : .failed("The server says it isn't ready")
             } catch is CancellationError {
                 return
             } catch {

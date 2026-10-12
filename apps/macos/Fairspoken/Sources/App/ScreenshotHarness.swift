@@ -82,7 +82,7 @@ final class ScreenshotHarness {
         try? await Task.sleep(for: .milliseconds(1000))
         await freshFrame()
         if let window = windows.dashboard { await capture(window, as: "settings-transcription-\(suffix)") }
-        // The same tab with My host chosen (the sample host; no tailnet scan, so no real machines).
+        // The same tab with Network device chosen (the sample host; no tailnet scan, so no real machines).
         let location = model.settings.settings.transcriptionLocation
         model.settings.update { $0.transcriptionLocation = .remoteHost }
         model.hostStatus.refresh(force: true)

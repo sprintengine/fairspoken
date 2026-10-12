@@ -111,7 +111,7 @@ struct ServerWindowView: View {
     }
 }
 
-/// The toolbar's status: "Serving · Tailnet", "Starting…", "Not serving".
+/// The toolbar's status: "Serving on Tailscale · 100.101.102.103:48173", "Starting…", "Not serving".
 private struct ServingChip: View {
     @Environment(ServerController.self) private var controller
 
@@ -154,6 +154,68 @@ private struct ServingChip: View {
     }
 }
 
+/// Why the server isn't serving, above every page, with the fix at hand: when another app
+/// holds the port, a port field to start on another one; otherwise Try again.
+struct StartProblemBanner: View {
+    @Environment(ServerController.self) private var controller
+    @State private var port = HostConfiguration.defaultPort + 1
+    @State private var busy = false
+    @State private var problem: String?
+
+    var body: some View {
+        if case .failed(let message) = controller.runState {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Crystal.error)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Not serving").font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink)
+                        Text(message).font(.callout).foregroundStyle(Crystal.ink2).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                HStack(spacing: 8) {
+                    if controller.portConflict != nil {
+                        Text("Port").font(.callout).foregroundStyle(Crystal.ink2)
+                        TextField("Port", value: $port, format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder).font(.fsData()).frame(width: 80)
+                            .labelsHidden()
+                            .onSubmit(startOnPort)
+                        Button(busy ? "Starting…" : "Start on this port", action: startOnPort)
+                            .buttonStyle(.borderedProminent).tint(Crystal.serverAccent)
+                            .disabled(busy || !(1...65_535).contains(port) || port == controller.configuration.port)
+                    }
+                    Button("Try again") { Task { busy = true; await controller.start(); busy = false } }
+                        .buttonStyle(.bordered)
+                        .disabled(busy)
+                }
+                .buttonBorderShape(.capsule)
+                .padding(.leading, 26)
+                if let problem { ErrorLabel(text: problem).font(.caption).padding(.leading, 26) }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .crystalWell(stroke: Crystal.error.opacity(0.45))
+            .onAppear(perform: suggestPort)
+            .onChange(of: controller.portConflict) { suggestPort() }
+        }
+    }
+
+    /// The next port up from the one that's taken.
+    private func suggestPort() {
+        problem = nil
+        if let taken = controller.portConflict?.port { port = taken < 65_535 ? taken + 1 : taken - 1 }
+    }
+
+    private func startOnPort() {
+        guard (1...65_535).contains(port), !busy else { return }
+        busy = true
+        Task {
+            if case .failed(let m) = await controller.setPort(port), controller.portConflict == nil { problem = m }
+            busy = false
+        }
+    }
+}
+
 /// The still Crystal backdrop with the server's garnet wash.
 struct PageBackground: View {
     var body: some View {
@@ -190,7 +252,8 @@ private struct ConfigIssueView: View {
 
 // MARK: - Shared pieces
 
-/// A page: one `GlassEffectContainer` around every card, the standard margins and spacing.
+/// A page: one `GlassEffectContainer` around every card, the standard margins and spacing,
+/// and why the server isn't serving, when a start failed.
 struct CrystalPage<Content: View>: View {
     var scrolls = true
     @ViewBuilder var content: Content
@@ -206,7 +269,10 @@ struct CrystalPage<Content: View>: View {
 
     private var stack: some View {
         GlassEffectContainer(spacing: 6) {
-            VStack(alignment: .leading, spacing: 16) { content }
+            VStack(alignment: .leading, spacing: 16) {
+                StartProblemBanner()
+                content
+            }
                 .padding(.horizontal, 28)
                 .padding(.top, 18)
                 .padding(.bottom, 28)

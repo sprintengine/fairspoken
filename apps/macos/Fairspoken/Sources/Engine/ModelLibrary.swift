@@ -30,7 +30,7 @@ final class ModelLibrary {
             case .idle: "Not loaded"
             case .downloading(let f): "Downloading \(Int(f * 100))%"
             case .unpacking: "Unpacking…"
-            case .compiling: "Optimising for this Mac…"
+            case .compiling: "Optimising for this device…"
             case .loading: "Loading onto the Neural Engine…"
             case .warming: "Warming up…"
             case .ready: "Ready"

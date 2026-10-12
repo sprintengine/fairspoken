@@ -164,7 +164,7 @@ real HTTP server, queue and workers over a stub engine, for protocol work withou
 
 ## Fairspoken (dictation client)
 
-Settings › Transcription › **My host** holds the host URL, token (Keychain) and timeout, a Test
+Settings › Transcription › **Network device** holds the host URL, token (Keychain) and timeout, a Test
 connection button and a status line such as "Using host: practice-mini.local:48173 · connected"
 (one `GET /v1/health` when Settings or Home opens, or on Test; no background polling). Monitoring a
 host is Fairspoken Server's job (or the web dashboard at the host's `/`); the client has no Server view.
@@ -314,7 +314,7 @@ Config/                          Base/Debug/Release (client), Server*.xcconfig, 
 Fairspoken/                      Fairspoken
   Sources/App/                   main, AppDelegate, AppModel (composition root), windows, status item, screenshots, self-test
   Sources/Audio/                 AVAudioEngine capture → 16 kHz mono Float32, device selection, level meter
-  Sources/Engine/                ModelLibrary, local/remote sessions, HostStatus ("My host" reachability)
+  Sources/Engine/                ModelLibrary, local/remote sessions, HostStatus (network device reachability)
   Sources/Dictation/             DictationController state machine
   Sources/System/                Permissions, TextInserter (⌘V + clipboard restore), hotkeys + Fn tap, sounds
   Sources/Storage/               settings.json / transcript-history.json / usage-stats.json (Rust schemas), Keychain
@@ -351,7 +351,7 @@ Keychain, and the JSON keeps empty strings. Keys the app doesn't model are prese
 ## Screenshots
 
 `docs/screenshots/` (Fairspoken, light and dark): `home`, `home-listening`, `models`, `settings`,
-`settings-transcription` (My host), `onboarding-welcome`, `onboarding-permissions`, `pill`.
+`settings-transcription` (Network device), `onboarding-welcome`, `onboarding-permissions`, `pill`.
 
 `docs/screenshots/server-app/` (Fairspoken Server, light and dark, demo simulator): `activity`
 (the live constellation with requests in flight), `clients`, `models`, `connect`, `configuration`.

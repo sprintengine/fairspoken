@@ -28,6 +28,11 @@ struct ConfigurationView: View {
             || draft.workerCount != saved.workerCount || draft.queueCapacity != saved.queueCapacity
             || (draft.pairingEnabled && draft.token.trimmingCharacters(in: .whitespaces).isEmpty)
         VStack(alignment: .leading, spacing: 0) {
+            if case .failed = controller.runState {
+                StartProblemBanner()
+                    .padding(.horizontal, 28)
+                    .padding(.top, 18)
+            }
             PageHeader(title: "Configuration")
                 .padding(.horizontal, 28)
                 .padding(.top, 18)
@@ -36,8 +41,8 @@ struct ConfigurationView: View {
                     server
                     workers
                     limits
-                    thisMac
-                    // Applies at once, like This Mac; Save and Revert are for the host's file only.
+                    thisDevice
+                    // Applies at once, like This device; Save and Revert are for the host's file only.
                     UpdateSettingsSection(updates: updates, style: .server)
                     advanced
                 }
@@ -102,7 +107,7 @@ struct ConfigurationView: View {
 
     private var server: some View {
         Section("Server") {
-            LabeledContent("Name on your tailnet") {
+            LabeledContent("Name other devices see") {
                 TextField("Name", text: $draft.displayName, prompt: Text(MachineName.current()))
                     .labelsHidden().multilineTextAlignment(.trailing).frame(width: 260)
             }
@@ -118,8 +123,8 @@ struct ConfigurationView: View {
 
     private var accessLabel: String {
         switch controller.access {
-        case .thisMac: "This Mac only"
-        case .tailnet: "This Mac and my tailnet"
+        case .thisDevice: "This device only"
+        case .tailnet: "Your Tailscale network"
         case .custom: "Custom (\(controller.configuration.bindAddr))"
         }
     }
@@ -166,11 +171,11 @@ struct ConfigurationView: View {
         }
     }
 
-    private var thisMac: some View {
-        Section("This Mac") {
+    private var thisDevice: some View {
+        Section("This device") {
             Toggle("Start at login", isOn: Binding(get: { controller.loginItemEnabled }, set: { controller.setLoginItem($0) }))
                 .help("Opens the app in the menu bar when you log in. To serve with nobody logged in, see apps/macos/README.md.")
-            Toggle("Keep this Mac awake while serving", isOn: Binding(get: { controller.configuration.preventSleep }, set: {
+            Toggle("Keep this device awake while serving", isOn: Binding(get: { controller.configuration.preventSleep }, set: {
                 controller.setPreventSleep($0)
                 draft.preventSleep = $0
             }))
@@ -202,8 +207,8 @@ struct ConfigurationView: View {
     private var advanced: some View {
         Section("Advanced", isExpanded: $showAdvanced) {
                 Picker("Listen on", selection: addressChoice) {
-                    Text("This Mac only (127.0.0.1)").tag(AddressChoice.loopback)
-                    if let t = controller.addresses.tailscale { Text("This Mac and tailnet (\(t.address))").tag(AddressChoice.tailscale) }
+                    Text("This device only (127.0.0.1)").tag(AddressChoice.loopback)
+                    if let t = controller.addresses.tailscale { Text("Your Tailscale network (\(t.address))").tag(AddressChoice.tailscale) }
                     Text("Every network (0.0.0.0)").tag(AddressChoice.all)
                     Text("One address…").tag(AddressChoice.custom)
                 }
@@ -242,7 +247,7 @@ struct ConfigurationView: View {
                         CopyButton(value: tailscaleCommand)
                     }
                 }
-                .help("Keeps the server on 127.0.0.1 and gives it an HTTPS name on your tailnet.")
+                .help("Keeps the server on 127.0.0.1 and gives it an HTTPS name on your Tailscale network.")
                 Toggle("Use the Neural Engine", isOn: $draft.useGpu)
                 if !draft.useGpu {
                     Label("The CPU is several times slower. Only for testing.", systemImage: "exclamationmark.triangle")

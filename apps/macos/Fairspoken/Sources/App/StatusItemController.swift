@@ -63,7 +63,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         let state = model.models.engineState
         let remote = model.settings.settings.transcriptionLocation == .remoteHost
-        statusLine.title = remote ? "My host · \(model.hostStatus.stateLabel)"
+        statusLine.title = remote ? "Network device · \(model.hostStatus.stateLabel)"
             : "\(model.models.activeModel.shortName) · \(state.label)"
         toggleItem.title = model.dictation.phase.isListening ? "Stop Dictation" : "Start Dictation   \(HotkeyController.currentShortcutSymbols)"
         let update = model.updates.presentation

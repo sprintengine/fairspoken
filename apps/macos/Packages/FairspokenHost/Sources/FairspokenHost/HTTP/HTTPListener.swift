@@ -92,11 +92,14 @@ final class NWTransport: ByteStreamTransport, @unchecked Sendable {
 public final class HTTPListener: @unchecked Sendable {
     public enum ListenError: Error, LocalizedError {
         case invalidAddress(String)
+        /// Something else is listening on the port (often another copy of the host).
+        case portInUse(host: String, port: UInt16)
         case failed(String)
 
         public var errorDescription: String? {
             switch self {
             case .invalidAddress(let a): "Not a valid bind address: \(a)"
+            case .portInUse(let host, let port): "Port \(port) is already in use on \(host)."
             case .failed(let m): m
             }
         }
@@ -166,9 +169,10 @@ public final class HTTPListener: @unchecked Sendable {
                 case .failed(let error), .waiting(let error):
                     let detail: String
                     if case .posix(let code) = error, code == .EADDRINUSE {
-                        detail = "port \(port) is already in use"
+                        cont.resume(throwing: ListenError.portInUse(host: host, port: port))
+                        return
                     } else if case .posix(let code) = error, code == .EADDRNOTAVAIL {
-                        detail = "\(host) is not an address of this Mac"
+                        detail = "\(host) is not an address of this device"
                     } else {
                         detail = error.localizedDescription
                     }
