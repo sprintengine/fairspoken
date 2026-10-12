@@ -162,7 +162,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
         switch c.runState {
         case .running:
             let busy = c.stats.runningJobs
-            statusLine.title = "Serving · \(c.accessSummary)" + (busy > 0 ? " · \(busy) busy" : "")
+            statusLine.title = "Serving \(c.accessSummary)" + (busy > 0 ? " · \(busy) busy" : "")
         case .starting: statusLine.title = "Starting…"
         case .stopped: statusLine.title = "Stopped"
         case .failed(let m): statusLine.title = m

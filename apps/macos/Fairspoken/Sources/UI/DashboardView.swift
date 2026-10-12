@@ -93,7 +93,7 @@ private struct SidebarStatus: View {
             HStack(spacing: 8) {
                 StatusDot(color: remote ? host.tint : state.tint, pulsing: remote ? host.state == .checking : state.isBusy)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(remote ? "My host" : model.models.activeModel.shortName)
+                    Text(remote ? "Network device" : model.models.activeModel.shortName)
                         .font(.callout.weight(.semibold)).foregroundStyle(Crystal.ink).lineLimit(1)
                     Text(remote ? host.stateLabel : state.label)
                         .font(.caption).foregroundStyle(Crystal.ink2).lineLimit(1)

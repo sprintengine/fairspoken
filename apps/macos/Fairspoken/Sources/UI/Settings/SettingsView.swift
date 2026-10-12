@@ -236,8 +236,8 @@ private struct TranscriptionSettings: View {
                                                                model.settings.update { $0.transcriptionLocation = v }
                                                                if v == .local { model.models.prepare(model.settings.settings.model) }
                                                            })) {
-                    Text("This Mac").tag(TranscriptionLocation.local)
-                    Text("My host").tag(TranscriptionLocation.remoteHost)
+                    Text("This device").tag(TranscriptionLocation.local)
+                    Text("Network device").tag(TranscriptionLocation.remoteHost)
                 }
                 .pickerStyle(.segmented)
                 .tint(Crystal.clientAccent)
@@ -270,7 +270,7 @@ private struct TranscriptionSettings: View {
     }
 }
 
-/// My host: the one in use, then every host the tailnet scan found (this Mac's first). Pick one,
+/// Network device: the one in use, then every host the scan found (this device's first). Pick one,
 /// type its password if it has one, done.
 private struct HostListSection: View {
     @Environment(AppModel.self) private var model
@@ -299,13 +299,13 @@ private struct HostListSection: View {
                     Label(message, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(Crystal.warn).lineLimit(2)
                 case .done where finder.hosts.isEmpty:
-                    Text("None found on your tailnet").font(.caption).foregroundStyle(Crystal.ink2)
+                    Text("None found on your Tailscale network. On another port? Enter its address below.").font(.caption).foregroundStyle(Crystal.ink2)
                 default:
                     EmptyView()
                 }
             }
         } header: {
-            Text("My host")
+            Text("Network device")
         }
         .onAppear {
             if finder.scan == .idle && AppInfo.screenshotDirectory == nil { finder.findHosts() }
@@ -372,7 +372,7 @@ private struct DiscoveredHostRow: View {
                                 .accessibilityLabel("Needs a password")
                         }
                     }
-                    Text(host.isThisMac ? "This Mac" : host.machine)
+                    Text(host.isThisMac ? "This device" : host.machine)
                         .font(.caption).foregroundStyle(Crystal.ink2).lineLimit(1)
                 }
                 .help(host.url.absoluteString)
@@ -463,7 +463,7 @@ private struct ManualHostSection: View {
                         in: 5...300, step: 5) {
                     LabeledContent("Timeout", value: "\(s.remoteTimeoutSeconds) s")
                 }
-                Text("HTTPS is required outside this Mac, your network and your tailnet. Tokens are kept in your Keychain.")
+                Text("HTTPS is required outside this device, your local network and your Tailscale network. Tokens are kept in your Keychain.")
                     .font(.caption).foregroundStyle(Crystal.ink3)
             }
         }
@@ -578,7 +578,7 @@ private struct AboutSettings: View {
                 }
             }
             Section("Privacy") {
-                Text("Audio stays in memory and is never saved. Your last 50 dictations stay on this Mac. With your own host, audio goes to that host only.")
+                Text("Audio stays in memory and is never saved. Your last 50 dictations stay on this device. With a network device, audio goes to that device only.")
                     .font(.callout).foregroundStyle(Crystal.ink2)
             }
         }

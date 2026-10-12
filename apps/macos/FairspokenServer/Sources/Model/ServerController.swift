@@ -67,6 +67,8 @@ final class ServerController {
     /// Recent `POST /v1/pair` attempts, newest first (refreshed with `stats`).
     private(set) var pairingAttempts: [PairingAttempt] = []
     private(set) var notice: String?
+    /// Set when the last start failed because another program holds the port.
+    private(set) var portConflict: PortConflict?
     @ObservationIgnored let animator = FlowAnimator()
     @ObservationIgnored let backend = FluidAudioBackend()
     @ObservationIgnored let sleepGuard = SleepGuard()
@@ -144,6 +146,7 @@ final class ServerController {
         // (a double click on the menu item) is refused by state, not by `host`.
         guard host == nil, configIssue == nil, runState != .starting, runState != .running else { return }
         runState = .starting
+        portConflict = nil
         do {
             let file = try HostConfigurationStore.load(configURL)
             let config = try HostConfigurationStore.resolve(file: file, environment: ServerInfo.environment, knownModels: knownModels)
@@ -162,6 +165,11 @@ final class ServerController {
             applySleepGuard()
             applyModelLinks()
             Self.log.info("Serving on \(config.bindAddr, privacy: .public)")
+        } catch HTTPListener.ListenError.portInUse(_, let port) {
+            let conflict = PortConflict(port: Int(port), owner: await PortOwner.name(listeningOn: Int(port)))
+            portConflict = conflict
+            runState = .failed(conflict.message)
+            Self.log.error("Start failed: \(conflict.message, privacy: .public)")
         } catch {
             runState = .failed(error.localizedDescription)
             Self.log.error("Start failed: \(error.localizedDescription, privacy: .public)")
@@ -257,7 +265,7 @@ final class ServerController {
         let a = c.bindAddress
         let isIP = a.split(separator: ".").count == 4 && a.split(separator: ".").allSatisfy { UInt8($0) != nil }
         guard isIP || a == "::" || a == "::1" || a.contains(":") else {
-            return "The address must be an IP address of this Mac: 127.0.0.1, 0.0.0.0 or one interface's address."
+            return "The address must be an IP address of this device: 127.0.0.1, 0.0.0.0 or one interface's address."
         }
         guard HostConfiguration.workerCountRange.contains(c.workerCount) else { return "Use 1 to 8 workers." }
         guard HostConfiguration.queueCapacityRange.contains(c.queueCapacity) else { return "The queue holds 1 to 64 jobs." }
@@ -272,33 +280,37 @@ final class ServerController {
 
     /// Who can reach the server: the one choice on the Connect screen.
     enum Access: Equatable {
-        /// 127.0.0.1: only apps on this Mac.
-        case thisMac
-        /// This Mac's Tailscale address (the host also answers on 127.0.0.1 there).
+        /// 127.0.0.1: only apps on this device.
+        case thisDevice
+        /// This device's Tailscale address (the host also answers on 127.0.0.1 there).
         case tailnet
         /// Anything else (every interface, one LAN address), set under Configuration › Advanced.
         case custom
     }
 
     var access: Access {
-        if isLoopbackOnly { return .thisMac }
+        if isLoopbackOnly { return .thisDevice }
         if NetworkAddresses.isTailscale(configuration.bindAddress) { return .tailnet }
         return .custom
     }
 
-    /// "This Mac only", "Tailnet" or the address, for the toolbar and the menu bar item.
+    /// Where the server listens, for the toolbar and the menu bar item: "on Tailscale ·
+    /// 100.101.102.103:48173", "on this device only · 127.0.0.1:48173".
     var accessSummary: String {
+        let port = String(configuration.port)
         switch access {
-        case .thisMac: "This Mac only"
-        case .tailnet: "This Mac and tailnet"
-        case .custom: configuration.bindAddr
+        case .thisDevice: return "on this device only · 127.0.0.1:\(port)"
+        case .tailnet: return "on Tailscale · \(configuration.bindAddr)"
+        case .custom:
+            if ["0.0.0.0", "::"].contains(configuration.bindAddress) { return "on every network · port \(port)" }
+            return "on \(configuration.bindAddr)"
         }
     }
 
     /// Saves the choice and restarts the server on the new address.
     func setAccess(_ access: Access) async -> SaveOutcome {
         switch access {
-        case .thisMac:
+        case .thisDevice:
             var next = configuration
             next.bindAddress = "127.0.0.1"
             return await save(next)
@@ -309,15 +321,28 @@ final class ServerController {
         }
     }
 
-    /// Listens on this Mac's Tailscale address (default port), where clients scanning the
-    /// tailnet look. Restarts the server.
+    /// Listens on this device's Tailscale address, on the port already chosen. Restarts the server.
     func listenOnTailscale() async -> SaveOutcome {
         refreshAddresses()
-        guard let tailscale = addresses.tailscale else { return .failed("Tailscale isn't connected on this Mac.") }
+        guard let tailscale = addresses.tailscale else { return .failed("Tailscale isn't connected on this device.") }
         var next = configuration
         next.bindAddress = tailscale.address
-        next.port = HostConfiguration.defaultPort
         return await save(next)
+    }
+
+    /// Moves the server to another port. Restarts it if it is serving, and starts it if the
+    /// last start failed (usually because the old port was taken).
+    func setPort(_ port: Int) async -> SaveOutcome {
+        var next = configuration
+        next.port = port
+        var outcome = await save(next)
+        if case .failed = outcome { return outcome }
+        if outcome == .saved, case .failed = runState {
+            await start()
+            outcome = .restarted
+        }
+        if case .failed(let m) = runState { return .failed(m) }
+        return outcome
     }
 
     /// Sets, changes or (with "") turns off the pairing password. Applies at once, unless
@@ -560,13 +585,21 @@ final class ServerController {
         restartFeed()
     }
 
+    /// Screenshot mode: a start that failed because another app holds the port (or back to serving).
+    func presentSamplePortConflict(_ on: Bool) {
+        guard presenting else { return }
+        let conflict = PortConflict(port: configuration.port, owner: "Fairspoken")
+        portConflict = on ? conflict : nil
+        runState = on ? .failed(conflict.message) : .running
+    }
+
     /// Screenshot mode: a sample download link (never saved or applied).
     func presentSampleModelLink(_ id: String, _ value: String?) {
         guard presenting else { return }
         configuration.modelLinks[id] = value
     }
 
-    /// Screenshot mode: shows Connect as "This Mac only" on a Mac without Tailscale (or back).
+    /// Screenshot mode: shows Connect as "This device only" on a Mac without Tailscale (or back).
     func presentSampleAccess(tailnet: Bool) {
         guard presenting else { return }
         addresses = Self.sampleAddresses(tailscale: tailnet)
@@ -581,31 +614,31 @@ final class ServerController {
     }
 
     /// URLs clients use to reach this server, for the Connect panel and the menu. Bound to
-    /// one non-loopback address, the host also listens on 127.0.0.1, so apps on this Mac keep
+    /// one non-loopback address, the host also listens on 127.0.0.1, so apps on this device keep
     /// working.
     var endpoints: [Endpoint] {
         let port = configuration.port
         let bind = configuration.bindAddress
         func url(_ host: String) -> String { host.contains(":") ? "http://[\(host)]:\(port)" : "http://\(host):\(port)" }
-        let thisMac = Endpoint(label: "This Mac", url: url("127.0.0.1"), isLoopback: true)
+        let thisDevice = Endpoint(label: "This device", url: url("127.0.0.1"), isLoopback: true)
         switch bind {
         case "127.0.0.1", "::1":
-            return [Endpoint(label: "This Mac", url: url(bind), isLoopback: true)]
+            return [Endpoint(label: "This device", url: url(bind), isLoopback: true)]
         case "0.0.0.0", "::":
-            var list = [thisMac]
-            if let t = addresses.tailscale { list.append(Endpoint(label: "Tailnet", url: url(t.address))) }
+            var list = [thisDevice]
+            if let t = addresses.tailscale { list.append(Endpoint(label: "Tailscale", url: url(t.address))) }
             if let name = addresses.localHostName { list.append(Endpoint(label: "Local name", url: url(name))) }
             for i in addresses.lan { list.append(Endpoint(label: "Local network (\(i.name))", url: url(i.address))) }
             return list
         default:
-            return [thisMac, Endpoint(label: NetworkAddresses.isTailscale(bind) ? "Tailnet" : "Network", url: url(bind))]
+            return [thisDevice, Endpoint(label: NetworkAddresses.isTailscale(bind) ? "Tailscale" : "Network", url: url(bind))]
         }
     }
 
-    /// The address to give another device: the first one that isn't loopback, else this Mac's.
+    /// The address to give another device: the first one that isn't loopback, else this device's.
     var primaryEndpoint: Endpoint? { shareableEndpoint ?? endpoints.first }
 
-    /// The first address another device can reach; nil when only this Mac can connect.
+    /// The first address another device can reach; nil when only this device can connect.
     var shareableEndpoint: Endpoint? { endpoints.first { !$0.isLoopback } }
 
     /// The name clients scanning the tailnet see (`/v1/hello`).
@@ -634,7 +667,7 @@ final class ServerController {
     /// Nil when no other device can reach the server.
     var pairingURL: String? { shareableEndpoint.map(dashboardURL) }
 
-    /// The web dashboard, signed in, at the address other devices use (or this Mac's).
+    /// The web dashboard, signed in, at the address other devices use (or this device's).
     var dashboardURL: String? { primaryEndpoint.map(dashboardURL) }
 
     private func dashboardURL(at endpoint: Endpoint) -> String {

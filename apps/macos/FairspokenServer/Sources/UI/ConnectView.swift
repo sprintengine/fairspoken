@@ -46,15 +46,16 @@ struct ConnectView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Who can connect").font(.headline).foregroundStyle(Crystal.ink)
                 HStack(spacing: 12) {
-                    AccessOption(title: "This Mac only", detail: "Apps on this Mac", symbol: "desktopcomputer",
-                                 selected: access == .thisMac, busy: applying == .thisMac) { choose(.thisMac) }
-                    AccessOption(title: "This Mac and my tailnet",
-                                 detail: tailscale.map { "Your devices on Tailscale · \($0.address)" } ?? "Tailscale isn't running on this Mac",
+                    AccessOption(title: "This device only", detail: "Apps running here", symbol: "desktopcomputer",
+                                 selected: access == .thisDevice, busy: applying == .thisDevice) { choose(.thisDevice) }
+                    AccessOption(title: "Your Tailscale network",
+                                 detail: tailscale.map { "Your devices on Tailscale · \($0.address)" } ?? "Tailscale isn't running on this device",
                                  symbol: "network",
                                  selected: access == .tailnet, busy: applying == .tailnet) { choose(.tailnet) }
                         .disabled(tailscale == nil && access != .tailnet)
                 }
                 .disabled(applying != nil)
+                PortRow()
                 if access == .custom {
                     HStack(spacing: 8) {
                         Image(systemName: "slider.horizontal.3").foregroundStyle(Crystal.ink2)
@@ -63,8 +64,10 @@ struct ConnectView: View {
                             .buttonStyle(.borderless).foregroundStyle(Crystal.serverAccent)
                     }
                 } else if access == .tailnet && port != HostConfiguration.defaultPort {
-                    Label("Find hosts looks on port \(String(HostConfiguration.defaultPort)); this server uses \(String(port)).", systemImage: "exclamationmark.triangle")
-                        .font(.callout).foregroundStyle(Crystal.warn)
+                    Label("Find hosts only looks on port \(String(HostConfiguration.defaultPort)). On your other devices, enter \(controller.shareableEndpoint?.url ?? "this address") under Enter address manually.",
+                          systemImage: "info.circle")
+                        .font(.callout).foregroundStyle(Crystal.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let problem { ErrorLabel(text: problem) }
             }
@@ -72,7 +75,7 @@ struct ConnectView: View {
     }
 
     private func choose(_ next: ServerController.Access) {
-        // Choosing the tailnet again re-binds if this Mac's Tailscale address changed.
+        // Choosing Tailscale again re-binds if this device's Tailscale address changed.
         let stale = next == .tailnet && controller.configuration.bindAddress != controller.addresses.tailscale?.address
         guard next != controller.access || stale else { return }
         applying = next
@@ -129,6 +132,53 @@ private struct AccessOption: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// The port the server listens on, editable in place (another app may hold the default).
+private struct PortRow: View {
+    @Environment(ServerController.self) private var controller
+    @State private var draft = HostConfiguration.defaultPort
+    @State private var saving = false
+    @State private var problem: String?
+
+    var body: some View {
+        let saved = controller.configuration.port
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("Port").font(.callout).foregroundStyle(Crystal.ink2).frame(width: 130, alignment: .leading)
+                TextField("Port", value: $draft, format: .number.grouping(.never))
+                    .textFieldStyle(.roundedBorder).font(.fsData()).frame(width: 90)
+                    .labelsHidden()
+                    .onSubmit(apply)
+                if draft != saved {
+                    Button("Cancel") { draft = saved; problem = nil }.buttonStyle(.bordered)
+                    Button(saving ? "Applying…" : (controller.runState.isRunning ? "Apply and restart" : "Apply"), action: apply)
+                        .buttonStyle(.borderedProminent).tint(Crystal.serverAccent)
+                        .disabled(saving || !(1...65_535).contains(draft))
+                        .keyboardShortcut(.defaultAction)
+                } else if saved != HostConfiguration.defaultPort {
+                    Button("Use \(String(HostConfiguration.defaultPort))") { draft = HostConfiguration.defaultPort; apply() }
+                        .buttonStyle(.borderless).foregroundStyle(Crystal.serverAccent)
+                        .help("The port Find hosts looks on")
+                }
+                Spacer(minLength: 0)
+            }
+            .buttonBorderShape(.capsule)
+            if let problem { ErrorLabel(text: problem).font(.caption) }
+        }
+        .onAppear { draft = saved }
+        .onChange(of: saved) { _, port in draft = port }
+    }
+
+    private func apply() {
+        guard (1...65_535).contains(draft), draft != controller.configuration.port, !saving else { return }
+        saving = true
+        problem = nil
+        Task {
+            if case .failed(let m) = await controller.setPort(draft) { problem = m }
+            saving = false
+        }
     }
 }
 
@@ -254,7 +304,7 @@ private struct QRCard: View {
                         .foregroundStyle(Crystal.ink3)
                         .frame(width: 140, height: 140)
                         .crystalWell()
-                    Text("Needs the tailnet option").font(.caption).foregroundStyle(Crystal.ink2)
+                    Text("Choose Your Tailscale network to share").font(.caption).foregroundStyle(Crystal.ink2)
                         .multilineTextAlignment(.center)
                 }
                 if let url = controller.dashboardURL, let open = URL(string: url) {

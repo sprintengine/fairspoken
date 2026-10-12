@@ -54,11 +54,11 @@ struct ModelsView: View {
                 }
             }
         }
-        .confirmationDialog("Delete this model from the Mac?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+        .confirmationDialog("Delete this model from this device?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                             presenting: confirmDelete) { id in
             Button("Delete", role: .destructive) { controller.delete(id) }
         } message: { _ in
-            Text("Fairspoken on this Mac uses the same files. You can download it again.")
+            Text("Fairspoken on this device uses the same files. You can download it again.")
         }
     }
 
@@ -104,7 +104,7 @@ private struct ModelCard: View {
                         HStack(spacing: 10) {
                             ProgressView(value: d.percentage / 100).tint(Crystal.serverAccent).frame(width: 240)
                             // From a link, validating is unpacking and checking (it compiles on first load).
-                            Text(d.stage == "validating" ? (link != nil ? "Unpacking…" : "Optimising for this Mac…") : "\(d.stage.capitalized) \(Int(d.percentage))%")
+                            Text(d.stage == "validating" ? (link != nil ? "Unpacking…" : "Optimising for this device…") : "\(d.stage.capitalized) \(Int(d.percentage))%")
                                 .font(.caption).foregroundStyle(Crystal.ink2)
                         }
                     } else if let error = download?.error {

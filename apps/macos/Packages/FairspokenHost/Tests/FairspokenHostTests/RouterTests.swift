@@ -545,10 +545,15 @@ struct ListenerTests {
         let (host, _) = try await start()
         var config = HostConfiguration()
         config.port = Int(host.boundPort)
-        await #expect(throws: HTTPListener.ListenError.self) {
+        let error = await #expect(throws: HTTPListener.ListenError.self) {
             _ = try await TranscriptionHost.start(configuration: config, configURL: nil, backend: StubSpeechBackend(),
                                                   dashboardHTML: [], serverVersion: "x")
         }
+        guard case .portInUse(_, let port) = error else {
+            Issue.record("expected portInUse, got \(String(describing: error))")
+            return
+        }
+        #expect(port == host.boundPort)
         await host.stop()
     }
 }

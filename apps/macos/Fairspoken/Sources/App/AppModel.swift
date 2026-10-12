@@ -149,6 +149,6 @@ final class AppModel {
             let host = URL(string: settings.settings.remoteUrl)?.host() ?? "your host"
             return ("Your transcription host", host, .remoteHost)
         }
-        return (models.activeModel.name, "Apple Neural Engine · on this Mac", .neuralEngine)
+        return (models.activeModel.name, "Apple Neural Engine · on this device", .neuralEngine)
     }
 }

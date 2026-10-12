@@ -50,13 +50,20 @@ final class ServerScreenshotHarness {
                     await freshFrame()
                     if let window = delegate.mainWindow { capture(window, as: "\(section.rawValue)-\(name)") }
                 }
-                // Connect again as "This Mac only" on a Mac without Tailscale.
+                // Connect again as "This device only" on a Mac without Tailscale.
                 controller.presentSampleAccess(tailnet: false)
                 delegate.showWindow(.connect)
                 try? await Task.sleep(for: .milliseconds(1200))
                 await freshFrame()
                 if let window = delegate.mainWindow { capture(window, as: "connect-this-mac-\(name)") }
                 controller.presentSampleAccess(tailnet: true)
+                // Start serving failed: another app holds the port.
+                controller.presentSamplePortConflict(true)
+                delegate.showWindow(.connect)
+                try? await Task.sleep(for: .milliseconds(1200))
+                await freshFrame()
+                if let window = delegate.mainWindow { capture(window, as: "connect-port-in-use-\(name)") }
+                controller.presentSamplePortConflict(false)
                 // Configuration with Advanced open, scrolled to it.
                 controller.revealAdvanced = true
                 delegate.showWindow(.configuration)

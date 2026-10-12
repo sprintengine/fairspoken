@@ -10,7 +10,7 @@ struct ModelsView: View {
         ScrollView {
             GlassEffectContainer(spacing: Layout.gap) {
                 VStack(alignment: .leading, spacing: Layout.gap) {
-                    PageTitle("Models", subtitle: "On this Mac's Neural Engine")
+                    PageTitle("Models", subtitle: "On this device's Neural Engine")
                         .padding(.bottom, 4)
                     // Three catalogue entries: equal columns, equal heights.
                     HStack(alignment: .top, spacing: Layout.gap) {
@@ -157,7 +157,7 @@ struct ModelCard: View {
                 Spacer()
             case .compiling:
                 ProgressView().controlSize(.small)
-                Text("Optimising for this Mac…").font(.callout).foregroundStyle(Crystal.ink2)
+                Text("Optimising for this device…").font(.callout).foregroundStyle(Crystal.ink2)
                 Spacer()
             case .installed:
                 if active {
