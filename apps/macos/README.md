@@ -169,6 +169,17 @@ connection button and a status line such as "Using host: practice-mini.local:481
 (one `GET /v1/health` when Settings or Home opens, or on Test; no background polling). Monitoring a
 host is Fairspoken Server's job (or the web dashboard at the host's `/`); the client has no Server view.
 
+## Post-training recordings
+
+**Post-training › Save recordings for post-training** (`trainingCapture`, off by default) keeps each
+dictation's audio (16 kHz mono 16-bit WAV) and text, in the Tauri app's layout and format
+(`docs/training-data.md` at the repo root), so `training/` tools read either. They go to
+`~/Library/Application Support/<bundle id>/training-data/` unless you choose a folder
+(`trainingDataFolder`; the app makes `Fairspoken Training Data` inside the one you pick). A chosen folder
+is never created at save time: when its drive isn't connected, dictation carries on and nothing is
+kept. Recordings stay until deleted on that screen. The Post-train button stays disabled until
+the training step ships.
+
 ## Model download links
 
 For networks that can't reach the standard model download: each card on Fairspoken › **Models** and
@@ -350,7 +361,7 @@ Keychain, and the JSON keeps empty strings. Keys the app doesn't model are prese
 
 ## Screenshots
 
-`docs/screenshots/` (Fairspoken, light and dark): `home`, `home-listening`, `models`, `settings`,
+`docs/screenshots/` (Fairspoken, light and dark): `home`, `home-listening`, `models`, `training`, `settings`,
 `settings-transcription` (Network device), `onboarding-welcome`, `onboarding-permissions`, `pill`.
 
 `docs/screenshots/server-app/` (Fairspoken Server, light and dark, demo simulator): `activity`

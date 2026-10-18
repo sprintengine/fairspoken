@@ -5,7 +5,8 @@ import Observation
 import OSLog
 
 /// The dictation state machine: hotkey/button → capture → (gate) → transcribe → post-process
-/// → deliver (paste into the frontmost app, or show in our own window) → history.
+/// → deliver (paste into the frontmost app, or show in our own window) → history
+/// (→ kept for post-training, when that is on).
 @Observable
 final class DictationController {
     enum Trigger { case hotkey, fn, button }
@@ -60,17 +61,19 @@ final class DictationController {
     private let settings: SettingsStore
     private let models: ModelLibrary
     private let history: HistoryStore
+    private let training: TrainingLibrary?
     private let permissions: Permissions
     @ObservationIgnored var hotkeys: HotkeyController?
     private static let log = Logger(subsystem: AppInfo.bundleID, category: "dictation")
 
     var meter: LevelMeter { capture.meter }
 
-    init(settings: SettingsStore, models: ModelLibrary, history: HistoryStore, permissions: Permissions) {
+    init(settings: SettingsStore, models: ModelLibrary, history: HistoryStore, permissions: Permissions, training: TrainingLibrary? = nil) {
         self.settings = settings
         self.models = models
         self.history = history
         self.permissions = permissions
+        self.training = training
     }
 
     // MARK: Triggers
@@ -215,6 +218,8 @@ final class DictationController {
                     timings: DictationTimings(transcribeMs: transcribeMs, speechModelMs: output.modelMs, totalMs: total),
                     model: output.model, appName: target?.localizedName, appBundleId: target?.bundleIdentifier)
                 self.history.add(item)
+                self.training?.keep(samples: samples, rawText: output.text, finalText: text, model: output.model,
+                                    appBundleID: target?.bundleIdentifier)
                 let result = Result(text: text, words: WordCounter.count(text), delivery: delivery, latencyMs: total, placement: placement)
                 if delivery == .shownInApp { self.lastInAppResult = result }
                 self.session = nil

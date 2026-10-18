@@ -4,6 +4,12 @@ Fairspoken can keep your dictations so you can later fine-tune a speech
 model or train a polish model on them. This is off by default. Turn it on in
 **Settings → General → Training data → Keep my dictations to improve models**.
 
+In the native macOS app it is **Post-training › Save recordings for post-training**. It
+writes the same on-device layout and fields (below; `polishedText` and `editedText` are not set
+yet), to `~/Library/Application Support/ie.fairspoken.mac/training-data` or a folder you choose,
+for example on an external drive. Its recordings are kept until you delete them, and it has no
+export yet: the folder itself is the data.
+
 Kept dictations never leave the device unless you export them yourself. They
 may contain sensitive or patient information: do not turn this on for
 clinical dictation unless your practice's data protection arrangements allow
