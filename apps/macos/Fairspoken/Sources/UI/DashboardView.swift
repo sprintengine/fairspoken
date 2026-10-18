@@ -64,6 +64,7 @@ struct DashboardView: View {
         switch model.section {
         case .home: HomeView()
         case .models: ModelsView()
+        case .training: PostTrainingView()
         case .settings: SettingsView()
         }
     }

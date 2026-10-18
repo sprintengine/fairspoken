@@ -79,6 +79,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var polishModel = "speakoflow-mini"
     public var polishTones: [String: String] = [:]
     public var contextAwareness = false
+    /// Keep each dictation's audio and text for post-training (`training_capture` in Rust).
+    public var trainingCapture = false
 
     // Mac-only (ignored by the Rust app).
     /// Download links for models, by model id (`SpeechModelCatalog`): an archive of the model's
@@ -87,6 +89,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var modelLinks: [String: String] = [:]
     /// Put the previous clipboard back after pasting the dictation.
     public var restoreClipboard = true
+    /// Where kept dictations go (`TrainingDataStore`); empty for the app's own folder.
+    public var trainingDataFolder = ""
 
     public init() {}
 
@@ -125,8 +129,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         polishModel = c.lenient(String.self, .polishModel) ?? d.polishModel
         polishTones = c.lenient([String: String].self, .polishTones) ?? d.polishTones
         contextAwareness = c.lenient(Bool.self, .contextAwareness) ?? d.contextAwareness
+        trainingCapture = c.lenient(Bool.self, .trainingCapture) ?? d.trainingCapture
         modelLinks = c.lenient([String: String].self, .modelLinks) ?? d.modelLinks
         restoreClipboard = c.lenient(Bool.self, .restoreClipboard) ?? d.restoreClipboard
+        trainingDataFolder = c.lenient(String.self, .trainingDataFolder) ?? d.trainingDataFolder
         self = normalized()
     }
 
@@ -139,6 +145,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         s.remoteUrl = s.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         while s.remoteUrl.hasSuffix("/") { s.remoteUrl.removeLast() }
         s.cloudAuthToken = s.cloudAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        s.trainingDataFolder = s.trainingDataFolder.trimmingCharacters(in: .whitespacesAndNewlines)
         s.vocabularyHints = Self.normalizeVocabulary(s.vocabularyHints)
         s.enabledPacks = VocabularyPacks.normalizeEnabled(s.enabledPacks)
         if s.recordingShortcut.trimmingCharacters(in: .whitespaces).isEmpty { s.recordingShortcut = AcceleratorString.defaultRecording }

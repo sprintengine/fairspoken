@@ -8,12 +8,13 @@ import Observation
 @Observable
 final class AppModel {
     enum Section: String, CaseIterable, Identifiable {
-        case home, models, settings
+        case home, models, training, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: "Home"
             case .models: "Models"
+            case .training: "Post-training"
             case .settings: "Settings"
             }
         }
@@ -21,6 +22,7 @@ final class AppModel {
             switch self {
             case .home: "waveform"
             case .models: "square.stack.3d.up"
+            case .training: "graduationcap"
             case .settings: "gearshape"
             }
         }
@@ -31,6 +33,7 @@ final class AppModel {
 
     let settings: SettingsStore
     let history: HistoryStore
+    let training: TrainingLibrary
     let permissions: Permissions
     let models: ModelLibrary
     let dictation: DictationController
@@ -47,9 +50,11 @@ final class AppModel {
         // Before anything can download.
         ParakeetModels.setLinks(settings.settings.modelLinks)
         history = HistoryStore()
+        training = TrainingLibrary(settings: settings)
         permissions = Permissions()
         models = ModelLibrary()
-        dictation = DictationController(settings: settings, models: models, history: history, permissions: permissions)
+        dictation = DictationController(settings: settings, models: models, history: history, permissions: permissions,
+                                        training: training)
         hostStatus = HostStatus(settings: settings)
         hostFinder = HostFinder(settings: settings, hostStatus: hostStatus)
         var updateConfig = UpdateController.Configuration(appName: AppInfo.displayName, version: AppInfo.version, build: AppInfo.build)

@@ -578,7 +578,7 @@ private struct AboutSettings: View {
                 }
             }
             Section("Privacy") {
-                Text("Audio stays in memory and is never saved. Your last 50 dictations stay on this device. With a network device, audio goes to that device only.")
+                Text("Audio stays in memory and is never saved, unless you turn on Post-training › Save recordings. Your last 50 dictations stay on this device. With a network device, audio goes to that device only.")
                     .font(.callout).foregroundStyle(Crystal.ink2)
             }
         }
